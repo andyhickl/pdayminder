@@ -1,0 +1,67 @@
+{
+  "settings": {
+    "sleepStart": "23:00",
+    "sleepEnd": "06:00",
+    "medTimes": [
+      "08:00",
+      "12:00",
+      "16:00"
+    ]
+  },
+  "days": {
+    "2025-11-19": {
+      "dateKey": "2025-11-19",
+      "segments": [
+        {
+          "type": "sleep",
+          "rating": 3
+        },
+        {
+          "type": "sleep",
+          "rating": 3
+        },
+        {
+          "type": "sleep",
+          "rating": 3
+        },
+        {
+          "type": "empty",
+          "rating": 3
+        },
+        {
+          "type": "empty",
+          "rating": 3
+        },
+        {
+          "type": "empty",
+          "rating": 3
+        },
+        {
+          "type": "empty",
+          "rating": 3
+        },
+        {
+          "type": "empty",
+          "rating": 3
+        },
+        {
+          "type": "empty",
+          "rating": 3
+        },
+        {
+          "type": "empty",
+          "rating": 3
+        },
+        {
+          "type": "empty",
+          "rating": 3
+        },
+        {
+          "type": "sleep",
+          "rating": 3
+        }
+      ],
+      "meds": []
+    }
+  }
+}
