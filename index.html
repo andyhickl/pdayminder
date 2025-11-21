@@ -434,55 +434,32 @@
       color: var(--muted);
     }
 
-    /* QoL summary card (across all days) */
+    /* QoL summary card */
     .summary-card {
       margin-top: 4px;
     }
 
     .summary-chart {
-      display: flex;
-      align-items: flex-end;
-      gap: 8px;
-      height: 80px;
       margin-top: 4px;
-      padding: 0 4px;
     }
 
-    .summary-bar-wrapper {
-      flex: 1;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      justify-content: flex-end;
+    .matrix-grid {
+      display: grid;
+      grid-template-columns: repeat(12, 1fr);
       gap: 2px;
-      font-size: 10px;
-      color: var(--muted);
+      padding: 4px 2px;
     }
 
-    .summary-bar {
+    .matrix-cell {
       width: 100%;
-      border-radius: 999px 999px 4px 4px;
-      background: #4b5563;
-      display: flex;
-      align-items: flex-end;
-      justify-content: center;
-      position: relative;
-      overflow: hidden;
-    }
-
-    .summary-bar-count {
-      position: absolute;
-      top: 2px;
-      left: 50%;
-      transform: translateX(-50%);
-      font-size: 9px;
-      color: #0b1120;
-      font-weight: 600;
-      text-shadow: 0 0 4px rgba(15, 23, 42, 0.6);
+      padding-bottom: 60%;
+      border-radius: 3px;
+      background: #000000;
+      box-shadow: 0 0 0 1px rgba(15, 23, 42, 0.7);
     }
 
     .summary-legend {
-      margin-top: 4px;
+      margin-top: 6px;
       font-size: 11px;
       color: var(--muted);
       text-align: left;
@@ -492,7 +469,6 @@
       color: var(--text);
     }
 
-    /* Data import/export */
     .data-card {
       margin-top: 4px;
       font-size: 12px;
@@ -544,7 +520,6 @@
     const { useState, useEffect, useMemo, useRef } = React;
 
     // ---------- Utilities ----------
-
     function toDateKey(date) {
       const y = date.getFullYear();
       const m = String(date.getMonth() + 1).padStart(2, "0");
@@ -582,21 +557,19 @@
       if (start < end) {
         return minute >= start && minute < end;
       } else {
-        // crosses midnight
         return minute >= start || minute < end;
       }
     }
 
     // ---------- Colors & faces ----------
-
     function ratingColor(rating) {
       switch (rating) {
-        case 1: return "#ef4444"; // red
-        case 2: return "#f97316"; // orange
-        case 3: return "#eab308"; // yellow
-        case 4: return "#22c55e"; // green
-        case 5: return "#0ea5e9"; // blue (distinct from 4)
-        default: return "#374151"; // slate
+        case 1: return "#ef4444";
+        case 2: return "#f97316";
+        case 3: return "#eab308";
+        case 4: return "#22c55e";
+        case 5: return "#0ea5e9"; // blue
+        default: return "#374151";
       }
     }
 
@@ -611,8 +584,7 @@
       }
     }
 
-    // ---------- Donut path helper ----------
-
+    // ---------- Donut path ----------
     function describeDonutSegment(cx, cy, rInner, rOuter, startAngle, endAngle) {
       const x0 = cx + rOuter * Math.cos(startAngle);
       const y0 = cy + rOuter * Math.sin(startAngle);
@@ -633,16 +605,14 @@
       ].join(" ");
     }
 
-    // ---------- Default settings ----------
-
+    // ---------- Defaults ----------
     const DEFAULT_SETTINGS = {
       sleepStart: "23:00",
       sleepEnd: "06:00",
-      medTimes: ["08:00", "12:00", "16:00"], // updated defaults
+      medTimes: ["08:00", "12:00", "16:00"],
     };
 
     // ---------- Local storage ----------
-
     function loadSettingsFromLocal() {
       try {
         const raw = localStorage.getItem("pdayminder-settings");
@@ -680,17 +650,14 @@
     }
 
     // ---------- CSV export/import ----------
-
     function exportDaysToCSV(days) {
       const header = "date,recordType,segmentIndex,segmentType,rating,medTime";
       const rows = [header];
+      const keys = Object.keys(days).sort();
 
-      const sortedKeys = Object.keys(days).sort();
-      for (const dateKey of sortedKeys) {
+      for (const dateKey of keys) {
         const day = days[dateKey];
         if (!day) continue;
-
-        // segments
         day.segments.forEach((seg, idx) => {
           const segmentType = seg.type || "empty";
           const rating = seg.rating != null ? seg.rating : "";
@@ -703,8 +670,6 @@
             ""
           ].join(","));
         });
-
-        // meds
         (day.meds || []).forEach((time) => {
           rows.push([
             dateKey,
@@ -716,7 +681,6 @@
           ].join(","));
         });
       }
-
       return rows.join("\n");
     }
 
@@ -724,14 +688,12 @@
       const lines = text.trim().split(/\r?\n/);
       if (!lines.length) return {};
       const [, ...rows] = lines;
-
       const imported = {};
 
       for (const line of rows) {
         if (!line.trim()) continue;
         const cols = line.split(",").map(c => c.trim());
         const [dateKey, recordType, segmentIndexStr, segmentType, ratingStr, medTime] = cols;
-
         if (!dateKey || !recordType) continue;
 
         if (!imported[dateKey]) {
@@ -746,52 +708,44 @@
           seg.type = segmentType || "empty";
           seg.rating = ratingStr ? parseInt(ratingStr, 10) : 3;
           day.segments[idx] = seg;
-        } else if (recordType === "med") {
-          if (medTime) {
-            day.meds.push(medTime);
-          }
+        } else if (recordType === "med" && medTime) {
+          day.meds.push(medTime);
         }
       }
 
-      // sort meds for each day
       for (const key in imported) {
         imported[key].meds.sort();
       }
-
       return imported;
     }
 
-    // ---------- Day model helpers ----------
-
-    // Segment types: "empty" | "rating" | "sleep" | "noData"
+    // ---------- Day model ----------
     function createEmptyDay(dateKey, settings) {
       const segments = Array.from({ length: 12 }, (_, idx) => ({
         type: "empty",
         rating: 3,
       }));
-      // Mark sleep segments based on settings
       segments.forEach((seg, idx) => {
         const midMinute = idx * 120 + 60;
         if (isMinuteInSleep(midMinute, settings)) {
           seg.type = "sleep";
         }
       });
-      return {
-        dateKey,
-        segments,
-        meds: [], // times as "HH:MM"
-      };
+      return { dateKey, segments, meds: [] };
     }
 
     // ---------- Components ----------
-
     function MiniCalendar({ selectedDate, daysWithData, onSelect }) {
       const todayKey = toDateKey(new Date());
       const selectedKey = toDateKey(selectedDate);
 
       const firstOfMonth = new Date(selectedDate.getFullYear(), selectedDate.getMonth(), 1);
-      const firstDayIndex = firstOfMonth.getDay(); // Sunday=0
-      const daysInMonth = new Date(selectedDate.getFullYear(), selectedDate.getMonth() + 1, 0).getDate();
+      const firstDayIndex = firstOfMonth.getDay();
+      const daysInMonth = new Date(
+        selectedDate.getFullYear(),
+        selectedDate.getMonth() + 1,
+        0
+      ).getDate();
 
       const weeks = [];
       let currentDay = 1;
@@ -832,7 +786,11 @@
                 if (!d) {
                   return <div key={`${ri}-${di}`} className="mini-cal-cell disabled"></div>;
                 }
-                const dateObj = new Date(selectedDate.getFullYear(), selectedDate.getMonth(), d);
+                const dateObj = new Date(
+                  selectedDate.getFullYear(),
+                  selectedDate.getMonth(),
+                  d
+                );
                 const key = toDateKey(dateObj);
                 const hasData = daysWithData.includes(key);
                 const isSelected = key === selectedKey;
@@ -867,23 +825,17 @@
       const rOuter = 105;
       const rInner = 70;
       const segmentCount = 12;
-
       const segments = day.segments;
 
       function angleForTimeStr(timeStr) {
         const minutes = parseTimeToMinutes(timeStr);
         const fraction = minutes / (24 * 60);
-        // midnight (0) at top -> -π/2
         return fraction * Math.PI * 2 - Math.PI / 2;
       }
 
       return (
         <div className="ring-wrapper">
-          <svg
-            viewBox={`0 0 ${width} ${height}`}
-            style={{ width: "100%", display: "block" }}
-          >
-            {/* Segments */}
+          <svg viewBox={`0 0 ${width} ${height}`} style={{ width: "100%", display: "block" }}>
             {segments.map((seg, idx) => {
               const startFrac = idx / segmentCount;
               const endFrac = (idx + 1) / segmentCount;
@@ -891,18 +843,12 @@
               const endAngle = endFrac * Math.PI * 2 - Math.PI / 2;
 
               let fill = "#1f2933";
-              if (seg.type === "rating") {
-                fill = ratingColor(seg.rating);
-              } else if (seg.type === "sleep") {
-                fill = "#4b5563";
-              } else if (seg.type === "noData") {
-                fill = "#374151";
-              } else {
-                fill = "#111827";
-              }
+              if (seg.type === "rating") fill = ratingColor(seg.rating);
+              else if (seg.type === "sleep") fill = "#4b5563";
+              else if (seg.type === "noData") fill = "#374151";
+              else fill = "#111827";
 
               const path = describeDonutSegment(cx, cy, rInner, rOuter, startAngle, endAngle);
-
               const midAngle = (startAngle + endAngle) / 2;
               const iconRadius = (rInner + rOuter) / 2;
               const tx = cx + iconRadius * Math.cos(midAngle);
@@ -934,17 +880,14 @@
               );
             })}
 
-            {/* Time labels around the ring (start time of each 2h segment) */}
             {segments.map((_, idx) => {
               const startFrac = idx / segmentCount;
               const angle = startFrac * Math.PI * 2 - Math.PI / 2;
               const labelRadius = rOuter + 10;
               const x = cx + labelRadius * Math.cos(angle);
               const y = cy + labelRadius * Math.sin(angle) + 3;
-
               const startHour = idx * 2;
               const label = `${String(startHour).padStart(2, "0")}:00`;
-
               return (
                 <text
                   key={`time-label-${idx}`}
@@ -959,7 +902,6 @@
               );
             })}
 
-            {/* Center label */}
             <circle cx={cx} cy={cy} r={rInner - 10} fill="#020617" />
             <text x={cx} y={cy - 4} textAnchor="middle" fontSize="11" fill="#9ca3af">
               QoL 1–5
@@ -968,7 +910,6 @@
               tap a segment to rate QoL
             </text>
 
-            {/* Med rays & labels */}
             {day.meds.map((t, i) => {
               const angle = angleForTimeStr(t);
               const innerR = rInner * 0.4;
@@ -978,15 +919,10 @@
               const x2 = cx + outerR * Math.cos(angle);
               const y2 = cy + outerR * Math.sin(angle);
 
-              // Slightly offset label angle to avoid overlapping time labels
-              const labelAngle = angle + (6 * Math.PI / 180); // +6 degrees
+              const labelAngle = angle + (6 * Math.PI / 180);
               let labelRadius = rOuter + 22;
               const sinA = Math.sin(labelAngle);
-
-              // If near bottom, pull label inward a bit so it doesn't collide with caption
-              if (sinA > 0.75) {
-                labelRadius = rOuter + 14;
-              }
+              if (sinA > 0.75) labelRadius = rOuter + 14;
 
               const lx = cx + labelRadius * Math.cos(labelAngle);
               const ly = cy + labelRadius * Math.sin(labelAngle) + 3;
@@ -1037,13 +973,9 @@
 
       const handleSave = () => {
         let newSeg;
-        if (sleep) {
-          newSeg = { type: "sleep", rating };
-        } else if (noData) {
-          newSeg = { type: "noData", rating };
-        } else {
-          newSeg = { type: "rating", rating };
-        }
+        if (sleep) newSeg = { type: "sleep", rating };
+        else if (noData) newSeg = { type: "noData", rating };
+        else newSeg = { type: "rating", rating };
         onSave(segmentIndex, newSeg);
       };
 
@@ -1128,9 +1060,7 @@
 
       if (!open) return null;
 
-      const handleSave = () => {
-        onSave(time);
-      };
+      const handleSave = () => onSave(time);
 
       return (
         <div className="modal-backdrop" onClick={onClose}>
@@ -1280,49 +1210,76 @@
         });
       });
 
-      const maxCount = Math.max(1, ...Object.values(counts));
       const goodOrBetter = (counts[4] || 0) + (counts[5] || 0);
       const avgQoL = ratedSegments
         ? (Object.entries(counts).reduce((sum, [r, c]) => sum + Number(r) * c, 0) / ratedSegments)
         : null;
 
+      const now = new Date();
+      const nowMinutes = now.getHours() * 60 + now.getMinutes();
+      const todayKey = toDateKey(now);
+
+      const base = new Date(now);
+      base.setDate(now.getDate() - 6);
+      const last7Dates = [];
+      for (let i = 0; i < 7; i++) {
+        const d = new Date(base);
+        d.setDate(base.getDate() + i);
+        last7Dates.push(d);
+      }
+
+      const cells = [];
+      last7Dates.forEach((dateObj, rowIndex) => {
+        const key = toDateKey(dateObj);
+        const dayData = days[key];
+        const segments = dayData ? dayData.segments : null;
+        const isToday = key === todayKey;
+
+        for (let segIndex = 0; segIndex < 12; segIndex++) {
+          const segMidMinute = segIndex * 120 + 60;
+          let seg = segments ? segments[segIndex] : null;
+          let color = "#000000";
+
+          if (seg) {
+            if (seg.type === "sleep") color = "#4b5563";
+            else if (seg.type === "rating") color = ratingColor(seg.rating ?? 3);
+            else if (seg.type === "noData" || seg.type === "empty") color = "#000000";
+          }
+
+          if (isToday && segMidMinute > nowMinutes) {
+            color = "#000000";
+          }
+
+          cells.push({
+            key: `${rowIndex}-${segIndex}`,
+            color,
+          });
+        }
+      });
+
       return (
         <div className="card summary-card">
           <div className="card-header">
             <div>
-              <div className="card-title">QoL summary (all days)</div>
+              <div className="card-title">QoL summary (last 7 days)</div>
               <div className="card-subtitle">
-                Total 2-hour segments across everything you&apos;ve logged, grouped by QoL rating.
+                7 days × 12 two-hour segments. Rows = days (top = 6 days ago, bottom = today). Columns = hours.
               </div>
             </div>
           </div>
+          <div style={{ fontSize: "11px", color: "var(--muted)", marginTop: 4 }}>
+            Each cell is a 2-hour block: red → lower QoL, green/blue → better QoL, gray = sleep, black = no data / not yet logged.
+          </div>
           <div className="summary-chart">
-            {[1,2,3,4,5].map((r) => {
-              const count = counts[r] || 0;
-              const heightPct = (count / maxCount) * 100;
-              const barStyle = {
-                height: `${heightPct || 4}%`,
-                background: `linear-gradient(to top, ${ratingColor(r)}, ${ratingColor(r)}dd)`,
-                boxShadow: count
-                  ? `0 0 6px ${ratingColor(r)}55`
-                  : "none",
-              };
-              return (
-                <div key={r} className="summary-bar-wrapper">
-                  <div className="summary-bar" style={barStyle}>
-                    {count > 0 && (
-                      <div className="summary-bar-count">
-                        {count}
-                      </div>
-                    )}
-                  </div>
-                  <div>
-                    <span style={{ color: "#9ca3af" }}>{r}</span><br/>
-                    <span>{faceForRating(r)}</span>
-                  </div>
-                </div>
-              );
-            })}
+            <div className="matrix-grid">
+              {cells.map((cell) => (
+                <div
+                  key={cell.key}
+                  className="matrix-cell"
+                  style={{ backgroundColor: cell.color }}
+                />
+              ))}
+            </div>
           </div>
           <div className="summary-legend">
             <div>
@@ -1375,7 +1332,6 @@
           const imported = importDaysFromCSV(String(text), settings);
           setDays((prev) => {
             const next = { ...prev };
-            // Overwrite only the dates present in CSV, leave others intact
             Object.entries(imported).forEach(([key, day]) => {
               next[key] = day;
             });
@@ -1428,7 +1384,6 @@
 
       const dateKey = toDateKey(selectedDate);
 
-      // Ensure current day exists
       useEffect(() => {
         setDays((prev) => {
           if (prev[dateKey]) return prev;
@@ -1439,7 +1394,6 @@
         });
       }, [dateKey, settings]);
 
-      // Persist to localStorage
       useEffect(() => {
         saveSettingsToLocal(settings);
       }, [settings]);
@@ -1448,7 +1402,6 @@
         saveDaysToLocal(days);
       }, [days]);
 
-      // Optional: sync to server if backend exists (no-op if /api not available)
       useEffect(() => {
         async function loadFromServer() {
           try {
@@ -1461,8 +1414,8 @@
             if (payload.days) {
               setDays((prev) => ({ ...prev, ...payload.days }));
             }
-          } catch (e) {
-            // ignore if server not reachable
+          } catch {
+            // ignore if no backend
           }
         }
         loadFromServer();
@@ -1476,8 +1429,8 @@
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({ settings, days }),
             });
-          } catch (e) {
-            // ignore if server not reachable
+          } catch {
+            // ignore if no backend
           }
         }
         saveToServer();
@@ -1500,10 +1453,8 @@
         setDays((prev) => {
           const existing = prev[dateKey] || createEmptyDay(dateKey, settings);
           const dayCopy = { ...existing };
-          const segs = dayCopy.segments.map((s, i) => (i === index ? { ...newSeg } : s));
-          dayCopy.segments = segs;
-          const next = { ...prev, [dateKey]: dayCopy };
-          return next;
+          dayCopy.segments = dayCopy.segments.map((s, i) => (i === index ? { ...newSeg } : s));
+          return { ...prev, [dateKey]: dayCopy };
         });
         setSegmentModalState((s) => ({ ...s, open: false }));
       };
@@ -1512,10 +1463,8 @@
         setDays((prev) => {
           const existing = prev[dateKey] || createEmptyDay(dateKey, settings);
           const dayCopy = { ...existing };
-          const meds = [...dayCopy.meds, timeStr].sort();
-          dayCopy.meds = meds;
-          const next = { ...prev, [dateKey]: dayCopy };
-          return next;
+          dayCopy.meds = [...dayCopy.meds, timeStr].sort();
+          return { ...prev, [dateKey]: dayCopy };
         });
         setMedModalOpen(false);
       };
@@ -1526,13 +1475,9 @@
         setSelectedDate(d);
       };
 
-      const handleCalendarSelect = (d) => {
-        setSelectedDate(d);
-      };
+      const handleCalendarSelect = (d) => setSelectedDate(d);
 
-      const medSummary = day.meds.length
-        ? day.meds.join(", ")
-        : "No meds logged yet";
+      const medSummary = day.meds.length ? day.meds.join(", ") : "No meds logged yet";
 
       return (
         <div className="app-shell">
@@ -1550,7 +1495,6 @@
             </button>
           </header>
 
-          {/* Day + calendar card */}
           <div className="card">
             <div className="card-header">
               <div>
@@ -1574,7 +1518,6 @@
             />
           </div>
 
-          {/* Ring + controls */}
           <div className="card">
             <div className="card-header">
               <div>
@@ -1587,8 +1530,7 @@
             <div className="ring-container">
               <DayRing day={day} onSegmentClick={handleSegmentClick} />
               <div className="ring-caption">
-                Red = tougher hours. Green/blue = better QoL. Gray with 😴 = sleep, gray with ? = no data.
-                Time labels mark the start of each 2-hour segment; med rays are labeled with their times.
+                Red = tougher hours. Green/blue = better QoL. Gray with 😴 = sleep, black = no data/not yet logged.
               </div>
             </div>
             <div className="controls-row">
@@ -1605,13 +1547,9 @@
             </div>
           </div>
 
-          {/* QoL summary across all days */}
           <QoLSummaryCard days={days} />
-
-          {/* CSV data import/export */}
           <DataCard days={days} setDays={setDays} settings={settings} />
 
-          {/* Settings */}
           {showSettings && (
             <SettingsCard
               settings={settings}
@@ -1620,11 +1558,9 @@
           )}
 
           <div className="footer-note">
-            Data is stored locally in this browser and optionally synced to <code>/api/pdayminder/data</code> if a backend is available.
-            This is a prototype and not medical advice.
+            Data is stored locally and synced to <code>/api/pdayminder/data</code> if available.
           </div>
 
-          {/* Modals */}
           <SegmentModal
             open={segmentModalState.open}
             segmentIndex={segmentModalState.index}
