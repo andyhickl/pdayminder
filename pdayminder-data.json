@@ -9,6 +9,60 @@
     ]
   },
   "days": {
+    "2025-11-21": {
+      "dateKey": "2025-11-21",
+      "segments": [
+        {
+          "type": "sleep",
+          "rating": 3
+        },
+        {
+          "type": "sleep",
+          "rating": 3
+        },
+        {
+          "type": "sleep",
+          "rating": 3
+        },
+        {
+          "type": "rating",
+          "rating": 5
+        },
+        {
+          "type": "rating",
+          "rating": 5
+        },
+        {
+          "type": "rating",
+          "rating": 3
+        },
+        {
+          "type": "rating",
+          "rating": 4
+        },
+        {
+          "type": "rating",
+          "rating": 2
+        },
+        {
+          "type": "rating",
+          "rating": 3
+        },
+        {
+          "type": "rating",
+          "rating": 3
+        },
+        {
+          "type": "rating",
+          "rating": 3
+        },
+        {
+          "type": "sleep",
+          "rating": 3
+        }
+      ],
+      "meds": []
+    },
     "2025-11-19": {
       "dateKey": "2025-11-19",
       "segments": [
@@ -58,6 +112,60 @@
         },
         {
           "type": "sleep",
+          "rating": 3
+        }
+      ],
+      "meds": []
+    },
+    "2025-11-20": {
+      "dateKey": "2025-11-20",
+      "segments": [
+        {
+          "type": "sleep",
+          "rating": 3
+        },
+        {
+          "type": "noData",
+          "rating": 3
+        },
+        {
+          "type": "sleep",
+          "rating": 3
+        },
+        {
+          "type": "rating",
+          "rating": 3
+        },
+        {
+          "type": "rating",
+          "rating": 3
+        },
+        {
+          "type": "rating",
+          "rating": 3
+        },
+        {
+          "type": "rating",
+          "rating": 2
+        },
+        {
+          "type": "rating",
+          "rating": 2
+        },
+        {
+          "type": "rating",
+          "rating": 3
+        },
+        {
+          "type": "rating",
+          "rating": 4
+        },
+        {
+          "type": "rating",
+          "rating": 5
+        },
+        {
+          "type": "rating",
           "rating": 3
         }
       ],
