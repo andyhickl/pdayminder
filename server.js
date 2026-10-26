@@ -46,9 +46,12 @@ function clearSessionCookie(res) {
 
 // Resolve the user from a session cookie or a bearer API key.
 async function authenticate(req) {
-  const header = req.get("authorization") || "";
-  if (header.startsWith("Bearer ")) {
-    const key = header.slice(7).trim();
+  // Accept: "Authorization: Bearer <key>", "Authorization: <key>", "Authorization: Bearer Bearer <key>"
+  // (some apps add the prefix themselves), or "X-API-Key: <key>".
+  let key = (req.get("x-api-key") || "").trim();
+  const header = (req.get("authorization") || "").trim();
+  if (!key && header) key = header.replace(/^(bearer\s+)+/i, "").trim();
+  if (key && key.startsWith("pdm_")) {
     const { rows } = await pool.query(
       `select u.id, u.email, k.id as key_id from api_keys k
        join users u on u.id = k.user_id
