@@ -2,18 +2,29 @@ services:
   - type: web
     name: pdayminder
     runtime: node
-    plan: starter            # persistent disks need a paid instance; free tier wipes data on every deploy
+    plan: starter
     buildCommand: npm install
     startCommand: npm start
     healthCheckPath: /api/health
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: pday_db
+          property: connectionString
+      - key: NODE_VERSION
+        value: "20"
+      - key: PDAYMINDER_USER
+        sync: false        # set in dashboard: your email
+      - key: PDAYMINDER_PASSWORD
+        sync: false        # set in dashboard: a strong password (used once to create the account)
+      # DATA_DIR + the disk can be removed once the legacy JSON has been imported.
+      - key: DATA_DIR
+        value: /data
     disk:
       name: pdayminder-data
       mountPath: /data
       sizeGB: 1
-    envVars:
-      - key: DATA_DIR
-        value: /data
-      - key: PDAYMINDER_TOKEN
-        generateValue: true
-      - key: NODE_VERSION
-        value: "20"
+
+databases:
+  - name: pday_db
+    plan: basic-256mb

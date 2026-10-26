@@ -1403,25 +1403,11 @@
       }, [days]);
 
 
-      // ---------- API auth ----------
-      // If the server has PDAYMINDER_TOKEN set, we need to send it. Stored
-      // once in localStorage; prompt if the server rejects us.
-      function getApiToken() {
-        try { return localStorage.getItem("pdayminder-token") || ""; } catch { return ""; }
-      }
+      // ---------- API ----------
+      // Auth is a session cookie set by /login. On 401 the session expired: go sign in.
       async function apiFetch(url, opts = {}) {
-        const headers = { ...(opts.headers || {}) };
-        const token = getApiToken();
-        if (token) headers["Authorization"] = "Bearer " + token;
-        let res = await fetch(url, { ...opts, headers });
-        if (res.status === 401) {
-          const entered = window.prompt("PDayMinder server token:");
-          if (entered) {
-            localStorage.setItem("pdayminder-token", entered.trim());
-            headers["Authorization"] = "Bearer " + entered.trim();
-            res = await fetch(url, { ...opts, headers });
-          }
-        }
+        const res = await fetch(url, { ...opts, credentials: "same-origin" });
+        if (res.status === 401) window.location.href = "/login";
         return res;
       }
 
@@ -1508,6 +1494,9 @@
             <div>
               <div className="app-title">PDayMinder</div>
               <div className="tagline">Track meds and QoL, one ring per day.</div>
+            <form method="post" action="/logout" style={{ marginTop: 6 }}>
+              <button type="submit" style={{ background: "none", border: 0, color: "#94a3b8", fontSize: 12, padding: 0, cursor: "pointer", textDecoration: "underline" }}>Sign out</button>
+            </form>
             </div>
             <button
               className={"icon-btn" + (showSettings ? " primary" : "")}

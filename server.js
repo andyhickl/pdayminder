@@ -1,86 +1,370 @@
 const express = require("express");
 const fs = require("fs");
 const path = require("path");
+const crypto = require("crypto");
+const bcrypt = require("bcryptjs");
+const { pool, migrate } = require("./db");
 
 const app = express();
-const PORT = process.env.PORT || 3000; // Render injects PORT
+const PORT = process.env.PORT || 3000;
+const SESSION_DAYS = 90;
+const IS_PROD = process.env.NODE_ENV === "production" || Boolean(process.env.RENDER);
 
-// Data lives in a JSON file. On Render, set DATA_DIR to a persistent disk
-// mount (e.g. /data) so it survives deploys and restarts. Defaults to the
-// code directory for local dev.
-const DATA_DIR = process.env.DATA_DIR || __dirname;
-const DATA_FILE = path.join(DATA_DIR, "pdayminder-data.json");
-const SEED_FILE = path.join(__dirname, "pdayminder-data.json");
-
-// Optional shared secret. If PDAYMINDER_TOKEN is set, every /api request must
-// carry it as "Authorization: Bearer <token>" or "?token=<token>".
-const TOKEN = process.env.PDAYMINDER_TOKEN || "";
-
+app.set("trust proxy", 1);
 app.use(express.json({ limit: "5mb" }));
+app.use(express.urlencoded({ extended: false }));
 
-function requireToken(req, res, next) {
-  if (!TOKEN) return next();
-  const header = req.get("authorization") || "";
-  const bearer = header.startsWith("Bearer ") ? header.slice(7) : "";
-  if (bearer === TOKEN || req.query.token === TOKEN) return next();
-  res.status(401).json({ error: "unauthorized" });
+// ---------- helpers ----------
+function sha256(s) {
+  return crypto.createHash("sha256").update(s).digest("hex");
 }
 
-function loadData() {
-  for (const file of [DATA_FILE, SEED_FILE]) {
+function parseCookies(req) {
+  const out = {};
+  (req.headers.cookie || "").split(";").forEach((part) => {
+    const i = part.indexOf("=");
+    if (i > 0) out[part.slice(0, i).trim()] = decodeURIComponent(part.slice(i + 1).trim());
+  });
+  return out;
+}
+
+function setSessionCookie(res, id) {
+  const attrs = [
+    `pdm_session=${id}`,
+    "Path=/",
+    "HttpOnly",
+    "SameSite=Lax",
+    `Max-Age=${SESSION_DAYS * 86400}`,
+  ];
+  if (IS_PROD) attrs.push("Secure");
+  res.setHeader("Set-Cookie", attrs.join("; "));
+}
+
+function clearSessionCookie(res) {
+  res.setHeader("Set-Cookie", "pdm_session=; Path=/; HttpOnly; Max-Age=0");
+}
+
+// Resolve the user from a session cookie or a bearer API key.
+async function authenticate(req) {
+  const header = req.get("authorization") || "";
+  if (header.startsWith("Bearer ")) {
+    const key = header.slice(7).trim();
+    const { rows } = await pool.query(
+      `select u.id, u.email, k.id as key_id from api_keys k
+       join users u on u.id = k.user_id
+       where k.key_hash = $1 and k.revoked_at is null`,
+      [sha256(key)]
+    );
+    if (rows[0]) {
+      pool.query("update api_keys set last_used = now() where id = $1", [rows[0].key_id]).catch(() => {});
+      return { id: rows[0].id, email: rows[0].email, via: "api_key" };
+    }
+    return null;
+  }
+  const sid = parseCookies(req).pdm_session;
+  if (!sid) return null;
+  const { rows } = await pool.query(
+    `select u.id, u.email from sessions s join users u on u.id = s.user_id
+     where s.id = $1 and s.expires_at > now()`,
+    [sid]
+  );
+  return rows[0] ? { id: rows[0].id, email: rows[0].email, via: "session" } : null;
+}
+
+async function requireAuth(req, res, next) {
+  try {
+    const user = await authenticate(req);
+    if (!user) {
+      if (req.path.startsWith("/api/")) return res.status(401).json({ error: "unauthorized" });
+      return res.redirect("/login");
+    }
+    req.user = user;
+    next();
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: "auth failure" });
+  }
+}
+
+// ---------- bootstrap ----------
+async function ensureFirstUser() {
+  const { rows } = await pool.query("select count(*)::int as n from users");
+  if (rows[0].n > 0) return;
+  const email = process.env.PDAYMINDER_USER;
+  const password = process.env.PDAYMINDER_PASSWORD;
+  if (!email || !password) {
+    console.warn("No users and PDAYMINDER_USER/PDAYMINDER_PASSWORD not set; nobody can log in.");
+    return;
+  }
+  const hash = await bcrypt.hash(password, 12);
+  const ins = await pool.query(
+    "insert into users (email, password_hash) values ($1, $2) returning id",
+    [email.toLowerCase(), hash]
+  );
+  console.log(`Created first user ${email}`);
+  await importLegacyJson(ins.rows[0].id);
+}
+
+// One-time import of the old JSON file (disk copy first, then the committed seed).
+async function importLegacyJson(userId) {
+  const candidates = [
+    process.env.DATA_DIR && path.join(process.env.DATA_DIR, "pdayminder-data.json"),
+    path.join(__dirname, "pdayminder-data.json"),
+  ].filter(Boolean);
+  for (const file of candidates) {
     try {
-      return JSON.parse(fs.readFileSync(file, "utf8"));
+      const data = JSON.parse(fs.readFileSync(file, "utf8"));
+      await saveClientPayload(userId, data);
+      console.log(`Imported legacy data from ${file} (${Object.keys(data.days || {}).length} days)`);
+      return;
     } catch {
       // try next
     }
   }
-  return { settings: null, days: {} };
 }
 
-function saveData(data) {
-  fs.mkdirSync(DATA_DIR, { recursive: true });
-  const tmp = DATA_FILE + ".tmp";
-  fs.writeFileSync(tmp, JSON.stringify(data, null, 2), "utf8");
-  fs.renameSync(tmp, DATA_FILE);
-}
-
-// Unauthenticated liveness check
-app.get("/api/health", (req, res) => {
-  const data = loadData();
-  res.json({
-    ok: true,
-    days: Object.keys(data.days || {}).length,
-    persistent: DATA_DIR !== __dirname,
-    authRequired: Boolean(TOKEN),
-  });
-});
-
-app.get("/api/pdayminder/data", requireToken, (req, res) => {
-  res.json(loadData());
-});
-
-// Upsert. Settings replace; days merge per date key so a stale client
-// can't wipe days it never saw.
-app.post("/api/pdayminder/data", requireToken, (req, res) => {
-  const body = req.body || {};
-  const existing = loadData();
-  const merged = {
-    settings: body.settings || existing.settings,
-    days: { ...(existing.days || {}), ...(body.days || {}) },
+// ---------- client payload <-> tables ----------
+// The web app speaks {settings, days: {YYYY-MM-DD: {segments:[{type,rating}x12], meds:["HH:MM"]}}}.
+async function loadClientPayload(userId) {
+  const [s, q, m] = await Promise.all([
+    pool.query("select data from settings where user_id = $1", [userId]),
+    pool.query(
+      "select to_char(day,'YYYY-MM-DD') as day, seg, type, rating from qol_ratings where user_id = $1 order by day, seg",
+      [userId]
+    ),
+    pool.query(
+      "select to_char(day,'YYYY-MM-DD') as day, to_char(taken_at,'HH24:MI') as t from med_doses where user_id = $1 and source = 'pdayminder' order by day, taken_at",
+      [userId]
+    ),
+  ]);
+  const days = {};
+  const dayFor = (d) => {
+    if (!days[d]) {
+      days[d] = {
+        dateKey: d,
+        segments: Array.from({ length: 12 }, () => ({ type: "empty", rating: 3 })),
+        meds: [],
+      };
+    }
+    return days[d];
   };
-  saveData(merged);
-  res.json({ ok: true, days: Object.keys(merged.days).length });
+  q.rows.forEach((r) => (dayFor(r.day).segments[r.seg] = { type: r.type, rating: r.rating }));
+  m.rows.forEach((r) => dayFor(r.day).meds.push(r.t));
+  return { settings: s.rows[0] ? s.rows[0].data : null, days };
+}
+
+async function saveClientPayload(userId, body) {
+  const client = await pool.connect();
+  try {
+    await client.query("begin");
+    if (body.settings) {
+      await client.query(
+        `insert into settings (user_id, data) values ($1, $2)
+         on conflict (user_id) do update set data = excluded.data`,
+        [userId, body.settings]
+      );
+    }
+    for (const [day, d] of Object.entries(body.days || {})) {
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) continue;
+      for (let seg = 0; seg < Math.min(12, (d.segments || []).length); seg++) {
+        const s = d.segments[seg];
+        if (!s || !Number.isInteger(s.rating)) continue;
+        await client.query(
+          `insert into qol_ratings (user_id, day, seg, type, rating) values ($1,$2,$3,$4,$5)
+           on conflict (user_id, day, seg) do update
+             set type = excluded.type, rating = excluded.rating, updated_at = now()`,
+          [userId, day, seg, s.type || "rating", Math.max(1, Math.min(5, s.rating))]
+        );
+      }
+      if (Array.isArray(d.meds)) {
+        // App-entered doses for the day are replaced wholesale to match the UI's edit semantics.
+        await client.query(
+          "delete from med_doses where user_id = $1 and day = $2 and source = 'pdayminder'",
+          [userId, day]
+        );
+        for (const t of d.meds) {
+          if (!/^\d{2}:\d{2}$/.test(t)) continue;
+          await client.query(
+            `insert into med_doses (user_id, day, taken_at, source) values ($1,$2,$3,'pdayminder')
+             on conflict do nothing`,
+            [userId, day, t]
+          );
+        }
+      }
+    }
+    await client.query("commit");
+  } catch (e) {
+    await client.query("rollback");
+    throw e;
+  } finally {
+    client.release();
+  }
+}
+
+// ---------- public routes ----------
+app.get("/api/health", async (req, res) => {
+  try {
+    const { rows } = await pool.query("select count(distinct day)::int as days from qol_ratings");
+    res.json({ ok: true, db: true, days: rows[0].days });
+  } catch (e) {
+    res.status(500).json({ ok: false, db: false, error: String(e.message) });
+  }
 });
 
-// Serve index.html and static assets
-app.use(express.static(__dirname));
+const LOGIN_HTML = (msg = "") => `<!doctype html>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>PDayMinder – sign in</title>
+<style>
+body{font-family:system-ui,-apple-system,sans-serif;background:#0f172a;color:#e2e8f0;display:flex;min-height:100vh;align-items:center;justify-content:center;margin:0}
+form{background:#1e293b;padding:28px;border-radius:14px;width:min(360px,90vw);box-shadow:0 10px 30px rgba(0,0,0,.4)}
+h1{font-size:20px;margin:0 0 16px}label{display:block;font-size:13px;margin:12px 0 4px;color:#94a3b8}
+input{width:100%;box-sizing:border-box;padding:10px;border-radius:8px;border:1px solid #334155;background:#0f172a;color:#e2e8f0;font-size:16px}
+button{margin-top:18px;width:100%;padding:11px;border:0;border-radius:8px;background:#38bdf8;color:#0f172a;font-weight:600;font-size:16px}
+.err{color:#f87171;font-size:13px;margin-top:10px}
+</style></head><body>
+<form method="post" action="/login">
+<h1>PDayMinder</h1>
+<label>Email</label><input name="email" type="email" autocomplete="username" required>
+<label>Password</label><input name="password" type="password" autocomplete="current-password" required>
+<button type="submit">Sign in</button>
+${msg ? `<div class="err">${msg}</div>` : ""}
+</form></body></html>`;
 
-app.get("*", (req, res) => {
-  res.sendFile(path.join(__dirname, "index.html"));
-});
+app.get("/login", (req, res) => res.type("html").send(LOGIN_HTML()));
 
-app.listen(PORT, () => {
-  console.log(
-    `PDayMinder server on http://localhost:${PORT} (data: ${DATA_FILE}, auth: ${TOKEN ? "on" : "off"})`
+app.post("/login", async (req, res) => {
+  const email = String(req.body.email || "").toLowerCase().trim();
+  const password = String(req.body.password || "");
+  const { rows } = await pool.query("select id, password_hash from users where email = $1", [email]);
+  const ok = rows[0] && (await bcrypt.compare(password, rows[0].password_hash));
+  if (!ok) {
+    await new Promise((r) => setTimeout(r, 500));
+    return res.status(401).type("html").send(LOGIN_HTML("Wrong email or password."));
+  }
+  const sid = crypto.randomBytes(32).toString("base64url");
+  await pool.query(
+    "insert into sessions (id, user_id, expires_at) values ($1, $2, now() + ($3 || ' days')::interval)",
+    [sid, rows[0].id, String(SESSION_DAYS)]
   );
+  setSessionCookie(res, sid);
+  res.redirect("/");
+});
+
+app.post("/logout", async (req, res) => {
+  const sid = parseCookies(req).pdm_session;
+  if (sid) await pool.query("delete from sessions where id = $1", [sid]);
+  clearSessionCookie(res);
+  res.redirect("/login");
+});
+
+// ---------- authenticated routes ----------
+app.get("/api/me", requireAuth, (req, res) => res.json(req.user));
+
+app.get("/api/pdayminder/data", requireAuth, async (req, res) => {
+  res.json(await loadClientPayload(req.user.id));
+});
+
+app.post("/api/pdayminder/data", requireAuth, async (req, res) => {
+  await saveClientPayload(req.user.id, req.body || {});
+  res.json({ ok: true });
+});
+
+// API keys: session-only management (an API key can't mint more keys).
+function requireSession(req, res, next) {
+  if (req.user.via !== "session") return res.status(403).json({ error: "session required" });
+  next();
+}
+
+app.get("/api/keys", requireAuth, requireSession, async (req, res) => {
+  const { rows } = await pool.query(
+    "select id, name, prefix, created_at, last_used, revoked_at from api_keys where user_id = $1 order by id",
+    [req.user.id]
+  );
+  res.json(rows);
+});
+
+app.post("/api/keys", requireAuth, requireSession, async (req, res) => {
+  const name = String((req.body && req.body.name) || "").trim() || "unnamed";
+  const key = "pdm_" + crypto.randomBytes(24).toString("base64url");
+  await pool.query(
+    "insert into api_keys (user_id, name, key_hash, prefix) values ($1,$2,$3,$4)",
+    [req.user.id, name, sha256(key), key.slice(0, 10)]
+  );
+  res.json({ name, key, note: "Shown once. Store it now." });
+});
+
+app.delete("/api/keys/:id", requireAuth, requireSession, async (req, res) => {
+  await pool.query("update api_keys set revoked_at = now() where id = $1 and user_id = $2", [
+    req.params.id,
+    req.user.id,
+  ]);
+  res.json({ ok: true });
+});
+
+// Generic ingest for agents and wearables: [{ts, source, metric, value, raw}]
+app.post("/api/observations", requireAuth, async (req, res) => {
+  const items = Array.isArray(req.body) ? req.body : req.body && req.body.items;
+  if (!Array.isArray(items)) return res.status(400).json({ error: "expected array" });
+  let n = 0;
+  for (const o of items) {
+    if (!o || !o.ts || !o.source || !o.metric) continue;
+    await pool.query(
+      `insert into observations (user_id, ts, source, metric, value, raw) values ($1,$2,$3,$4,$5,$6)
+       on conflict (user_id, source, metric, ts) do update set value = excluded.value, raw = excluded.raw`,
+      [req.user.id, o.ts, o.source, o.metric, o.value ?? null, o.raw ?? null]
+    );
+    n++;
+  }
+  res.json({ ok: true, inserted: n });
+});
+
+app.get("/api/observations", requireAuth, async (req, res) => {
+  const { source, metric, from, to, limit = 1000 } = req.query;
+  const where = ["user_id = $1"];
+  const args = [req.user.id];
+  if (source) args.push(source), where.push(`source = $${args.length}`);
+  if (metric) args.push(metric), where.push(`metric = $${args.length}`);
+  if (from) args.push(from), where.push(`ts >= $${args.length}`);
+  if (to) args.push(to), where.push(`ts < $${args.length}`);
+  args.push(Math.min(10000, Number(limit) || 1000));
+  const { rows } = await pool.query(
+    `select ts, source, metric, value, raw from observations where ${where.join(" and ")} order by ts desc limit $${args.length}`,
+    args
+  );
+  res.json(rows);
+});
+
+// Med doses from any source (e.g. an agent reading a reminder app)
+app.post("/api/med-doses", requireAuth, async (req, res) => {
+  const items = Array.isArray(req.body) ? req.body : [req.body];
+  let n = 0;
+  for (const d of items) {
+    if (!d || !d.day || !d.taken_at) continue;
+    await pool.query(
+      `insert into med_doses (user_id, day, taken_at, drug, dose, source) values ($1,$2,$3,$4,$5,$6)
+       on conflict do nothing`,
+      [req.user.id, d.day, d.taken_at, d.drug || "sinemet", d.dose || null, d.source || "api"]
+    );
+    n++;
+  }
+  res.json({ ok: true, inserted: n });
+});
+
+// The app itself, only when signed in.
+app.get("/", requireAuth, (req, res) => res.sendFile(path.join(__dirname, "index.html")));
+app.get("/index.html", requireAuth, (req, res) => res.sendFile(path.join(__dirname, "index.html")));
+app.get("*", requireAuth, (req, res) => res.sendFile(path.join(__dirname, "index.html")));
+
+// ---------- start ----------
+(async () => {
+  if (!process.env.DATABASE_URL) {
+    console.error("DATABASE_URL is required");
+    process.exit(1);
+  }
+  await migrate();
+  await ensureFirstUser();
+  app.listen(PORT, () => console.log(`PDayMinder on http://localhost:${PORT}`));
+})().catch((e) => {
+  console.error(e);
+  process.exit(1);
 });
