@@ -22,3 +22,14 @@ Requires `DATABASE_URL` (Postgres). On first boot with an empty `users` table, i
 ## Tables
 `users`, `sessions`, `api_keys`, `settings`, `qol_ratings` (day, seg 0-11, rating 1-5),
 `med_doses` (day, taken_at, drug, dose, source), `observations` (ts, source, metric, value, raw).
+
+## Health Auto Export
+`POST /api/ingest/hae` with an API key accepts HAE's REST API payload (`{data:{metrics:[...], workouts:[...]}}`).
+Each numeric field of each data point becomes an `observations` row with `source='hae'`:
+`qty` -> `<metric>`, other fields -> `<metric>_<field>` (e.g. `heart_rate_avg`, `sleep_analysis_deep`).
+Workouts -> metric `workout`, value = minutes, raw = the workout. Re-sending the same window is safe (upsert).
+
+## UI data endpoints
+- `GET /api/sources` — rows, metric count, first/last timestamp per source
+- `GET /api/metrics` — distinct source/metric pairs
+- `GET /api/daily?days=30&source=hae&metric=heart_rate_avg` — per-day mean QoL, dose count, and daily mean of one metric (`TZ_NAME`, default America/Los_Angeles)

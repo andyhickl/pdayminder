@@ -5,9 +5,9 @@
   <title>PDayMinder</title>
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <!-- React + Babel from CDN -->
-  <script src="https://unpkg.com/react@18/umd/react.development.js" crossorigin></script>
-  <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js" crossorigin></script>
-  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <script src="/vendor/react.production.min.js"></script>
+  <script src="/vendor/react-dom.production.min.js"></script>
+  <script src="/vendor/babel.min.js"></script>
   <style>
     :root {
       color-scheme: light dark;
@@ -518,6 +518,14 @@
 
   <script type="text/babel">
     const { useState, useEffect, useMemo, useRef } = React;
+
+    // ---------- API ----------
+    // Auth is a session cookie set by /login. On 401 the session expired: go sign in.
+    async function apiFetch(url, opts = {}) {
+      const res = await fetch(url, { ...opts, credentials: "same-origin" });
+      if (res.status === 401) window.location.href = "/login";
+      return res;
+    }
 
     // ---------- Utilities ----------
     function toDateKey(date) {
@@ -1194,6 +1202,181 @@
       );
     }
 
+    // ---------- Trends (server rollups + inline SVG) ----------
+    function useJson(url, deps) {
+      const [data, setData] = useState(null);
+      const [err, setErr] = useState(null);
+      useEffect(() => {
+        let alive = true;
+        apiFetch(url).then((r) => (r.ok ? r.json() : Promise.reject(r.status)))
+          .then((d) => alive && setData(d)).catch((e) => alive && setErr(String(e)));
+        return () => { alive = false; };
+      }, deps);
+      return [data, err];
+    }
+
+    function LineChart({ rows, yKey, color, yMin, yMax, height = 120, label, bars, barKey }) {
+      const W = 600, H = height, padL = 30, padR = 10, padT = 8, padB = 20;
+      const n = rows.length;
+      const vals = rows.map((r) => (r[yKey] == null ? null : Number(r[yKey])));
+      const present = vals.filter((v) => v != null);
+      const lo = yMin != null ? yMin : Math.min(...present, 0);
+      const hi = yMax != null ? yMax : Math.max(...present, 1);
+      const x = (i) => padL + (n <= 1 ? 0 : (i * (W - padL - padR)) / (n - 1));
+      const y = (v) => padT + (H - padT - padB) * (1 - (v - lo) / (hi - lo || 1));
+      let d = "", pen = false;
+      vals.forEach((v, i) => {
+        if (v == null) { pen = false; return; }
+        d += (pen ? " L" : " M") + x(i).toFixed(1) + " " + y(v).toFixed(1);
+        pen = true;
+      });
+      const barMax = bars ? Math.max(1, ...rows.map((r) => Number(r[barKey]) || 0)) : 1;
+      const ticks = [lo, (lo + hi) / 2, hi];
+      return (
+        <svg viewBox={`0 0 ${W} ${H}`} style={{ width: "100%", height: H, display: "block" }}>
+          {ticks.map((t, i) => (
+            <g key={i}>
+              <line x1={padL} x2={W - padR} y1={y(t)} y2={y(t)} stroke="#1f2937" strokeWidth="1" />
+              <text x={padL - 4} y={y(t) + 4} fontSize="10" fill="#64748b" textAnchor="end">{Number.isInteger(t) ? t : t.toFixed(1)}</text>
+            </g>
+          ))}
+          {bars && rows.map((r, i) => {
+            const v = Number(r[barKey]) || 0;
+            if (!v) return null;
+            const h = ((H - padT - padB) * v) / barMax;
+            return <rect key={i} x={x(i) - 3} y={H - padB - h} width="6" height={h} fill="#334155" rx="1" />;
+          })}
+          <path d={d} fill="none" stroke={color} strokeWidth="2" strokeLinejoin="round" />
+          {vals.map((v, i) => v == null ? null : <circle key={i} cx={x(i)} cy={y(v)} r="2.5" fill={color} />)}
+          {rows.map((r, i) => (i % Math.ceil(n / 6) === 0 || i === n - 1) ? (
+            <text key={i} x={x(i)} y={H - 5} fontSize="10" fill="#64748b" textAnchor="middle">{r.day.slice(5)}</text>
+          ) : null)}
+          {label && <text x={W - padR} y={padT + 10} fontSize="10" fill={color} textAnchor="end">{label}</text>}
+        </svg>
+      );
+    }
+
+    function TrendsCard() {
+      const [span, setSpan] = useState(30);
+      const [pick, setPick] = useState("");
+      const [metrics] = useJson("/api/metrics", []);
+      const [src, met] = pick ? pick.split("|") : ["", ""];
+      const url = `/api/daily?days=${span}` + (pick ? `&source=${encodeURIComponent(src)}&metric=${encodeURIComponent(met)}` : "");
+      const [rows, err] = useJson(url, [span, pick]);
+      const rated = rows ? rows.filter((r) => r.qol != null) : [];
+      const meanQol = rated.length ? (rated.reduce((a, r) => a + Number(r.qol), 0) / rated.length).toFixed(2) : "–";
+      const doses = rows ? rows.reduce((a, r) => a + Number(r.doses), 0) : 0;
+      return (
+        <div className="card">
+          <div className="card-header">
+            <div>
+              <div className="card-title">Trends</div>
+              <div className="card-subtitle">Daily mean QoL (line) with doses per day (bars), plus any synced metric.</div>
+            </div>
+          </div>
+          <div className="controls-row" style={{ flexWrap: "wrap", gap: 8 }}>
+            {[14, 30, 90].map((n) => (
+              <button key={n} type="button" className={"pill-btn" + (span === n ? " primary" : "")} onClick={() => setSpan(n)}>{n}d</button>
+            ))}
+            <select value={pick} onChange={(e) => setPick(e.target.value)}
+              style={{ background: "#0f172a", color: "#e2e8f0", border: "1px solid #334155", borderRadius: 8, padding: "6px 8px", fontSize: 13 }}>
+              <option value="">Overlay a synced metric…</option>
+              {(metrics || []).map((m) => (
+                <option key={m.source + "|" + m.metric} value={m.source + "|" + m.metric}>{m.source} · {m.metric} ({m.rows})</option>
+              ))}
+            </select>
+          </div>
+          {err && <div className="card-subtitle">Couldn't load trends ({err}).</div>}
+          {rows && (
+            <>
+              <div className="card-subtitle" style={{ marginBottom: 4 }}>
+                Mean QoL {meanQol} over {rated.length} rated days · {doses} doses logged
+              </div>
+              <LineChart rows={rows} yKey="qol" color="#38bdf8" yMin={1} yMax={5} bars barKey="doses" label="QoL 1–5" />
+              {pick && (
+                <LineChart rows={rows} yKey="metric_value" color="#a3e635" height={110} label={met + " (daily mean)"} />
+              )}
+            </>
+          )}
+        </div>
+      );
+    }
+
+    function SourcesCard() {
+      const [sources, err] = useJson("/api/sources", []);
+      const ago = (t) => {
+        if (!t) return "never";
+        const h = (Date.now() - new Date(t)) / 36e5;
+        return h < 1 ? "just now" : h < 48 ? `${Math.round(h)}h ago` : `${Math.round(h / 24)}d ago`;
+      };
+      return (
+        <div className="card">
+          <div className="card-header">
+            <div>
+              <div className="card-title">Data sources</div>
+              <div className="card-subtitle">What's syncing into the hub, and how fresh it is.</div>
+            </div>
+          </div>
+          {err && <div className="card-subtitle">Couldn't load sources.</div>}
+          {sources && sources.length === 0 && <div className="card-subtitle">Nothing synced yet.</div>}
+          {sources && sources.map((s) => {
+            const stale = s.last_ts && (Date.now() - new Date(s.last_ts)) > 36 * 36e5;
+            return (
+              <div key={s.source} className="med-list" style={{ display: "flex", justifyContent: "space-between" }}>
+                <span><strong>{s.source}</strong> · {s.metrics} metrics · {s.rows.toLocaleString()} rows</span>
+                <span style={{ color: stale ? "#f87171" : "#94a3b8" }}>last {ago(s.last_ts)}</span>
+              </div>
+            );
+          })}
+        </div>
+      );
+    }
+
+    function ApiKeysCard() {
+      const [keys, setKeys] = useState(null);
+      const [name, setName] = useState("");
+      const [fresh, setFresh] = useState(null);
+      const load = () => apiFetch("/api/keys").then((r) => r.json()).then(setKeys);
+      useEffect(() => { load(); }, []);
+      const create = async () => {
+        const r = await apiFetch("/api/keys", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name }) });
+        setFresh(await r.json()); setName(""); load();
+      };
+      const revoke = async (id) => {
+        if (!window.confirm("Revoke this key? Anything using it will stop syncing.")) return;
+        await apiFetch(`/api/keys/${id}`, { method: "DELETE" }); load();
+      };
+      return (
+        <div className="card">
+          <div className="card-header">
+            <div>
+              <div className="card-title">API keys</div>
+              <div className="card-subtitle">One key per integration (Health Auto Export, Oura sync, coach). Revoke any one without touching the others.</div>
+            </div>
+          </div>
+          <div className="controls-row" style={{ gap: 8 }}>
+            <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Key name, e.g. health-auto-export"
+              style={{ flex: 1, background: "#0f172a", color: "#e2e8f0", border: "1px solid #334155", borderRadius: 8, padding: "8px 10px", fontSize: 14 }} />
+            <button type="button" className="pill-btn primary" onClick={create} disabled={!name.trim()}>Create</button>
+          </div>
+          {fresh && (
+            <div className="med-list" style={{ border: "1px solid #38bdf8", borderRadius: 8, padding: 10, marginTop: 8 }}>
+              <div><strong>{fresh.name}</strong> — copy this now; it won't be shown again.</div>
+              <code style={{ wordBreak: "break-all", fontSize: 13 }}>{fresh.key}</code>
+              <div><button type="button" className="pill-btn" onClick={() => { navigator.clipboard && navigator.clipboard.writeText(fresh.key); }}>Copy</button>
+                <button type="button" className="pill-btn" onClick={() => setFresh(null)}>Done</button></div>
+            </div>
+          )}
+          {keys && keys.map((k) => (
+            <div key={k.id} className="med-list" style={{ display: "flex", justifyContent: "space-between", opacity: k.revoked_at ? 0.5 : 1 }}>
+              <span><strong>{k.name}</strong> <code>{k.prefix}…</code> · {k.last_used ? "used " + new Date(k.last_used).toLocaleDateString() : "never used"}{k.revoked_at ? " · revoked" : ""}</span>
+              {!k.revoked_at && <button type="button" className="pill-btn" onClick={() => revoke(k.id)}>Revoke</button>}
+            </div>
+          ))}
+        </div>
+      );
+    }
+
     function QoLSummaryCard({ days }) {
       const counts = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 };
       let ratedSegments = 0;
@@ -1403,14 +1586,6 @@
       }, [days]);
 
 
-      // ---------- API ----------
-      // Auth is a session cookie set by /login. On 401 the session expired: go sign in.
-      async function apiFetch(url, opts = {}) {
-        const res = await fetch(url, { ...opts, credentials: "same-origin" });
-        if (res.status === 401) window.location.href = "/login";
-        return res;
-      }
-
       useEffect(() => {
         async function loadFromServer() {
           try {
@@ -1559,18 +1734,23 @@
             </div>
           </div>
 
+          <TrendsCard />
           <QoLSummaryCard days={days} />
+          <SourcesCard />
           <DataCard days={days} setDays={setDays} settings={settings} />
 
           {showSettings && (
-            <SettingsCard
-              settings={settings}
-              onUpdate={(next) => setSettings(next)}
-            />
+            <>
+              <SettingsCard
+                settings={settings}
+                onUpdate={(next) => setSettings(next)}
+              />
+              <ApiKeysCard />
+            </>
           )}
 
           <div className="footer-note">
-            Data is stored locally and synced to <code>/api/pdayminder/data</code> if available.
+            Signed in. Entries sync to the hub as you make them.
           </div>
 
           <SegmentModal

@@ -350,6 +350,121 @@ app.post("/api/med-doses", requireAuth, async (req, res) => {
   res.json({ ok: true, inserted: n });
 });
 
+// ---------- Health Auto Export ingest ----------
+// HAE "REST API" automation posts {data:{metrics:[{name,units,data:[{date,qty|Avg|...}]}], workouts:[...]}}.
+// Every numeric field of every point becomes an observation: qty -> <name>, other fields -> <name>_<field>.
+function parseHaeDate(d) {
+  if (!d) return null;
+  // "2026-10-26 07:00:00 -0700" -> "2026-10-26T07:00:00-07:00"
+  const m = String(d).match(/^(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2}:\d{2})\s*([+-]\d{2}):?(\d{2})?$/);
+  const iso = m ? `${m[1]}T${m[2]}${m[3]}:${m[4] || "00"}` : String(d);
+  const t = new Date(iso);
+  return isNaN(t) ? null : t.toISOString();
+}
+
+app.post("/api/ingest/hae", requireAuth, async (req, res) => {
+  const data = (req.body && req.body.data) || req.body || {};
+  const metrics = Array.isArray(data.metrics) ? data.metrics : [];
+  const workouts = Array.isArray(data.workouts) ? data.workouts : [];
+  let rows = 0, skipped = 0;
+  const client = await pool.connect();
+  try {
+    await client.query("begin");
+    for (const m of metrics) {
+      const base = String(m.name || "").toLowerCase().replace(/[^a-z0-9]+/g, "_");
+      if (!base) continue;
+      for (const pt of m.data || []) {
+        const ts = parseHaeDate(pt.date);
+        if (!ts) { skipped++; continue; }
+        for (const [k, v] of Object.entries(pt)) {
+          if (k === "date" || typeof v !== "number" || !isFinite(v)) continue;
+          const metric = k === "qty" ? base : `${base}_${k.toLowerCase()}`;
+          await client.query(
+            `insert into observations (user_id, ts, source, metric, value, raw) values ($1,$2,'hae',$3,$4,$5)
+             on conflict (user_id, source, metric, ts) do update set value = excluded.value, raw = excluded.raw`,
+            [req.user.id, ts, metric, v, { units: m.units || null, ...pt }]
+          );
+          rows++;
+        }
+      }
+    }
+    for (const w of workouts) {
+      const ts = parseHaeDate(w.start);
+      if (!ts) { skipped++; continue; }
+      const end = parseHaeDate(w.end);
+      const minutes = end ? (new Date(end) - new Date(ts)) / 60000 : null;
+      await client.query(
+        `insert into observations (user_id, ts, source, metric, value, raw) values ($1,$2,'hae','workout',$3,$4)
+         on conflict (user_id, source, metric, ts) do update set value = excluded.value, raw = excluded.raw`,
+        [req.user.id, ts, minutes, w]
+      );
+      rows++;
+    }
+    await client.query("commit");
+  } catch (e) {
+    await client.query("rollback");
+    console.error("hae ingest failed", e);
+    return res.status(500).json({ error: "ingest failed" });
+  } finally {
+    client.release();
+  }
+  res.json({ ok: true, rows, skipped, metrics: metrics.length, workouts: workouts.length });
+});
+
+// ---------- summaries for the UI ----------
+const TZ = process.env.TZ_NAME || "America/Los_Angeles";
+
+app.get("/api/sources", requireAuth, async (req, res) => {
+  const { rows } = await pool.query(
+    `select source, count(*)::int as rows, max(ts) as last_ts, min(ts) as first_ts,
+            count(distinct metric)::int as metrics
+     from observations where user_id = $1 group by source order by source`,
+    [req.user.id]
+  );
+  res.json(rows);
+});
+
+app.get("/api/metrics", requireAuth, async (req, res) => {
+  const { rows } = await pool.query(
+    `select source, metric, count(*)::int as rows, max(ts) as last_ts
+     from observations where user_id = $1 group by source, metric order by source, metric`,
+    [req.user.id]
+  );
+  res.json(rows);
+});
+
+// Per-day rollup: mean QoL, dose count, and the daily mean of one chosen metric.
+app.get("/api/daily", requireAuth, async (req, res) => {
+  const days = Math.min(365, Number(req.query.days) || 30);
+  const source = req.query.source || null;
+  const metric = req.query.metric || null;
+  const { rows } = await pool.query(
+    `with span as (
+       select generate_series((current_date at time zone $2)::date - ($3::int - 1), (current_date at time zone $2)::date, '1 day')::date as day
+     ),
+     qol as (
+       select day, round(avg(rating)::numeric, 2) as qol, count(*) filter (where type = 'rating')::int as rated
+       from qol_ratings where user_id = $1 and type = 'rating' group by day
+     ),
+     meds as (
+       select day, count(*)::int as doses from med_doses where user_id = $1 group by day
+     ),
+     obs as (
+       select (ts at time zone $2)::date as day, avg(value) as v, count(*)::int as n
+       from observations where user_id = $1 and $4::text is not null and source = $4 and metric = $5
+       group by 1
+     )
+     select to_char(s.day,'YYYY-MM-DD') as day, q.qol, coalesce(q.rated,0) as rated,
+            coalesce(m.doses,0) as doses, o.v as metric_value, coalesce(o.n,0) as metric_n
+     from span s left join qol q on q.day = s.day left join meds m on m.day = s.day left join obs o on o.day = s.day
+     order by s.day`,
+    [req.user.id, TZ, days, source, metric]
+  );
+  res.json(rows);
+});
+
+app.use("/vendor", express.static(path.join(__dirname, "vendor"), { maxAge: "7d" }));
+
 // The app itself, only when signed in.
 app.get("/", requireAuth, (req, res) => res.sendFile(path.join(__dirname, "index.html")));
 app.get("/index.html", requireAuth, (req, res) => res.sendFile(path.join(__dirname, "index.html")));
