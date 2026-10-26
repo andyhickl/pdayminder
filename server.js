@@ -519,6 +519,66 @@ app.get("/api/daily", requireAuth, async (req, res) => {
   res.json(rows);
 });
 
+// Everything for one day: hourly series, daily values, QoL segments, doses, workouts.
+app.get("/api/day", requireAuth, async (req, res) => {
+  const day = String(req.query.day || "");
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) return res.status(400).json({ error: "day=YYYY-MM-DD" });
+  const uid = req.user.id;
+  const [obs, qol, meds] = await Promise.all([
+    pool.query(
+      `select ts, metric, value, raw from observations
+       where user_id = $1 and source = 'hae' and (ts at time zone $2)::date = $3::date order by ts`,
+      [uid, TZ, day]
+    ),
+    pool.query("select seg, type, rating from qol_ratings where user_id = $1 and day = $2 order by seg", [uid, day]),
+    pool.query("select to_char(taken_at,'HH24:MI') as t, drug from med_doses where user_id = $1 and day = $2 order by taken_at", [uid, day]),
+  ]);
+  const hourly = {}, daily = {}, workouts = [];
+  const counts = {};
+  obs.rows.forEach((r) => (counts[r.metric] = (counts[r.metric] || 0) + 1));
+  obs.rows.forEach((r) => {
+    if (r.metric === "workout") return workouts.push({ ts: r.ts, minutes: r.value, ...r.raw });
+    if (counts[r.metric] > 1) (hourly[r.metric] = hourly[r.metric] || []).push({ ts: r.ts, value: r.value });
+    else daily[r.metric] = r.value;
+  });
+  res.json({ day, hourly, daily, qol: qol.rows, doses: meds.rows, workouts });
+});
+
+// Several daily metrics at once, pivoted: [{day, "hae/heart_rate_variability": 48.2, ...}]
+app.get("/api/daily-multi", requireAuth, async (req, res) => {
+  const days = Math.min(365, Number(req.query.days) || 30);
+  const wanted = String(req.query.metrics || "").split(",").map((x) => x.trim()).filter(Boolean).slice(0, 20);
+  if (!wanted.length) return res.json([]);
+  const pairs = wanted.map((w) => w.split("/"));
+  const { rows } = await pool.query(
+    `select to_char((ts at time zone $2)::date,'YYYY-MM-DD') as day, source || '/' || metric as key, avg(value) as v
+     from observations
+     where user_id = $1 and (ts at time zone $2)::date >= (current_date at time zone $2)::date - ($3::int - 1)
+       and (source, metric) in (${pairs.map((_, i) => `($${4 + i * 2}, $${5 + i * 2})`).join(",")})
+     group by 1, 2 order by 1`,
+    [req.user.id, TZ, days, ...pairs.flat()]
+  );
+  const byDay = {};
+  const start = new Date(); start.setDate(start.getDate() - (days - 1));
+  for (let i = 0; i < days; i++) {
+    const d = new Date(start); d.setDate(start.getDate() + i);
+    const k = d.toLocaleDateString("en-CA", { timeZone: TZ });
+    byDay[k] = { day: k };
+  }
+  rows.forEach((r) => { if (byDay[r.day]) byDay[r.day][r.key] = Number(r.v); });
+  res.json(Object.values(byDay));
+});
+
+app.get("/api/workouts", requireAuth, async (req, res) => {
+  const days = Math.min(365, Number(req.query.days) || 14);
+  const { rows } = await pool.query(
+    `select ts, value as minutes, raw from observations
+     where user_id = $1 and metric = 'workout' and ts >= now() - ($2 || ' days')::interval order by ts desc`,
+    [req.user.id, String(days)]
+  );
+  res.json(rows);
+});
+
 app.use("/vendor", express.static(path.join(__dirname, "vendor"), { maxAge: "7d" }));
 
 // The app itself, only when signed in.

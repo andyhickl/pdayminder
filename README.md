@@ -33,3 +33,12 @@ Workouts -> metric `workout`, value = minutes, raw = the workout. Re-sending the
 - `GET /api/sources` — rows, metric count, first/last timestamp per source
 - `GET /api/metrics` — distinct source/metric pairs
 - `GET /api/daily?days=30&source=hae&metric=heart_rate_avg` — per-day mean QoL, dose count, and daily mean of one metric (`TZ_NAME`, default America/Los_Angeles)
+
+## Day / trend endpoints
+- `GET /api/day?day=YYYY-MM-DD` — hourly series, daily values, QoL segments, doses, workouts for one day
+- `GET /api/daily-multi?days=30&metrics=hae/heart_rate_variability,hae/resting_heart_rate` — pivoted daily means
+- `GET /api/workouts?days=14`
+
+## Health Auto Export note
+iOS drops a custom `Authorization` header from HAE's requests. Use the URL form:
+`https://<host>/api/ingest/hae?api_key=<key>`. Use a dedicated key for HAE so it can be rotated alone.

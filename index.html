@@ -1256,6 +1256,216 @@
       );
     }
 
+    // ---------- Day vitals: hourly HR/HRV over QoL bands with dose markers ----------
+    const QOL_COLORS = { 1: "#ef4444", 2: "#f97316", 3: "#eab308", 4: "#22c55e", 5: "#38bdf8" };
+    function hourOf(ts) {
+      const d = new Date(ts);
+      const parts = new Intl.DateTimeFormat("en-US", { hour: "numeric", minute: "numeric", hour12: false, timeZone: "America/Los_Angeles" }).formatToParts(d);
+      const h = Number(parts.find((p) => p.type === "hour").value) % 24;
+      const m = Number(parts.find((p) => p.type === "minute").value);
+      return h + m / 60;
+    }
+
+    function DayVitalsChart({ data }) {
+      const W = 600, H = 220, padL = 34, padR = 34, padT = 14, padB = 20;
+      const x = (h) => padL + ((W - padL - padR) * h) / 24;
+      const avg = data.hourly.heart_rate_avg || [];
+      const mn = data.hourly.heart_rate_min || [];
+      const mx = data.hourly.heart_rate_max || [];
+      const hrv = data.hourly.heart_rate_variability || [];
+      const hrVals = [...avg, ...mn, ...mx].map((p) => p.value);
+      const lo = hrVals.length ? Math.min(...hrVals) - 5 : 40, hi = hrVals.length ? Math.max(...hrVals) + 5 : 120;
+      const y = (v) => padT + (H - padT - padB) * (1 - (v - lo) / (hi - lo || 1));
+      const hrvVals = hrv.map((p) => p.value);
+      const hlo = hrvVals.length ? Math.min(...hrvVals) * 0.8 : 0, hhi = hrvVals.length ? Math.max(...hrvVals) * 1.1 : 100;
+      const yh = (v) => padT + (H - padT - padB) * (1 - (v - hlo) / (hhi - hlo || 1));
+      const line = (pts, yf) => pts.map((p, i) => (i ? "L" : "M") + x(hourOf(p.ts) + 0.5).toFixed(1) + " " + yf(p.value).toFixed(1)).join(" ");
+      const byHour = (arr) => Object.fromEntries(arr.map((p) => [Math.floor(hourOf(p.ts)), p.value]));
+      const mnH = byHour(mn), mxH = byHour(mx);
+      const bandHours = Object.keys(mnH).filter((h) => mxH[h] != null).map(Number).sort((a, b) => a - b);
+      const band = bandHours.length
+        ? "M" + bandHours.map((h) => x(h + 0.5).toFixed(1) + " " + y(mxH[h]).toFixed(1)).join(" L") +
+          " L" + bandHours.slice().reverse().map((h) => x(h + 0.5).toFixed(1) + " " + y(mnH[h]).toFixed(1)).join(" L") + " Z"
+        : "";
+      return (
+        <svg viewBox={`0 0 ${W} ${H}`} style={{ width: "100%", height: H, display: "block" }}>
+          {data.qol.map((q) => (
+            <rect key={q.seg} x={x(q.seg * 2)} y={padT} width={x(2) - x(0)} height={H - padT - padB}
+              fill={q.type === "rating" ? QOL_COLORS[q.rating] : q.type === "sleep" ? "#475569" : "#0f172a"} opacity={q.type === "rating" ? 0.22 : 0.25} />
+          ))}
+          {[0, 6, 12, 18, 24].map((h) => (
+            <g key={h}>
+              <line x1={x(h)} x2={x(h)} y1={padT} y2={H - padB} stroke="#1f2937" />
+              <text x={x(h)} y={H - 5} fontSize="10" fill="#64748b" textAnchor="middle">{String(h).padStart(2, "0")}:00</text>
+            </g>
+          ))}
+          {band && <path d={band} fill="#38bdf8" opacity="0.18" />}
+          {avg.length > 0 && <path d={line(avg, y)} fill="none" stroke="#38bdf8" strokeWidth="2" />}
+          {hrv.length > 0 && <path d={line(hrv, yh)} fill="none" stroke="#a3e635" strokeWidth="1.5" strokeDasharray="4 3" />}
+          {hrv.map((p, i) => <circle key={i} cx={x(hourOf(p.ts) + 0.5)} cy={yh(p.value)} r="3" fill="#a3e635" />)}
+          {data.doses.map((d, i) => {
+            const [hh, mm] = d.t.split(":").map(Number);
+            return (
+              <g key={i}>
+                <line x1={x(hh + mm / 60)} x2={x(hh + mm / 60)} y1={padT} y2={H - padB} stroke="#f8fafc" strokeWidth="1.5" strokeDasharray="2 2" />
+                <text x={x(hh + mm / 60)} y={padT + 9} fontSize="9" fill="#f8fafc" textAnchor="middle">💊</text>
+              </g>
+            );
+          })}
+          <text x={padL - 4} y={y(hi) + 10} fontSize="10" fill="#38bdf8" textAnchor="end">{Math.round(hi)}</text>
+          <text x={padL - 4} y={y(lo)} fontSize="10" fill="#38bdf8" textAnchor="end">{Math.round(lo)}</text>
+          <text x={padL - 4} y={padT - 4} fontSize="9" fill="#38bdf8" textAnchor="end">bpm</text>
+          {hrv.length > 0 && <>
+            <text x={W - padR + 4} y={yh(hhi) + 10} fontSize="10" fill="#a3e635">{Math.round(hhi)}</text>
+            <text x={W - padR + 4} y={yh(hlo)} fontSize="10" fill="#a3e635">{Math.round(hlo)}</text>
+            <text x={W - padR + 4} y={padT - 4} fontSize="9" fill="#a3e635">HRV</text>
+          </>}
+        </svg>
+      );
+    }
+
+    function DayVitalsCard({ dateKey, days }) {
+      // re-fetch when the day's local QoL/meds change too, so bands and dose lines stay in sync
+      const localDay = days[dateKey];
+      const sig = localDay ? JSON.stringify([localDay.segments, localDay.meds]) : "";
+      const [data, err] = useJson(`/api/day?day=${dateKey}`, [dateKey, sig]);
+      const fmt = (v, d = 0) => (v == null ? "–" : Number(v).toFixed(d));
+      const d = data ? data.daily : {};
+      const stats = data ? [
+        ["Sleep", d.sleep_analysis_totalsleep != null ? fmt(d.sleep_analysis_totalsleep, 1) + " h" : d.sleep_analysis_asleep != null ? fmt(d.sleep_analysis_asleep, 1) + " h" : "–"],
+        ["Deep", d.sleep_analysis_deep != null ? fmt(d.sleep_analysis_deep, 1) + " h" : "–"],
+        ["Resting HR", d.resting_heart_rate != null ? fmt(d.resting_heart_rate) + " bpm" : "–"],
+        ["Steps", d.step_count != null ? Math.round(d.step_count).toLocaleString() : "–"],
+        ["Walk speed", d.walking_speed != null ? fmt(d.walking_speed, 2) : "–"],
+        ["Dbl support", d.walking_double_support_percentage != null ? fmt(d.walking_double_support_percentage, 1) + "%" : "–"],
+      ] : [];
+      const hasHourly = data && (data.hourly.heart_rate_avg || []).length > 0;
+      return (
+        <div className="card">
+          <div className="card-header">
+            <div>
+              <div className="card-title">Day vitals</div>
+              <div className="card-subtitle">Hourly heart rate (band = min–max) and HRV (dashed), over your QoL ratings, with doses marked.</div>
+            </div>
+          </div>
+          {err && <div className="card-subtitle">Couldn't load ({err}).</div>}
+          {data && !hasHourly && <div className="card-subtitle">No hourly data synced for this day yet.</div>}
+          {hasHourly && <DayVitalsChart data={data} />}
+          {data && (
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8, marginTop: 10 }}>
+              {stats.map(([k, v]) => (
+                <div key={k} style={{ background: "#0f172a", borderRadius: 8, padding: "8px 10px" }}>
+                  <div style={{ fontSize: 11, color: "#94a3b8" }}>{k}</div>
+                  <div style={{ fontSize: 16, fontWeight: 600 }}>{v}</div>
+                </div>
+              ))}
+            </div>
+          )}
+          {data && data.workouts.length > 0 && (
+            <div className="med-list" style={{ marginTop: 8 }}>
+              Workouts: {data.workouts.map((w) => `${w.name || "workout"} ${w.minutes ? Math.round(w.minutes) + " min" : ""}`).join(", ")}
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    // ---------- Vitals trends: small multiples with 7-day rolling mean ----------
+    const VITALS = [
+      ["hae/heart_rate_variability", "HRV (ms)", "#a3e635", 1],
+      ["hae/resting_heart_rate", "Resting HR", "#38bdf8", 0],
+      ["hae/sleep_analysis_totalsleep", "Sleep (h)", "#c084fc", 1],
+      ["hae/sleep_analysis_deep", "Deep sleep (h)", "#8b5cf6", 1],
+      ["hae/step_count", "Steps", "#fbbf24", 0],
+      ["hae/walking_speed", "Walking speed", "#34d399", 2],
+      ["hae/walking_step_length", "Step length", "#2dd4bf", 2],
+      ["hae/walking_double_support_percentage", "Double support %", "#f87171", 1],
+      ["hae/walking_asymmetry_percentage", "Asymmetry %", "#fb923c", 1],
+    ];
+    function rolling(rows, key, n = 7) {
+      return rows.map((r, i) => {
+        const win = rows.slice(Math.max(0, i - n + 1), i + 1).map((x) => x[key]).filter((v) => v != null);
+        return win.length >= Math.min(3, n) ? win.reduce((a, b) => a + b, 0) / win.length : null;
+      });
+    }
+    function Sparkline({ rows, k, color, digits }) {
+      const W = 280, H = 70, padL = 4, padR = 34, padT = 6, padB = 4;
+      const vals = rows.map((r) => r[k] ?? null);
+      const sm = rolling(rows, k);
+      const present = vals.filter((v) => v != null);
+      if (!present.length) return <div className="card-subtitle" style={{ height: H }}>no data</div>;
+      const lo = Math.min(...present), hi = Math.max(...present);
+      const x = (i) => padL + ((W - padL - padR) * i) / Math.max(1, rows.length - 1);
+      const y = (v) => padT + (H - padT - padB) * (1 - (v - lo) / (hi - lo || 1));
+      let d = "", pen = false;
+      sm.forEach((v, i) => { if (v == null) { pen = false; return; } d += (pen ? " L" : " M") + x(i).toFixed(1) + " " + y(v).toFixed(1); pen = true; });
+      const last = [...vals].reverse().find((v) => v != null);
+      return (
+        <svg viewBox={`0 0 ${W} ${H}`} style={{ width: "100%", height: H, display: "block" }}>
+          {vals.map((v, i) => v == null ? null : <circle key={i} cx={x(i)} cy={y(v)} r="1.8" fill={color} opacity="0.45" />)}
+          <path d={d} fill="none" stroke={color} strokeWidth="2" />
+          <text x={W - padR + 4} y={H / 2 + 4} fontSize="12" fontWeight="600" fill={color}>{Number(last).toFixed(digits)}</text>
+        </svg>
+      );
+    }
+    function VitalsTrendsCard() {
+      const [span, setSpan] = useState(30);
+      const [rows, err] = useJson(`/api/daily-multi?days=${span}&metrics=${encodeURIComponent(VITALS.map((v) => v[0]).join(","))}`, [span]);
+      return (
+        <div className="card">
+          <div className="card-header">
+            <div>
+              <div className="card-title">Vitals trends</div>
+              <div className="card-subtitle">Daily values (dots) with a 7-day rolling mean (line). Latest value at right.</div>
+            </div>
+          </div>
+          <div className="controls-row" style={{ gap: 8 }}>
+            {[30, 90, 180].map((n) => (
+              <button key={n} type="button" className={"pill-btn" + (span === n ? " primary" : "")} onClick={() => setSpan(n)}>{n}d</button>
+            ))}
+          </div>
+          {err && <div className="card-subtitle">Couldn't load ({err}).</div>}
+          {rows && (
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(170px, 1fr))", gap: 10 }}>
+              {VITALS.map(([k, label, color, digits]) => (
+                <div key={k} style={{ background: "#0f172a", borderRadius: 8, padding: "6px 8px" }}>
+                  <div style={{ fontSize: 11, color: "#94a3b8" }}>{label}</div>
+                  <Sparkline rows={rows} k={k} color={color} digits={digits} />
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    function WorkoutsCard() {
+      const [rows, err] = useJson("/api/workouts?days=14", []);
+      return (
+        <div className="card">
+          <div className="card-header">
+            <div>
+              <div className="card-title">Workouts (14 days)</div>
+              <div className="card-subtitle">From the Watch via Health Auto Export.</div>
+            </div>
+          </div>
+          {err && <div className="card-subtitle">Couldn't load.</div>}
+          {rows && rows.length === 0 && <div className="card-subtitle">No workouts synced yet.</div>}
+          {rows && rows.map((w, i) => {
+            const r = w.raw || {};
+            const kcal = r.activeEnergyBurned?.qty ?? r.totalEnergy?.qty ?? r.activeEnergy?.qty;
+            const dist = r.distance?.qty;
+            return (
+              <div key={i} className="med-list" style={{ display: "flex", justifyContent: "space-between" }}>
+                <span><strong>{r.name || "Workout"}</strong> · {new Date(w.ts).toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" })}</span>
+                <span style={{ color: "#94a3b8" }}>{w.minutes ? Math.round(w.minutes) + " min" : ""}{kcal ? ` · ${Math.round(kcal)} kcal` : ""}{dist ? ` · ${Number(dist).toFixed(1)} ${r.distance?.units || ""}` : ""}</span>
+              </div>
+            );
+          })}
+        </div>
+      );
+    }
+
     function TrendsCard() {
       const [span, setSpan] = useState(30);
       const [pick, setPick] = useState("");
@@ -1734,8 +1944,11 @@
             </div>
           </div>
 
+          <DayVitalsCard dateKey={dateKey} days={days} />
           <TrendsCard />
+          <VitalsTrendsCard />
           <QoLSummaryCard days={days} />
+          <WorkoutsCard />
           <SourcesCard />
           <DataCard days={days} setDays={setDays} settings={settings} />
 
