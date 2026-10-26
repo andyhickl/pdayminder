@@ -17,13 +17,6 @@ services:
         sync: false        # set in dashboard: your email
       - key: PDAYMINDER_PASSWORD
         sync: false        # set in dashboard: a strong password (used once to create the account)
-      # DATA_DIR + the disk can be removed once the legacy JSON has been imported.
-      - key: DATA_DIR
-        value: /data
-    disk:
-      name: pdayminder-data
-      mountPath: /data
-      sizeGB: 1
 
 databases:
   - name: pday_db
