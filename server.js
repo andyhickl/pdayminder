@@ -5,56 +5,82 @@ const path = require("path");
 const app = express();
 const PORT = process.env.PORT || 3000; // Render injects PORT
 
-// We'll store data in a JSON file on disk.
-const DATA_FILE = path.join(__dirname, "pdayminder-data.json");
+// Data lives in a JSON file. On Render, set DATA_DIR to a persistent disk
+// mount (e.g. /data) so it survives deploys and restarts. Defaults to the
+// code directory for local dev.
+const DATA_DIR = process.env.DATA_DIR || __dirname;
+const DATA_FILE = path.join(DATA_DIR, "pdayminder-data.json");
+const SEED_FILE = path.join(__dirname, "pdayminder-data.json");
 
-// Parse JSON bodies
-app.use(express.json());
+// Optional shared secret. If PDAYMINDER_TOKEN is set, every /api request must
+// carry it as "Authorization: Bearer <token>" or "?token=<token>".
+const TOKEN = process.env.PDAYMINDER_TOKEN || "";
 
-// Serve index.html and any static assets from this directory
-app.use(express.static(__dirname));
+app.use(express.json({ limit: "5mb" }));
 
-// Helper to load/save data
+function requireToken(req, res, next) {
+  if (!TOKEN) return next();
+  const header = req.get("authorization") || "";
+  const bearer = header.startsWith("Bearer ") ? header.slice(7) : "";
+  if (bearer === TOKEN || req.query.token === TOKEN) return next();
+  res.status(401).json({ error: "unauthorized" });
+}
+
 function loadData() {
-  try {
-    const raw = fs.readFileSync(DATA_FILE, "utf8");
-    return JSON.parse(raw);
-  } catch {
-    // default structure
-    return { settings: null, days: {} };
+  for (const file of [DATA_FILE, SEED_FILE]) {
+    try {
+      return JSON.parse(fs.readFileSync(file, "utf8"));
+    } catch {
+      // try next
+    }
   }
+  return { settings: null, days: {} };
 }
 
 function saveData(data) {
-  fs.writeFileSync(DATA_FILE, JSON.stringify(data, null, 2), "utf8");
+  fs.mkdirSync(DATA_DIR, { recursive: true });
+  const tmp = DATA_FILE + ".tmp";
+  fs.writeFileSync(tmp, JSON.stringify(data, null, 2), "utf8");
+  fs.renameSync(tmp, DATA_FILE);
 }
 
-// API to get current data
-app.get("/api/pdayminder/data", (req, res) => {
+// Unauthenticated liveness check
+app.get("/api/health", (req, res) => {
   const data = loadData();
-  res.json(data);
+  res.json({
+    ok: true,
+    days: Object.keys(data.days || {}).length,
+    persistent: DATA_DIR !== __dirname,
+    authRequired: Boolean(TOKEN),
+  });
 });
 
-// API to upsert data
-app.post("/api/pdayminder/data", (req, res) => {
+app.get("/api/pdayminder/data", requireToken, (req, res) => {
+  res.json(loadData());
+});
+
+// Upsert. Settings replace; days merge per date key so a stale client
+// can't wipe days it never saw.
+app.post("/api/pdayminder/data", requireToken, (req, res) => {
   const body = req.body || {};
   const existing = loadData();
-
-  // Very simple merge: replace settings if provided, replace days if provided
   const merged = {
     settings: body.settings || existing.settings,
-    days: body.days || existing.days,
+    days: { ...(existing.days || {}), ...(body.days || {}) },
   };
-
   saveData(merged);
-  res.json({ ok: true });
+  res.json({ ok: true, days: Object.keys(merged.days).length });
 });
 
-// Fallback: send index.html for any unknown route (good for client-side routing)
+// Serve index.html and static assets
+app.use(express.static(__dirname));
+
 app.get("*", (req, res) => {
   res.sendFile(path.join(__dirname, "index.html"));
 });
 
 app.listen(PORT, () => {
-  console.log(`PDayMinder server running on http://localhost:${PORT}`);
+  console.log(
+    `PDayMinder server on http://localhost:${PORT} (data: ${DATA_FILE}, auth: ${TOKEN ? "on" : "off"})`
+  );
 });

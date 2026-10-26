@@ -1402,10 +1402,33 @@
         saveDaysToLocal(days);
       }, [days]);
 
+
+      // ---------- API auth ----------
+      // If the server has PDAYMINDER_TOKEN set, we need to send it. Stored
+      // once in localStorage; prompt if the server rejects us.
+      function getApiToken() {
+        try { return localStorage.getItem("pdayminder-token") || ""; } catch { return ""; }
+      }
+      async function apiFetch(url, opts = {}) {
+        const headers = { ...(opts.headers || {}) };
+        const token = getApiToken();
+        if (token) headers["Authorization"] = "Bearer " + token;
+        let res = await fetch(url, { ...opts, headers });
+        if (res.status === 401) {
+          const entered = window.prompt("PDayMinder server token:");
+          if (entered) {
+            localStorage.setItem("pdayminder-token", entered.trim());
+            headers["Authorization"] = "Bearer " + entered.trim();
+            res = await fetch(url, { ...opts, headers });
+          }
+        }
+        return res;
+      }
+
       useEffect(() => {
         async function loadFromServer() {
           try {
-            const res = await fetch("/api/pdayminder/data");
+            const res = await apiFetch("/api/pdayminder/data");
             if (!res.ok) return;
             const payload = await res.json();
             if (payload.settings) {
@@ -1424,7 +1447,7 @@
       useEffect(() => {
         async function saveToServer() {
           try {
-            await fetch("/api/pdayminder/data", {
+            await apiFetch("/api/pdayminder/data", {
               method: "POST",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({ settings, days }),

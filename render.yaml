@@ -1,0 +1,19 @@
+services:
+  - type: web
+    name: pdayminder
+    runtime: node
+    plan: starter            # persistent disks need a paid instance; free tier wipes data on every deploy
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /api/health
+    disk:
+      name: pdayminder-data
+      mountPath: /data
+      sizeGB: 1
+    envVars:
+      - key: DATA_DIR
+        value: /data
+      - key: PDAYMINDER_TOKEN
+        generateValue: true
+      - key: NODE_VERSION
+        value: "20"
