@@ -11,7 +11,7 @@ const SESSION_DAYS = 90;
 const IS_PROD = process.env.NODE_ENV === "production" || Boolean(process.env.RENDER);
 
 app.set("trust proxy", 1);
-app.use(express.json({ limit: "5mb" }));
+app.use(express.json({ limit: "50mb" }));
 app.use(express.urlencoded({ extended: false }));
 
 // ---------- helpers ----------
@@ -48,9 +48,17 @@ function clearSessionCookie(res) {
 async function authenticate(req) {
   // Accept: "Authorization: Bearer <key>", "Authorization: <key>", "Authorization: Bearer Bearer <key>"
   // (some apps add the prefix themselves), or "X-API-Key: <key>".
-  let key = (req.get("x-api-key") || "").trim();
+  let key = (req.get("x-api-key") || req.query.api_key || "").trim();
   const header = (req.get("authorization") || "").trim();
   if (!key && header) key = header.replace(/^(bearer\s+)+/i, "").trim();
+  req.authDiag = {
+    headers: Object.keys(req.headers).filter((h) => !["cookie"].includes(h)),
+    authHeaderLen: header.length,
+    keyLen: key.length,
+    keyPrefix: key.slice(0, 6),
+    looksLikeKey: key.startsWith("pdm_"),
+    via: req.get("x-api-key") ? "x-api-key" : req.query.api_key ? "query" : header ? "authorization" : "none",
+  };
   if (key && key.startsWith("pdm_")) {
     const { rows } = await pool.query(
       `select u.id, u.email, k.id as key_id from api_keys k
@@ -78,7 +86,10 @@ async function requireAuth(req, res, next) {
   try {
     const user = await authenticate(req);
     if (!user) {
-      if (req.path.startsWith("/api/")) return res.status(401).json({ error: "unauthorized" });
+      if (req.path.startsWith("/api/")) {
+        await logIngest(null, `${req.method} ${req.path}`, 401, 0, req.authDiag);
+        return res.status(401).json({ error: "unauthorized", hint: "send the pdm_ API key as 'Authorization: Bearer <key>', 'X-API-Key: <key>', or ?api_key=<key>" });
+      }
       return res.redirect("/login");
     }
     req.user = user;
@@ -203,6 +214,14 @@ async function saveClientPayload(userId, body) {
     client.release();
   }
 }
+
+// Body parser errors (payload too large, bad JSON) -> logged
+app.use((err, req, res, next) => {
+  if (!err) return next();
+  const status = err.status || 500;
+  logIngest(null, `${req.method} ${req.path}`, status, 0, { error: err.type || err.message, length: req.get("content-length") });
+  res.status(status).json({ error: err.type || "bad request", limit: "50mb" });
+});
 
 // ---------- public routes ----------
 app.get("/api/health", async (req, res) => {
@@ -442,7 +461,7 @@ app.post("/api/ingest/hae", requireAuth, async (req, res) => {
 
 app.get("/api/ingest-log", requireAuth, async (req, res) => {
   const { rows } = await pool.query(
-    "select ts, route, status, rows, bytes, summary from ingest_log where user_id = $1 order by id desc limit 20",
+    "select ts, route, status, rows, bytes, summary from ingest_log where user_id = $1 or user_id is null order by id desc limit 30",
     [req.user.id]
   );
   res.json(rows);
