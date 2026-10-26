@@ -74,6 +74,17 @@ create table if not exists observations (
   created_at timestamptz not null default now(),
   unique (user_id, source, metric, ts)
 );
+create table if not exists ingest_log (
+  id         bigserial primary key,
+  user_id    int references users(id) on delete cascade,
+  ts         timestamptz not null default now(),
+  route      text not null,
+  status     int not null,
+  rows       int,
+  bytes      int,
+  summary    jsonb
+);
+
 create index if not exists observations_user_ts on observations (user_id, ts);
 create index if not exists observations_user_source_metric on observations (user_id, source, metric, ts);
 `;

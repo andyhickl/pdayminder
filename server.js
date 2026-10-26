@@ -362,8 +362,32 @@ function parseHaeDate(d) {
   return isNaN(t) ? null : t.toISOString();
 }
 
+// Shape summary of a JSON body, for debugging integrations without storing the whole payload.
+function describe(v, depth = 0) {
+  if (depth > 3) return "…";
+  if (Array.isArray(v)) return { array: v.length, first: v.length ? describe(v[0], depth + 1) : null };
+  if (v && typeof v === "object") {
+    const out = {};
+    Object.keys(v).slice(0, 25).forEach((k) => (out[k] = describe(v[k], depth + 1)));
+    return out;
+  }
+  return typeof v === "string" ? "str:" + v.slice(0, 40) : v;
+}
+async function logIngest(userId, route, status, rows, body) {
+  try {
+    const bytes = Buffer.byteLength(JSON.stringify(body || {}));
+    await pool.query(
+      "insert into ingest_log (user_id, route, status, rows, bytes, summary) values ($1,$2,$3,$4,$5,$6)",
+      [userId, route, status, rows, bytes, describe(body)]
+    );
+  } catch (e) {
+    console.error("ingest log failed", e.message);
+  }
+}
+
 app.post("/api/ingest/hae", requireAuth, async (req, res) => {
-  const data = (req.body && req.body.data) || req.body || {};
+  const body = req.body || {};
+  const data = body.data && typeof body.data === "object" ? body.data : body;
   const metrics = Array.isArray(data.metrics) ? data.metrics : [];
   const workouts = Array.isArray(data.workouts) ? data.workouts : [];
   let rows = 0, skipped = 0;
@@ -404,11 +428,21 @@ app.post("/api/ingest/hae", requireAuth, async (req, res) => {
   } catch (e) {
     await client.query("rollback");
     console.error("hae ingest failed", e);
+    await logIngest(req.user.id, "hae", 500, 0, body);
     return res.status(500).json({ error: "ingest failed" });
   } finally {
     client.release();
   }
+  await logIngest(req.user.id, "hae", 200, rows, body);
   res.json({ ok: true, rows, skipped, metrics: metrics.length, workouts: workouts.length });
+});
+
+app.get("/api/ingest-log", requireAuth, async (req, res) => {
+  const { rows } = await pool.query(
+    "select ts, route, status, rows, bytes, summary from ingest_log where user_id = $1 order by id desc limit 20",
+    [req.user.id]
+  );
+  res.json(rows);
 });
 
 // ---------- summaries for the UI ----------
