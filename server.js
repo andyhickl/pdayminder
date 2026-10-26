@@ -505,7 +505,20 @@ app.use("/vendor", express.static(path.join(__dirname, "vendor"), { maxAge: "7d"
 // The app itself, only when signed in.
 app.get("/", requireAuth, (req, res) => res.sendFile(path.join(__dirname, "index.html")));
 app.get("/index.html", requireAuth, (req, res) => res.sendFile(path.join(__dirname, "index.html")));
-app.get("*", requireAuth, (req, res) => res.sendFile(path.join(__dirname, "index.html")));
+// Anything else: API-key callers get a logged 404 (so a mis-set URL or method shows up in
+// /api/ingest-log); browser sessions get the app.
+app.all("*", requireAuth, async (req, res) => {
+  if (req.user.via === "api_key" || req.method !== "GET" || req.path.startsWith("/api/")) {
+    await logIngest(req.user.id, `${req.method} ${req.path}`, 404, 0, req.body);
+    return res.status(404).json({
+      error: "no such route",
+      hint: "Health Auto Export must POST to /api/ingest/hae",
+      method: req.method,
+      path: req.path,
+    });
+  }
+  res.sendFile(path.join(__dirname, "index.html"));
+});
 
 // ---------- start ----------
 (async () => {
