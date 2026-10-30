@@ -617,6 +617,39 @@ app.get("/api/workouts", requireAuth, async (req, res) => {
   res.json(rows);
 });
 
+// ---------- public legal pages (no login) ----------
+function mdToHtml(md) {
+  const esc = (t) => t.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  const inline = (t) => esc(t)
+    .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
+    .replace(/_(.+?)_/g, "<em>$1</em>")
+    .replace(/\b((?:https?:\/\/)?(?:github\.com|cloud\.ouraring\.com)\/[\w./-]+)/g, (m) => `<a href="${m.startsWith("http") ? m : "https://" + m}">${m}</a>`)
+    .replace(/([\w.+-]+@[\w-]+\.[\w.]+)/g, '<a href="mailto:$1">$1</a>');
+  const out = [];
+  let list = false;
+  for (const line of md.split("\n")) {
+    if (/^- /.test(line)) { if (!list) { out.push("<ul>"); list = true; } out.push(`<li>${inline(line.slice(2))}</li>`); continue; }
+    if (list) { out.push("</ul>"); list = false; }
+    const h = line.match(/^(#{1,3}) (.*)/);
+    if (h) out.push(`<h${h[1].length}>${inline(h[2])}</h${h[1].length}>`);
+    else if (line.trim()) out.push(`<p>${inline(line)}</p>`);
+  }
+  if (list) out.push("</ul>");
+  return out.join("\n");
+}
+function legalPage(file, title) {
+  return (req, res) => {
+    let md;
+    try { md = fs.readFileSync(path.join(__dirname, "docs", file), "utf8"); } catch { return res.status(404).send("not found"); }
+    res.type("html").send(`<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>${title}</title><style>body{font-family:system-ui,-apple-system,sans-serif;max-width:720px;margin:40px auto;padding:0 20px;line-height:1.55;color:#1e293b}
+h1{font-size:26px}h2{font-size:18px;margin-top:28px}a{color:#0369a1}nav{font-size:14px;margin-bottom:24px}nav a{margin-right:14px}</style></head>
+<body><nav><a href="/privacy">Privacy Policy</a><a href="/terms">Terms of Service</a><a href="https://github.com/andyhickl/pdayminder">Source</a></nav>${mdToHtml(md)}</body></html>`);
+  };
+}
+app.get("/privacy", legalPage("privacy.md", "PDayMinder Privacy Policy"));
+app.get("/terms", legalPage("terms.md", "PDayMinder Terms of Service"));
+
 // ---------- Oura OAuth2 ----------
 const OURA = {
   authorize: process.env.OURA_AUTHORIZE_URL || "https://cloud.ouraring.com/oauth/authorize",

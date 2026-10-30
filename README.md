@@ -55,3 +55,6 @@ readiness, activity, stress, SpO2. Naps/rest sessions are skipped. Each run logs
 Steps, distance, energy, stand time etc. are keyed to local midnight and the largest value wins, because overlapping
 HAE automation windows send partial sums for the same day. Sleep is one row per night keyed on the end date; windows
 over 14 h are dropped as merged nights. `repairCumulative()` runs at boot to clean up older rows.
+
+## Legal
+`docs/privacy.md` and `docs/terms.md` are served publicly (no login) at `/privacy` and `/terms`.
