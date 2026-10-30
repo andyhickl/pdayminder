@@ -8,6 +8,7 @@ const { pool, migrate } = require("./db");
 const app = express();
 const PORT = process.env.PORT || 3000;
 const SESSION_DAYS = 90;
+const TZ = process.env.TZ_NAME || "America/Los_Angeles";
 const IS_PROD = process.env.NODE_ENV === "production" || Boolean(process.env.RENDER);
 
 app.set("trust proxy", 1);
@@ -407,6 +408,24 @@ async function logIngest(userId, route, status, rows, body) {
   }
 }
 
+// Cumulative-per-day metrics. Overlapping HAE automation windows send partial sums for the
+// same local day, so these are keyed to local midnight and the largest value wins.
+const CUMULATIVE = new Set([
+  "step_count", "walking_running_distance", "flights_climbed", "active_energy", "basal_energy_burned",
+  "apple_exercise_time", "apple_stand_time", "apple_stand_hour", "cycling_distance", "swimming_distance",
+  "physical_effort", "time_in_daylight",
+]);
+const isCumulative = (base) => CUMULATIVE.has(base) || base.startsWith("sleep_analysis");
+
+function localMidnightIso(tsIso) {
+  const d = new Date(tsIso);
+  const day = d.toLocaleDateString("en-CA", { timeZone: TZ });
+  // find the UTC instant of local midnight for that date
+  const guess = new Date(day + "T00:00:00Z");
+  const offsetMin = (new Date(guess.toLocaleString("en-US", { timeZone: TZ })) - new Date(guess.toLocaleString("en-US", { timeZone: "UTC" }))) / 60000;
+  return new Date(guess.getTime() - offsetMin * 60000).toISOString();
+}
+
 app.post("/api/ingest/hae", requireAuth, async (req, res) => {
   const body = req.body || {};
   const data = body.data && typeof body.data === "object" ? body.data : body;
@@ -420,14 +439,30 @@ app.post("/api/ingest/hae", requireAuth, async (req, res) => {
       const base = String(m.name || "").toLowerCase().replace(/[^a-z0-9]+/g, "_");
       if (!base) continue;
       for (const pt of m.data || []) {
-        const ts = parseHaeDate(pt.date);
+        let ts = parseHaeDate(pt.date);
         if (!ts) { skipped++; continue; }
+        const isSleep = base.startsWith("sleep_analysis");
+        const cumulative = !isSleep && isCumulative(base);
+        if (isSleep) {
+          // one row per night, keyed on the local date the sleep ended; drop merged multi-night windows
+          const start = parseHaeDate(pt.sleepStart), end = parseHaeDate(pt.sleepEnd);
+          const span = start && end ? (new Date(end) - new Date(start)) / 36e5 : null;
+          const total = pt.totalSleep ?? pt.asleep ?? pt.inBed;
+          if ((span != null && span > 14) || (typeof total === "number" && total > 14)) { skipped++; continue; }
+          ts = localMidnightIso(end || ts);
+        }
+        if (cumulative) ts = localMidnightIso(ts);
         for (const [k, v] of Object.entries(pt)) {
           if (k === "date" || typeof v !== "number" || !isFinite(v)) continue;
           const metric = k === "qty" ? base : `${base}_${k.toLowerCase()}`;
           await client.query(
-            `insert into observations (user_id, ts, source, metric, value, raw) values ($1,$2,'hae',$3,$4,$5)
-             on conflict (user_id, source, metric, ts) do update set value = excluded.value, raw = excluded.raw`,
+            cumulative
+              ? `insert into observations (user_id, ts, source, metric, value, raw) values ($1,$2,'hae',$3,$4,$5)
+                 on conflict (user_id, source, metric, ts) do update
+                   set value = greatest(observations.value, excluded.value),
+                       raw = case when excluded.value >= observations.value then excluded.raw else observations.raw end`
+              : `insert into observations (user_id, ts, source, metric, value, raw) values ($1,$2,'hae',$3,$4,$5)
+                 on conflict (user_id, source, metric, ts) do update set value = excluded.value, raw = excluded.raw`,
             [req.user.id, ts, metric, v, { units: m.units || null, ...pt }]
           );
           rows++;
@@ -468,7 +503,6 @@ app.get("/api/ingest-log", requireAuth, async (req, res) => {
 });
 
 // ---------- summaries for the UI ----------
-const TZ = process.env.TZ_NAME || "America/Los_Angeles";
 
 app.get("/api/sources", requireAuth, async (req, res) => {
   const { rows } = await pool.query(
@@ -524,7 +558,7 @@ app.get("/api/day", requireAuth, async (req, res) => {
   const day = String(req.query.day || "");
   if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) return res.status(400).json({ error: "day=YYYY-MM-DD" });
   const uid = req.user.id;
-  const [obs, qol, meds] = await Promise.all([
+  const [obs, qol, meds, oura] = await Promise.all([
     pool.query(
       `select ts, metric, value, raw from observations
        where user_id = $1 and source = 'hae' and (ts at time zone $2)::date = $3::date order by ts`,
@@ -532,6 +566,10 @@ app.get("/api/day", requireAuth, async (req, res) => {
     ),
     pool.query("select seg, type, rating from qol_ratings where user_id = $1 and day = $2 order by seg", [uid, day]),
     pool.query("select to_char(taken_at,'HH24:MI') as t, drug from med_doses where user_id = $1 and day = $2 order by taken_at", [uid, day]),
+    pool.query(
+      `select metric, value from observations where user_id = $1 and source = 'oura' and (ts at time zone $2)::date = $3::date`,
+      [uid, TZ, day]
+    ),
   ]);
   const hourly = {}, daily = {}, workouts = [];
   const counts = {};
@@ -541,7 +579,7 @@ app.get("/api/day", requireAuth, async (req, res) => {
     if (counts[r.metric] > 1) (hourly[r.metric] = hourly[r.metric] || []).push({ ts: r.ts, value: r.value });
     else daily[r.metric] = r.value;
   });
-  res.json({ day, hourly, daily, qol: qol.rows, doses: meds.rows, workouts });
+  res.json({ day, hourly, daily, oura: Object.fromEntries(oura.rows.map((r) => [r.metric, r.value])), qol: qol.rows, doses: meds.rows, workouts });
 });
 
 // Several daily metrics at once, pivoted: [{day, "hae/heart_rate_variability": 48.2, ...}]
@@ -599,6 +637,60 @@ app.all("*", requireAuth, async (req, res) => {
   res.sendFile(path.join(__dirname, "index.html"));
 });
 
+async function repairCumulative() {
+  const { rows } = await pool.query(
+    "select distinct metric from observations where source = 'hae'"
+  );
+  const sleepMetrics = rows.map((r) => r.metric).filter((m) => m.startsWith("sleep_analysis"));
+  if (sleepMetrics.length) {
+    const bad = await pool.query(
+      `delete from observations where source = 'hae' and metric = any($1)
+       and ((metric in ('sleep_analysis_totalsleep','sleep_analysis_asleep','sleep_analysis_inbed') and value > 14)
+            or (raw ? 'sleepStart' and raw ? 'sleepEnd'
+                and extract(epoch from ((raw->>'sleepEnd')::timestamptz - (raw->>'sleepStart')::timestamptz))/3600 > 14))`,
+      [sleepMetrics]
+    );
+    if (bad.rowCount) console.log(`repair: removed ${bad.rowCount} implausible sleep rows`);
+    for (const metric of sleepMetrics) {
+      await pool.query(
+        `with keep as (
+           select distinct on (user_id, (ts at time zone $2)::date) id
+           from observations where source = 'hae' and metric = $1
+           order by user_id, (ts at time zone $2)::date, id desc)
+         delete from observations o where o.source = 'hae' and o.metric = $1 and o.id not in (select id from keep)`,
+        [metric, TZ]
+      );
+    }
+    await pool.query(
+      `update observations set ts = ((ts at time zone $1)::date::timestamp at time zone $1)
+       where source = 'hae' and metric = any($2) and ts <> ((ts at time zone $1)::date::timestamp at time zone $1)`,
+      [TZ, sleepMetrics]
+    );
+  }
+  const targets = rows.map((r) => r.metric).filter((m) => !m.startsWith("sleep_analysis") && isCumulative(m));
+  if (!targets.length) return;
+  for (const metric of targets) {
+    const r = await pool.query(
+      `with keep as (
+         select distinct on (user_id, (ts at time zone $2)::date) id
+         from observations where source = 'hae' and metric = $1
+         order by user_id, (ts at time zone $2)::date, value desc nulls last, id desc
+       )
+       delete from observations o using (
+         select id from observations where source = 'hae' and metric = $1 and id not in (select id from keep)
+       ) d where o.id = d.id`,
+      [metric, TZ]
+    );
+    if (r.rowCount) console.log(`repair: ${metric} removed ${r.rowCount} partial rows`);
+  }
+  // re-key survivors to local midnight
+  await pool.query(
+    `update observations set ts = ((ts at time zone $1)::date::timestamp at time zone $1)
+     where source = 'hae' and metric = any($2) and ts <> ((ts at time zone $1)::date::timestamp at time zone $1)`,
+    [TZ, targets]
+  );
+}
+
 // ---------- start ----------
 (async () => {
   if (!process.env.DATABASE_URL) {
@@ -607,6 +699,7 @@ app.all("*", requireAuth, async (req, res) => {
   }
   await migrate();
   await ensureFirstUser();
+  await repairCumulative();
   app.listen(PORT, () => console.log(`PDayMinder on http://localhost:${PORT}`));
 })().catch((e) => {
   console.error(e);

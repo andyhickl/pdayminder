@@ -1331,10 +1331,13 @@
       const [data, err] = useJson(`/api/day?day=${dateKey}`, [dateKey, sig]);
       const fmt = (v, d = 0) => (v == null ? "–" : Number(v).toFixed(d));
       const d = data ? data.daily : {};
+      const o = data ? data.oura || {} : {};
       const stats = data ? [
-        ["Sleep", d.sleep_analysis_totalsleep != null ? fmt(d.sleep_analysis_totalsleep, 1) + " h" : d.sleep_analysis_asleep != null ? fmt(d.sleep_analysis_asleep, 1) + " h" : "–"],
-        ["Deep", d.sleep_analysis_deep != null ? fmt(d.sleep_analysis_deep, 1) + " h" : "–"],
-        ["Resting HR", d.resting_heart_rate != null ? fmt(d.resting_heart_rate) + " bpm" : "–"],
+        ["Sleep", o.total_sleep_h != null ? fmt(o.total_sleep_h, 1) + " h" : d.sleep_analysis_totalsleep != null ? fmt(d.sleep_analysis_totalsleep, 1) + " h" : "–"],
+        ["Readiness", o.readiness_score != null ? fmt(o.readiness_score) : "–"],
+        ["Night HRV", o.avg_hrv != null ? fmt(o.avg_hrv) + " ms" : "–"],
+        ["Deep", o.deep_h != null ? fmt(o.deep_h, 1) + " h" : d.sleep_analysis_deep != null ? fmt(d.sleep_analysis_deep, 1) + " h" : "–"],
+        ["Resting HR", o.lowest_hr != null ? fmt(o.lowest_hr) + " bpm" : d.resting_heart_rate != null ? fmt(d.resting_heart_rate) + " bpm" : "–"],
         ["Steps", d.step_count != null ? Math.round(d.step_count).toLocaleString() : "–"],
         ["Walk speed", d.walking_speed != null ? fmt(d.walking_speed, 2) : "–"],
         ["Dbl support", d.walking_double_support_percentage != null ? fmt(d.walking_double_support_percentage, 1) + "%" : "–"],
@@ -1372,15 +1375,21 @@
 
     // ---------- Vitals trends: small multiples with 7-day rolling mean ----------
     const VITALS = [
-      ["hae/heart_rate_variability", "HRV (ms)", "#a3e635", 1],
-      ["hae/resting_heart_rate", "Resting HR", "#38bdf8", 0],
-      ["hae/sleep_analysis_totalsleep", "Sleep (h)", "#c084fc", 1],
-      ["hae/sleep_analysis_deep", "Deep sleep (h)", "#8b5cf6", 1],
-      ["hae/step_count", "Steps", "#fbbf24", 0],
+      ["oura/sleep_score", "Sleep score (Oura)", "#c084fc", 0],
+      ["oura/readiness_score", "Readiness (Oura)", "#f472b6", 0],
+      ["oura/total_sleep_h", "Sleep (h, Oura)", "#a78bfa", 1],
+      ["oura/deep_h", "Deep sleep (h, Oura)", "#8b5cf6", 1],
+      ["oura/avg_hrv", "Night HRV (ms, Oura)", "#a3e635", 0],
+      ["oura/lowest_hr", "Lowest night HR (Oura)", "#38bdf8", 0],
+      ["oura/temperature_deviation", "Temp deviation (°C, Oura)", "#fb7185", 2],
+      ["hae/heart_rate_variability", "Daytime HRV (ms, Watch)", "#84cc16", 1],
+      ["hae/resting_heart_rate", "Resting HR (Watch)", "#0ea5e9", 0],
+      ["hae/step_count", "Steps (Watch)", "#fbbf24", 0],
       ["hae/walking_speed", "Walking speed", "#34d399", 2],
       ["hae/walking_step_length", "Step length", "#2dd4bf", 2],
       ["hae/walking_double_support_percentage", "Double support %", "#f87171", 1],
       ["hae/walking_asymmetry_percentage", "Asymmetry %", "#fb923c", 1],
+      ["oura/stress_high_min", "Stress (min/day, Oura)", "#f97316", 0],
     ];
     function rolling(rows, key, n = 7) {
       return rows.map((r, i) => {

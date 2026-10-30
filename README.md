@@ -42,3 +42,14 @@ Workouts -> metric `workout`, value = minutes, raw = the workout. Re-sending the
 ## Health Auto Export note
 iOS drops a custom `Authorization` header from HAE's requests. Use the URL form:
 `https://<host>/api/ingest/hae?api_key=<key>`. Use a dedicated key for HAE so it can be rotated alone.
+
+## Oura
+`sync/oura.js` runs as a Render cron job (`oura-sync`, every 4 h). Needs `OURA_TOKEN` (personal access token from
+cloud.ouraring.com/personal-access-tokens) and `DATABASE_URL`. `OURA_DAYS` is the lookback (3 by default; set 365 and
+trigger a manual run once to backfill). Writes `source='oura'` rows: sleep per night (keyed on the day it ended),
+readiness, activity, stress, SpO2. Naps/rest sessions are skipped. Each run logs to `ingest_log` as `oura-sync`.
+
+## Cumulative HAE metrics
+Steps, distance, energy, stand time etc. are keyed to local midnight and the largest value wins, because overlapping
+HAE automation windows send partial sums for the same day. Sleep is one row per night keyed on the end date; windows
+over 14 h are dropped as merged nights. `repairCumulative()` runs at boot to clean up older rows.

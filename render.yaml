@@ -18,6 +18,25 @@ services:
       - key: PDAYMINDER_PASSWORD
         sync: false        # set in dashboard: a strong password (used once to create the account)
 
+  - type: cron
+    name: oura-sync
+    runtime: node
+    plan: starter
+    schedule: "20 */4 * * *"       # every 4 hours (UTC); Oura finalizes a night a few hours after waking
+    buildCommand: npm install
+    startCommand: node sync/oura.js
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: pday_db
+          property: connectionString
+      - key: NODE_VERSION
+        value: "20"
+      - key: OURA_TOKEN
+        sync: false        # set in dashboard: Oura personal access token
+      - key: OURA_DAYS
+        value: "3"         # set to 365 once, run manually, then back to 3
+
 databases:
   - name: pday_db
     plan: basic-256mb
