@@ -13,9 +13,36 @@
 const { pool } = require("../db");
 
 const TZ = process.env.TZ_NAME || "America/Los_Angeles";
-const TOKEN = process.env.OURA_TOKEN;
 const DAYS = Number(process.env.OURA_DAYS || 3);
 const API = process.env.OURA_API || "https://api.ouraring.com/v2/usercollection";
+const TOKEN_URL = process.env.OURA_TOKEN_URL || "https://api.ouraring.com/oauth/token";
+let TOKEN = process.env.OURA_TOKEN || null; // legacy PAT fallback; OAuth tokens from the db take precedence
+
+// Load the OAuth token for the user; refresh if it expires within the hour. Refresh tokens rotate, so save the new one.
+async function loadToken(userId) {
+  const { rows } = await pool.query("select * from oauth_tokens where user_id = $1 and provider = 'oura'", [userId]);
+  const t = rows[0];
+  if (!t) return TOKEN;
+  const fresh = t.expires_at && new Date(t.expires_at) - Date.now() > 3600 * 1000;
+  if (fresh) return t.access_token;
+  if (!t.refresh_token) return t.access_token;
+  const body = new URLSearchParams({
+    grant_type: "refresh_token",
+    refresh_token: t.refresh_token,
+    client_id: process.env.OURA_CLIENT_ID || "",
+    client_secret: process.env.OURA_CLIENT_SECRET || "",
+  });
+  const r = await fetch(TOKEN_URL, { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body });
+  const tok = await r.json();
+  if (!r.ok || !tok.access_token) throw new Error("token refresh failed: " + JSON.stringify(tok));
+  await pool.query(
+    `update oauth_tokens set access_token = $2, refresh_token = coalesce($3, refresh_token),
+       expires_at = now() + ($4 || ' seconds')::interval, updated_at = now() where user_id = $1 and provider = 'oura'`,
+    [userId, tok.access_token, tok.refresh_token || null, String(tok.expires_in || 86400)]
+  );
+  console.log("oura token refreshed");
+  return tok.access_token;
+}
 
 function localMidnightIso(dateStr) {
   const guess = new Date(dateStr + "T00:00:00Z");
@@ -60,13 +87,14 @@ async function upsert(client, userId, ts, metric, value, raw) {
 }
 
 async function main() {
-  if (!TOKEN) throw new Error("OURA_TOKEN not set");
   const email = (process.env.OURA_USER_EMAIL || "").toLowerCase();
   const u = email
     ? await pool.query("select id from users where email = $1", [email])
     : await pool.query("select id from users order by id limit 1");
   if (!u.rows[0]) throw new Error("no pdayminder user found");
   const userId = u.rows[0].id;
+  TOKEN = await loadToken(userId);
+  if (!TOKEN) throw new Error("Oura not connected: open pdayminder > Settings > Connect Oura");
 
   const end = new Date();
   const start = new Date(end.getTime() - DAYS * 86400000);

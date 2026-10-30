@@ -17,6 +17,12 @@ services:
         sync: false        # set in dashboard: your email
       - key: PDAYMINDER_PASSWORD
         sync: false        # set in dashboard: a strong password (used once to create the account)
+      - key: PUBLIC_URL
+        value: https://pdayminder.onrender.com
+      - key: OURA_CLIENT_ID
+        sync: false        # from cloud.ouraring.com/oauth/applications
+      - key: OURA_CLIENT_SECRET
+        sync: false
 
   - type: cron
     name: oura-sync
@@ -32,8 +38,10 @@ services:
           property: connectionString
       - key: NODE_VERSION
         value: "20"
-      - key: OURA_TOKEN
-        sync: false        # set in dashboard: Oura personal access token
+      - key: OURA_CLIENT_ID
+        sync: false        # same values as the web service
+      - key: OURA_CLIENT_SECRET
+        sync: false
       - key: OURA_DAYS
         value: "3"         # set to 365 once, run manually, then back to 3
 

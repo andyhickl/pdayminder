@@ -74,6 +74,17 @@ create table if not exists observations (
   created_at timestamptz not null default now(),
   unique (user_id, source, metric, ts)
 );
+create table if not exists oauth_tokens (
+  user_id       int not null references users(id) on delete cascade,
+  provider      text not null,
+  access_token  text not null,
+  refresh_token text,
+  expires_at    timestamptz,
+  scope         text,
+  updated_at    timestamptz not null default now(),
+  primary key (user_id, provider)
+);
+
 create table if not exists ingest_log (
   id         bigserial primary key,
   user_id    int references users(id) on delete cascade,

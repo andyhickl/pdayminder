@@ -1551,6 +1551,39 @@
       );
     }
 
+    function IntegrationsCard() {
+      const [info, setInfo] = useState(null);
+      const load = () => apiFetch("/api/integrations").then((r) => r.json()).then(setInfo);
+      useEffect(() => { load(); }, []);
+      const disconnect = async () => {
+        if (!window.confirm("Disconnect Oura? Syncing stops until you reconnect.")) return;
+        await apiFetch("/api/integrations/oura", { method: "DELETE" }); load();
+      };
+      const o = info && info.oura;
+      const when = (t) => (t ? new Date(t).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : "never");
+      return (
+        <div className="card">
+          <div className="card-header">
+            <div>
+              <div className="card-title">Integrations</div>
+              <div className="card-subtitle">Cloud sources the sync jobs pull from.</div>
+            </div>
+          </div>
+          {o && (
+            <div className="med-list" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+              <span>
+                <strong>Oura</strong>{" "}
+                {!o.configured ? "· not configured on the server" : o.connected ? `· connected · last sync ${when(o.lastSync && o.lastSync.ts)}${o.lastSync && o.lastSync.status !== 200 ? " (failed)" : ""}` : "· not connected"}
+              </span>
+              {o.configured && (o.connected
+                ? <button type="button" className="pill-btn" onClick={disconnect}>Disconnect</button>
+                : <a className="pill-btn primary" href="/oauth/oura/start" style={{ textDecoration: "none" }}>Connect Oura</a>)}
+            </div>
+          )}
+        </div>
+      );
+    }
+
     function ApiKeysCard() {
       const [keys, setKeys] = useState(null);
       const [name, setName] = useState("");
@@ -1967,6 +2000,7 @@
                 settings={settings}
                 onUpdate={(next) => setSettings(next)}
               />
+              <IntegrationsCard />
               <ApiKeysCard />
             </>
           )}

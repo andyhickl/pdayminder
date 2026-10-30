@@ -617,6 +617,85 @@ app.get("/api/workouts", requireAuth, async (req, res) => {
   res.json(rows);
 });
 
+// ---------- Oura OAuth2 ----------
+const OURA = {
+  authorize: process.env.OURA_AUTHORIZE_URL || "https://cloud.ouraring.com/oauth/authorize",
+  token: process.env.OURA_TOKEN_URL || "https://api.ouraring.com/oauth/token",
+  scope: "daily heartrate workout session spo2 personal",
+  clientId: process.env.OURA_CLIENT_ID || "",
+  clientSecret: process.env.OURA_CLIENT_SECRET || "",
+};
+const oauthStates = new Map(); // state -> {userId, verifier, exp}
+
+function baseUrl(req) {
+  return process.env.PUBLIC_URL || `${req.protocol}://${req.get("host")}`;
+}
+
+app.get("/oauth/oura/start", requireAuth, requireSession, (req, res) => {
+  if (!OURA.clientId) return res.status(500).send("OURA_CLIENT_ID not configured");
+  const state = crypto.randomBytes(16).toString("base64url");
+  const verifier = crypto.randomBytes(32).toString("base64url");
+  const challenge = crypto.createHash("sha256").update(verifier).digest("base64url");
+  oauthStates.set(state, { userId: req.user.id, verifier, exp: Date.now() + 10 * 60000 });
+  const u = new URL(OURA.authorize);
+  u.searchParams.set("response_type", "code");
+  u.searchParams.set("client_id", OURA.clientId);
+  u.searchParams.set("redirect_uri", `${baseUrl(req)}/oauth/oura/callback`);
+  u.searchParams.set("scope", OURA.scope);
+  u.searchParams.set("state", state);
+  u.searchParams.set("code_challenge", challenge);
+  u.searchParams.set("code_challenge_method", "S256");
+  res.redirect(u.toString());
+});
+
+app.get("/oauth/oura/callback", async (req, res) => {
+  const { code, state, error } = req.query;
+  const pending = state && oauthStates.get(state);
+  oauthStates.delete(state);
+  if (error) return res.status(400).send(`Oura said: ${error}`);
+  if (!pending || pending.exp < Date.now()) return res.status(400).send("Login flow expired; go back and try again.");
+  try {
+    const body = new URLSearchParams({
+      grant_type: "authorization_code",
+      code: String(code),
+      redirect_uri: `${baseUrl(req)}/oauth/oura/callback`,
+      client_id: OURA.clientId,
+      client_secret: OURA.clientSecret,
+      code_verifier: pending.verifier,
+    });
+    const r = await fetch(OURA.token, { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body });
+    const tok = await r.json();
+    if (!r.ok || !tok.access_token) throw new Error(JSON.stringify(tok));
+    await pool.query(
+      `insert into oauth_tokens (user_id, provider, access_token, refresh_token, expires_at, scope)
+       values ($1,'oura',$2,$3, now() + ($4 || ' seconds')::interval, $5)
+       on conflict (user_id, provider) do update set access_token = excluded.access_token,
+         refresh_token = excluded.refresh_token, expires_at = excluded.expires_at, scope = excluded.scope, updated_at = now()`,
+      [pending.userId, tok.access_token, tok.refresh_token || null, String(tok.expires_in || 86400), tok.scope || OURA.scope]
+    );
+    res.redirect("/?connected=oura");
+  } catch (e) {
+    console.error("oura oauth failed", e.message);
+    res.status(500).send("Could not complete Oura connection: " + e.message);
+  }
+});
+
+app.get("/api/integrations", requireAuth, async (req, res) => {
+  const { rows } = await pool.query(
+    "select provider, expires_at, updated_at, scope, refresh_token is not null as has_refresh from oauth_tokens where user_id = $1",
+    [req.user.id]
+  );
+  const last = await pool.query(
+    "select route, status, ts, rows from ingest_log where route = 'oura-sync' order by id desc limit 1"
+  );
+  res.json({ oura: { configured: Boolean(OURA.clientId), connected: rows.find((r) => r.provider === "oura") || null, lastSync: last.rows[0] || null } });
+});
+
+app.delete("/api/integrations/oura", requireAuth, requireSession, async (req, res) => {
+  await pool.query("delete from oauth_tokens where user_id = $1 and provider = 'oura'", [req.user.id]);
+  res.json({ ok: true });
+});
+
 app.use("/vendor", express.static(path.join(__dirname, "vendor"), { maxAge: "7d" }));
 
 // The app itself, only when signed in.

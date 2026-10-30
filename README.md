@@ -44,9 +44,11 @@ iOS drops a custom `Authorization` header from HAE's requests. Use the URL form:
 `https://<host>/api/ingest/hae?api_key=<key>`. Use a dedicated key for HAE so it can be rotated alone.
 
 ## Oura
-`sync/oura.js` runs as a Render cron job (`oura-sync`, every 4 h). Needs `OURA_TOKEN` (personal access token from
-cloud.ouraring.com/personal-access-tokens) and `DATABASE_URL`. `OURA_DAYS` is the lookback (3 by default; set 365 and
-trigger a manual run once to backfill). Writes `source='oura'` rows: sleep per night (keyed on the day it ended),
+OAuth2. Register an app at cloud.ouraring.com/oauth/applications with redirect URI `https://<host>/oauth/oura/callback`;
+set `OURA_CLIENT_ID` / `OURA_CLIENT_SECRET` (and `PUBLIC_URL`) on both the web service and the `oura-sync` cron job.
+Connect from Settings > Integrations in the app; tokens live in `oauth_tokens` and the cron job refreshes them
+(refresh tokens rotate). `sync/oura.js` runs every 4 h. `OURA_DAYS` is the lookback (3 by default; set 365 and
+trigger a manual run once to backfill). A legacy `OURA_TOKEN` env var still works as a fallback. Writes `source='oura'` rows: sleep per night (keyed on the day it ended),
 readiness, activity, stress, SpO2. Naps/rest sessions are skipped. Each run logs to `ingest_log` as `oura-sync`.
 
 ## Cumulative HAE metrics
