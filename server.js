@@ -730,6 +730,7 @@ app.delete("/api/integrations/oura", requireAuth, requireSession, async (req, re
 });
 
 app.use("/vendor", express.static(path.join(__dirname, "vendor"), { maxAge: "7d" }));
+app.use("/static", express.static(path.join(__dirname, "static"), { maxAge: "1d" }));
 
 // The app itself, only when signed in.
 app.get("/", requireAuth, (req, res) => res.sendFile(path.join(__dirname, "index.html")));
