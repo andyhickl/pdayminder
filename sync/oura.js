@@ -96,8 +96,9 @@ async function main() {
   TOKEN = await loadToken(userId);
   if (!TOKEN) throw new Error("Oura not connected: open pdayminder > Settings > Connect Oura");
 
-  const end = new Date();
-  const start = new Date(end.getTime() - DAYS * 86400000);
+  // Oura treats end_date as exclusive on several endpoints, so ask through tomorrow.
+  const end = new Date(Date.now() + 86400000);
+  const start = new Date(Date.now() - DAYS * 86400000);
   const fmt = (d) => d.toLocaleDateString("en-CA", { timeZone: TZ });
   const range = { start_date: fmt(start), end_date: fmt(end) };
   console.log(`oura sync ${range.start_date}..${range.end_date} for user ${userId}`);
