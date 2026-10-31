@@ -1976,7 +1976,7 @@
       }
       if (!frames.length) return null;
       const maxRms = Math.max(...frames.map((f) => f.rms));
-      const voicedThresh = Math.max(0.01, maxRms * 0.2);
+      const voicedThresh = Math.max(0.003, maxRms * 0.2);
       for (const f of frames) {
         if (f.rms < voicedThresh) { f.voiced = false; continue; }
         let mean = 0; for (let i = 0; i < frame; i++) mean += pcm[f.start + i]; mean /= frame;
@@ -2063,26 +2063,37 @@
       const [note, setNote] = useState("");
       const [msg, setMsg] = useState("");
       const [history] = useJson("/api/observations?source=motor&metric=voice_hnr&limit=60", [phase]);
+      const audioRef = useRef(null); // keep nodes referenced so Safari doesn't GC the processor
       const start = async () => {
         setMsg("");
+        // iOS: the AudioContext must be created and resumed synchronously inside the tap, before any await.
+        const AC = window.AudioContext || window.webkitAudioContext;
+        if (!AC || !navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) { setMsg("This browser doesn't support microphone capture."); return; }
+        const ctx = new AC();
+        const resumeP = ctx.resume();
         let stream;
         try { stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false } }); }
-        catch (e) { setMsg("Microphone access denied or unavailable (" + e.message + ")."); return; }
-        const ctx = new (window.AudioContext || window.webkitAudioContext)();
-        await ctx.resume();
+        catch (e) { ctx.close(); setMsg("Microphone access denied or unavailable (" + e.message + ")."); return; }
+        try { await resumeP; } catch {}
+        if (ctx.state !== "running") { try { await ctx.resume(); } catch {} }
         const src = ctx.createMediaStreamSource(stream);
         const proc = ctx.createScriptProcessor(2048, 1, 1);
-        const chunks = [];
-        proc.onaudioprocess = (e) => { const d = e.inputBuffer.getChannelData(0); chunks.push(new Float32Array(d)); let s2 = 0; for (let i = 0; i < d.length; i++) s2 += d[i] * d[i]; setLevel(Math.sqrt(s2 / d.length)); };
-        src.connect(proc); proc.connect(ctx.destination);
+        const gain = ctx.createGain(); gain.gain.value = 0; // processor must reach the destination to run; keep it silent
+        const chunks = []; let peak = 0;
+        proc.onaudioprocess = (e) => { const d = e.inputBuffer.getChannelData(0); chunks.push(new Float32Array(d)); let s2 = 0; for (let i = 0; i < d.length; i++) { s2 += d[i] * d[i]; if (Math.abs(d[i]) > peak) peak = Math.abs(d[i]); } setLevel(Math.sqrt(s2 / d.length)); };
+        src.connect(proc); proc.connect(gain); gain.connect(ctx.destination);
+        audioRef.current = { ctx, src, proc, gain, stream };
         setPhase("recording"); setLeft(VOICE_SECONDS);
         const t0 = performance.now();
         const tick = setInterval(() => setLeft(Math.max(0, Math.ceil(VOICE_SECONDS - (performance.now() - t0) / 1000))), 200);
         setTimeout(() => {
-          clearInterval(tick); proc.disconnect(); src.disconnect(); stream.getTracks().forEach((t) => t.stop()); ctx.close();
+          clearInterval(tick);
+          try { proc.disconnect(); src.disconnect(); gain.disconnect(); } catch {}
+          stream.getTracks().forEach((t) => t.stop()); const sr = ctx.sampleRate; ctx.close(); audioRef.current = null;
           const total = chunks.reduce((a, c) => a + c.length, 0); const pcm = new Float32Array(total); let o = 0; chunks.forEach((c) => { pcm.set(c, o); o += c.length; });
-          const res = analyzeVoice(pcm, ctx.sampleRate);
-          if (!res || res.tooShort) { setPhase("idle"); setMsg(`Not enough voiced sound (${res ? res.voicedSeconds.toFixed(1) : 0} s). Hold a steady "ahh" close to the phone.`); return; }
+          if (total === 0) { setPhase("idle"); setMsg("No audio reached the page (0 samples). On iPhone use Safari (or the home-screen app), allow the microphone, and make sure the ring/silent switch isn't blocking audio."); return; }
+          const res = analyzeVoice(pcm, sr);
+          if (!res || res.tooShort) { setPhase("idle"); setMsg(`Not enough steady voiced sound (${res ? res.voicedSeconds.toFixed(1) : 0} s voiced of ${(total / sr).toFixed(1)} s captured, peak level ${(peak * 100).toFixed(0)}%). Hold a steady "ahh" about 15 cm from the phone.`); return; }
           setResult(res); setPhase("done");
         }, VOICE_SECONDS * 1000 + 200);
       };
@@ -2095,7 +2106,14 @@
         const r = await apiFetch("/api/observations", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(items) });
         if (r.ok) { setPhase("idle"); setResult(null); setNote(""); setMsg("Saved."); } else setMsg("Save failed.");
       };
-      const flag = (ok) => <span style={{ color: ok ? "#a3e635" : "#fbbf24", fontSize: 10 }}>{ok ? "typical" : "high"}</span>;
+      // Reference medians from the UCI Parkinsons dataset (Little et al. 2008; 48 healthy / 147 PD sustained-vowel recordings).
+      const REF = { jitter: { h: 0.0033, pd: 0.0049 }, shimmer: { h: 0.0170, pd: 0.0280 }, hnr: { h: 25.0, pd: 21.4 } };
+      const ref = (v, key, higherIsWorse) => {
+        const { h, pd } = REF[key]; const mid = (h + pd) / 2;
+        const side = higherIsWorse ? (v <= h ? "healthy range" : v <= mid ? "between" : "PD range") : (v >= h ? "healthy range" : v >= mid ? "between" : "PD range");
+        const color = side === "healthy range" ? "#a3e635" : side === "between" ? "#fbbf24" : "#f87171";
+        return <span style={{ color, fontSize: 10 }}>{side}</span>;
+      };
       const hist = history ? [...history].reverse() : [];
       return (
         <div className="card">
@@ -2116,7 +2134,7 @@
           {phase === "done" && result && (
             <>
               <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8, marginTop: 6 }}>
-                {[["Jitter", (result.jitter * 100).toFixed(2) + "%", flag(result.jitter < 0.0104)], ["Shimmer", (result.shimmer * 100).toFixed(2) + "%", flag(result.shimmer < 0.038)], ["HNR", result.hnr.toFixed(1) + " dB", flag(result.hnr > 15)],
+                {[["Jitter", (result.jitter * 100).toFixed(2) + "%", ref(result.jitter, "jitter", true)], ["Shimmer", (result.shimmer * 100).toFixed(2) + "%", ref(result.shimmer, "shimmer", true)], ["HNR", result.hnr.toFixed(1) + " dB", ref(result.hnr, "hnr", false)],
                   ["Pitch", Math.round(result.meanF0) + " Hz"], ["Pitch spread", result.f0sd.toFixed(1) + " Hz"], ["Loudness", result.loudnessDb.toFixed(0) + " dBFS"]].map(([k, v, f]) => (
                   <div key={k} style={{ background: "#0f172a", borderRadius: 8, padding: "8px 10px" }}>
                     <div style={{ fontSize: 11, color: "#94a3b8" }}>{k} {f}</div>
@@ -2129,7 +2147,7 @@
                   return <><text x="10" y="10" fontSize="10" fill="#64748b">pitch over time (Hz), voiced frames</text><path d={"M" + result.f0s.map((v, i) => `${x(i).toFixed(1)} ${y(v).toFixed(1)}`).join(" L")} fill="none" stroke="#c084fc" strokeWidth="1.5" /></>; })()}
               </svg>
               <div className="card-subtitle">{result.voicedSeconds.toFixed(1)} s voiced · longest run {result.maxPhonation.toFixed(1)} s · {result.periods} glottal periods</div>
-              <div style={{ fontSize: 10, color: "#64748b", marginTop: 2 }}>Praat-like: jitter and HNR agree with Praat within a few hundredths of a percent and ~1 dB on test signals; shimmer reads somewhat lower than Praat. Phone mic and room still matter, so your own history is the reference; "typical" marks use common thresholds (jitter 1.04%, shimmer 3.8%, HNR 15 dB) loosely.</div>
+              <div style={{ fontSize: 10, color: "#64748b", marginTop: 2 }}>Praat-like: jitter and HNR agree with Praat within a few hundredths of a percent and ~1 dB on test signals; shimmer reads somewhat lower than Praat. Range tags compare to medians in the UCI Parkinsons dataset (healthy vs PD: jitter 0.33% vs 0.49%, shimmer 1.7% vs 2.8%, HNR 25.0 vs 21.4 dB), which used studio mics; phone mic and room shift these, so your own history is the real reference.</div>
               <div className="controls-row" style={{ gap: 8, marginTop: 6 }}>
                 <input value={note} onChange={(e) => setNote(e.target.value)} placeholder="Note (e.g. pre-dose)"
                   style={{ flex: 1, background: "#0f172a", color: "#e2e8f0", border: "1px solid #334155", borderRadius: 8, padding: "8px 10px", fontSize: 14 }} />

@@ -85,3 +85,6 @@ Trace a 3-turn Archimedean spiral on a canvas. Angular offset is fitted (median 
 matter; residual r − kθ scores deviation. Metrics: `spiral_error_pct` (mean |residual| / R), `spiral_tremor_share`
 (3.5–7.5 Hz share of the residual), `spiral_seconds`, `spiral_speed` (path length / s / R). `raw.trace` keeps a
 downsampled stroke (≤200 points) for review.
+Reference ranges on the card come from the UCI Parkinsons dataset (Little et al. 2008). Note from the UCI telemonitoring
+set (Tsanas 2009, 42 PD patients over ~6 months): classic jitter/shimmer/HNR separate PD from healthy at group level
+(AUC ~0.75–0.78) but show ~zero within-person correlation with motor UPDRS over time, so treat voice as a slow, low-weight signal.
