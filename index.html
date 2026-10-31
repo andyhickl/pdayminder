@@ -1739,7 +1739,8 @@
       const [result, setResult] = useState(null);
       const [note, setNote] = useState("");
       const [msg, setMsg] = useState("");
-      const samples = useRef([]);
+      const samples = useRef([]); const cancelRef = useRef(null);
+      const cancel = () => { if (cancelRef.current) cancelRef.current(); cancelRef.current = null; setPhase("idle"); setMsg(""); };
       const [history] = useJson("/api/observations?source=motor&metric=tremor_amp_cm&limit=60", [phase]);
       // Laptops and desktops don't expose motion sensors to the browser; only offer the test on a phone/tablet.
       const isHandheld = useMemo(() => {
@@ -1767,12 +1768,14 @@
         };
         window.addEventListener("devicemotion", handler);
         const tick = setInterval(() => setLeft(Math.max(0, Math.ceil(TREMOR_SECONDS - (performance.now() - t0) / 1000))), 250);
-        setTimeout(() => {
+        const done = setTimeout(() => {
+          cancelRef.current = null;
           window.removeEventListener("devicemotion", handler); clearInterval(tick);
           const res = analyzeTremor(samples.current);
           if (!res) { setPhase("error"); setMsg(`Not enough motion samples (${samples.current.length}). On iPhone this needs Safari with Motion & Orientation Access on.`); return; }
           setResult(res); setPhase("done");
         }, TREMOR_SECONDS * 1000 + 100);
+        cancelRef.current = () => { window.removeEventListener("devicemotion", handler); clearInterval(tick); clearTimeout(done); };
       };
 
       const save = async () => {
@@ -1819,6 +1822,7 @@
             <div style={{ textAlign: "center", padding: "18px 0" }}>
               <div style={{ fontSize: 48, fontWeight: 700 }}>{left}</div>
               <div className="card-subtitle">Hold still… {hand} hand, {posture}</div>
+              <button type="button" className="pill-btn" style={{ marginTop: 8 }} onClick={cancel}>Cancel</button>
             </div>
           )}
           {phase === "done" && result && (
@@ -1897,6 +1901,7 @@
       const [note, setNote] = useState("");
       const [msg, setMsg] = useState("");
       const taps = useRef([]); const timer = useRef(null); const started = useRef(false);
+      const cancel = () => { clearInterval(timer.current); started.current = false; setPhase("idle"); setMsg(""); };
       const [history] = useJson("/api/observations?source=motor&metric=tap_rate&limit=60", [phase]);
       useEffect(() => { try { localStorage.setItem("pdm-tap-hand", hand); } catch {} }, [hand]);
 
@@ -1963,6 +1968,7 @@
               <div style={{ display: "flex", justifyContent: "space-around", padding: "18px 0" }}>{circle(0)}{circle(1)}</div>
               <div style={{ fontSize: 28, fontWeight: 700 }}>{started.current ? left : "tap to start"}</div>
               <div className="card-subtitle">{count} taps · {hand} hand</div>
+              <button type="button" className="pill-btn" style={{ marginTop: 8 }} onClick={cancel}>Cancel</button>
             </div>
           )}
           {phase === "done" && result && (
@@ -2196,6 +2202,7 @@
       const [msg, setMsg] = useState("");
       const [history] = useJson("/api/observations?source=motor&metric=voice_hnr&limit=60", [phase]);
       const audioRef = useRef(null); // keep nodes referenced so Safari doesn't GC the processor
+      const cancel = () => { const a = audioRef.current; if (a) { try { clearInterval(a.tick); clearTimeout(a.done); a.proc.disconnect(); a.src.disconnect(); a.gain.disconnect(); a.stream.getTracks().forEach((t) => t.stop()); a.ctx.close(); } catch {} audioRef.current = null; } setPhase("idle"); setMsg(""); };
       const start = async () => {
         setMsg("");
         // iOS: the AudioContext must be created and resumed synchronously inside the tap, before any await.
@@ -2218,7 +2225,8 @@
         setPhase("recording"); setLeft(VOICE_SECONDS);
         const t0 = performance.now();
         const tick = setInterval(() => setLeft(Math.max(0, Math.ceil(VOICE_SECONDS - (performance.now() - t0) / 1000))), 200);
-        setTimeout(() => {
+        audioRef.current.tick = tick;
+        audioRef.current.done = setTimeout(() => {
           clearInterval(tick);
           try { proc.disconnect(); src.disconnect(); gain.disconnect(); } catch {}
           stream.getTracks().forEach((t) => t.stop()); const sr = ctx.sampleRate; ctx.close(); audioRef.current = null;
@@ -2264,6 +2272,7 @@
               <div style={{ fontSize: 48, fontWeight: 700 }}>{left}</div>
               <div style={{ height: 8, background: "#0f172a", borderRadius: 4, margin: "8px 40px" }}><div style={{ height: 8, borderRadius: 4, background: "#a3e635", width: `${Math.min(100, level * 400)}%` }} /></div>
               <div className="card-subtitle">Say "ahhhh"…</div>
+              <button type="button" className="pill-btn" style={{ marginTop: 8 }} onClick={cancel}>Cancel</button>
             </div>
           )}
           {phase === "done" && result && (
@@ -2372,6 +2381,7 @@
       const [msg, setMsg] = useState("");
       const audioRef = useRef(null);
       const [history] = useJson("/api/observations?source=motor&metric=ddk_rate&limit=60", [phase]);
+      const cancel = () => { const a = audioRef.current; if (a) { try { clearInterval(a.tick); clearTimeout(a.done); a.proc.disconnect(); a.src.disconnect(); a.gain.disconnect(); a.stream.getTracks().forEach((t) => t.stop()); a.ctx.close(); } catch {} audioRef.current = null; } setPhase("idle"); setMsg(""); };
       const DDK_KEYS = [["ddk_rate", false], ["ddk_cv", true], ["ddk_decrement", true], ["ddk_loudness_cv", true]];
       useEffect(() => {
         if (phase !== "done" || !result) return;
@@ -2394,7 +2404,8 @@
         setPhase("recording"); setLeft(DDK_SECONDS);
         const t0 = performance.now();
         const tick = setInterval(() => setLeft(Math.max(0, Math.ceil(DDK_SECONDS - (performance.now() - t0) / 1000))), 200);
-        setTimeout(() => {
+        audioRef.current.tick = tick;
+        audioRef.current.done = setTimeout(() => {
           clearInterval(tick); try { proc.disconnect(); src.disconnect(); gain.disconnect(); } catch {}
           stream.getTracks().forEach((t) => t.stop()); const sr = ctx.sampleRate; ctx.close(); audioRef.current = null;
           const total = chunks.reduce((a, c) => a + c.length, 0); const pcm = new Float32Array(total); let o = 0; chunks.forEach((c) => { pcm.set(c, o); o += c.length; });
@@ -2428,6 +2439,7 @@
               <div style={{ fontSize: 48, fontWeight: 700 }}>{left}</div>
               <div style={{ height: 8, background: "#0f172a", borderRadius: 4, margin: "8px 40px" }}><div style={{ height: 8, borderRadius: 4, background: "#a3e635", width: `${Math.min(100, level * 400)}%` }} /></div>
               <div className="card-subtitle">pa-ta-ka pa-ta-ka pa-ta-ka…</div>
+              <button type="button" className="pill-btn" style={{ marginTop: 8 }} onClick={cancel}>Cancel</button>
             </div>
           )}
           {phase === "done" && result && (
@@ -2569,6 +2581,10 @@
         setPhase("recording");
         setTimeout(() => { if (rec.current && rec.current.t0 === t0) stop(); }, 90000);
       };
+      const cancel = () => {
+        const r = rec.current; if (r) { rec.current = null; clearInterval(r.tick); try { r.proc.disconnect(); r.src.disconnect(); r.gain.disconnect(); } catch {} r.stream.getTracks().forEach((t) => t.stop()); r.ctx.close(); }
+        setPhase("idle"); setMsg("");
+      };
       const stop = () => {
         const r = rec.current; if (!r) return; rec.current = null;
         clearInterval(r.tick); try { r.proc.disconnect(); r.src.disconnect(); r.gain.disconnect(); } catch {}
@@ -2613,6 +2629,7 @@
               <div style={{ height: 8, background: "#0f172a", borderRadius: 4, margin: "8px 40px" }}><div style={{ height: 8, borderRadius: 4, background: "#a3e635", width: `${Math.min(100, level * 400)}%` }} /></div>
               <div className="card-subtitle">{elapsed.toFixed(0)} s</div>
               <button type="button" className="pill-btn primary" onClick={stop} style={{ marginTop: 6 }}>Done reading</button>
+              <button type="button" className="pill-btn" onClick={cancel} style={{ marginTop: 6, marginLeft: 8 }}>Cancel</button>
             </div>
           )}
           {phase === "done" && result && (
@@ -2720,7 +2737,8 @@
       const [base, setBase] = useState(null);
       const [note, setNote] = useState("");
       const [msg, setMsg] = useState("");
-      const samples = useRef([]); const wake = useRef(null);
+      const samples = useRef([]); const wake = useRef(null); const cancelRef = useRef(null);
+      const cancel = () => { if (cancelRef.current) cancelRef.current(); cancelRef.current = null; setPhase("idle"); setMsg(""); };
       const [placement, setPlacement] = useState(() => { try { return localStorage.getItem("pdm-gait-placement") || "hand"; } catch { return "hand"; } });
       const [cued, setCued] = useState(false); const BEAT_BPM = 103; const beatRef = useRef(null);
       useEffect(() => { try { localStorage.setItem("pdm-gait-placement", placement); } catch {} }, [placement]);
@@ -2763,16 +2781,21 @@
           const el = (performance.now() - t0) / 1000;
           if (el < GAIT_LEAD) setLeft(Math.ceil(GAIT_LEAD - el)); else { setPhase("recording"); setLeft(Math.max(0, Math.ceil(GAIT_LEAD + GAIT_SECONDS - el))); }
         }, 250);
-        setTimeout(() => { window.addEventListener("devicemotion", handler); if (cued && audioCtx) { try { if (audioCtx.state !== "running") audioCtx.resume(); beatRef.current = startBeat(BEAT_BPM, audioCtx); } catch {} } }, GAIT_LEAD * 1000);
-        try { if (navigator.vibrate) { setTimeout(() => navigator.vibrate(200), GAIT_LEAD * 1000); setTimeout(() => navigator.vibrate([200, 100, 200]), (GAIT_LEAD + GAIT_SECONDS) * 1000); } } catch {}
-        setTimeout(() => {
-          window.removeEventListener("devicemotion", handler); clearInterval(tick);
+        const armT = setTimeout(() => { window.addEventListener("devicemotion", handler); if (cued && audioCtx) { try { if (audioCtx.state !== "running") audioCtx.resume(); beatRef.current = startBeat(BEAT_BPM, audioCtx); } catch {} } }, GAIT_LEAD * 1000);
+        const vib = []; try { if (navigator.vibrate) { vib.push(setTimeout(() => navigator.vibrate(200), GAIT_LEAD * 1000)); vib.push(setTimeout(() => navigator.vibrate([200, 100, 200]), (GAIT_LEAD + GAIT_SECONDS) * 1000)); } } catch {}
+        const teardown = () => {
+          window.removeEventListener("devicemotion", handler); clearInterval(tick); clearTimeout(armT); vib.forEach(clearTimeout);
           try { if (beatRef.current) { beatRef.current.stop(); beatRef.current = null; } } catch {}
+          try { if (audioCtx && audioCtx.state !== "closed") setTimeout(() => audioCtx.close(), 500); } catch {}
           try { if (wake.current) { wake.current.release(); wake.current = null; } } catch {}
+        };
+        const done = setTimeout(() => {
+          cancelRef.current = null; teardown();
           const res = analyzeGait(samples.current);
           if (!res || res.tooStill || res.tooFew) { setPhase("idle"); setMsg(res && res.tooFew ? `Only ${res.steps} steps detected over ${(samples.current.length ? (samples.current[samples.current.length - 1].t - samples.current[0].t) / 1000 : 0).toFixed(0)} s of motion data. If the phone locked, the recording stopped there; keep the screen on and walk the whole 30 s.` : "Not enough movement recorded. Keep walking until the countdown ends, and don't let the phone lock."); return; }
           setBase(null); setResult(res); setPhase("done");
         }, (GAIT_LEAD + GAIT_SECONDS) * 1000 + 100);
+        cancelRef.current = () => { clearTimeout(done); teardown(); };
       };
       const save = async () => {
         const ts = new Date().toISOString();
@@ -2810,8 +2833,8 @@
               <div className="controls-row" style={{ marginTop: 6 }}><button type="button" className="pill-btn primary" onClick={start}>Start (5 s to get set, then 30 s walk)</button></div>
             </>
           )}
-          {phase === "lead" && <div style={{ textAlign: "center", padding: "18px 0" }}><div style={{ fontSize: 48, fontWeight: 700 }}>{left}</div><div className="card-subtitle">{placement === "pocket" ? "Slide the phone into your front pocket without pressing the side button…" : "Let your arm hang at your side with the phone in hand, screen toward your leg…"}</div></div>}
-          {phase === "recording" && <div style={{ textAlign: "center", padding: "18px 0" }}><div style={{ fontSize: 48, fontWeight: 700 }}>{left}</div><div className="card-subtitle">Walking… keep going until it buzzes or reaches 0.</div></div>}
+          {phase === "lead" && <div style={{ textAlign: "center", padding: "18px 0" }}><div style={{ fontSize: 48, fontWeight: 700 }}>{left}</div><div className="card-subtitle">{placement === "pocket" ? "Slide the phone into your front pocket without pressing the side button…" : "Let your arm hang at your side with the phone in hand, screen toward your leg…"}</div><button type="button" className="pill-btn" style={{ marginTop: 8 }} onClick={cancel}>Cancel</button></div>}
+          {phase === "recording" && <div style={{ textAlign: "center", padding: "18px 0" }}><div style={{ fontSize: 48, fontWeight: 700 }}>{left}</div><div className="card-subtitle">Walking… keep going until it reaches 0. Don't lock the phone.</div><button type="button" className="pill-btn" style={{ marginTop: 8 }} onClick={cancel}>Cancel</button></div>}
           {phase === "done" && result && (
             <>
               <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8, marginTop: 6 }}>
@@ -2949,9 +2972,10 @@
             </div>
           )}
           {phase === "drawing" && (
-            <div style={{ display: "flex", justifyContent: "center", marginTop: 6 }}>
+            <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 8, marginTop: 6 }}>
               <canvas ref={canvasRef} width={SIZE} height={SIZE} style={{ width: "min(300px, 90vw)", height: "auto", borderRadius: 12, touchAction: "none" }}
                 onPointerDown={onDown} onPointerMove={onMove} onPointerUp={onUp} onPointerCancel={onUp} onPointerLeave={onUp} />
+              <button type="button" className="pill-btn" onClick={() => { drawing.current = false; pts.current = []; setPhase("idle"); setMsg(""); }}>Cancel</button>
             </div>
           )}
           {phase === "done" && result && (
