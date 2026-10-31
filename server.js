@@ -571,8 +571,8 @@ app.get("/api/day", requireAuth, async (req, res) => {
       [uid, TZ, day]
     ),
     pool.query(
-      `select ts, max(value) filter (where metric = 'tremor_updrs') as updrs, max(value) filter (where metric = 'tremor_amp_cm') as amp,
-              max(value) filter (where metric = 'tap_updrs') as tap_updrs, max(value) filter (where metric = 'tap_rate') as tap_rate,
+      `select ts, max(value) filter (where metric = 'tremor_score') as score, max(value) filter (where metric = 'tremor_amp_cm') as amp,
+              max(value) filter (where metric = 'tap_score') as tap_score, max(value) filter (where metric = 'tap_rate') as tap_rate,
               max(raw->>'hand') as hand, max(raw->>'note') as note
        from observations where user_id = $1 and source = 'motor' and (ts at time zone $2)::date = $3::date group by ts order by ts`,
       [uid, TZ, day]
@@ -811,6 +811,23 @@ async function repairCumulative() {
   );
 }
 
+// One-time: every test score becomes 1–5 with 5 = best. Old tremor_updrs/tap_updrs (0–4) stay as clinical estimates;
+// tremor_score/tap_score are derived; voice/ddk/read _score rows written as 0–4 "features worse" counts are flipped.
+async function migrateScores() {
+  await pool.query("create table if not exists migrations (name text primary key, applied_at timestamptz default now())");
+  const done = await pool.query("select 1 from migrations where name = 'scores_1_to_5'");
+  if (done.rows.length) return;
+  await pool.query(`insert into observations (user_id, ts, source, metric, value, raw)
+    select user_id, ts, source, 'tremor_score', 5 - value, raw from observations where source = 'motor' and metric = 'tremor_updrs'
+    on conflict do nothing`);
+  await pool.query(`insert into observations (user_id, ts, source, metric, value, raw)
+    select user_id, ts, source, 'tap_score', 5 - value, raw from observations where source = 'motor' and metric = 'tap_updrs'
+    on conflict do nothing`);
+  await pool.query(`update observations set value = 5 - value where source = 'motor' and metric in ('voice_score','ddk_score','read_score') and value <= 4`);
+  await pool.query("insert into migrations (name) values ('scores_1_to_5')");
+  console.log("migration: test scores converted to 1–5");
+}
+
 // ---------- start ----------
 (async () => {
   if (!process.env.DATABASE_URL) {
@@ -820,6 +837,7 @@ async function repairCumulative() {
   await migrate();
   await ensureFirstUser();
   await repairCumulative();
+  await migrateScores();
   app.listen(PORT, () => console.log(`PDayMinder on http://localhost:${PORT}`));
 })().catch((e) => {
   console.error(e);

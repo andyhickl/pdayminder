@@ -89,9 +89,9 @@ Scoring: `voice_score` (0–4) counts how many of jitter, shimmer, HNR, PPE are 
 overlap (AUC ~0.75), so single values can't say anything about diagnosis; the card shows only a muted percentile.
 
 ## Pa-ta-ka / DDK test (motor/ddk_*)
-10 s of repeated /pa-ta-ka/. Syllable onsets from a 5 ms RMS envelope (upward crossing of 15% of max after >=30 ms
-below, 80 ms refractory). Metrics: `ddk_rate` (syll/s), `ddk_ioi_ms`, `ddk_cv` (rhythm), `ddk_decrement`,
-`ddk_loudness_cv`, `ddk_score` (0–3 vs own baseline: rate, rhythm, slowdown).
+10 s of repeated /pa-ta-ka/. Syllable nuclei = peaks of a 30 ms-smoothed loudness envelope, >=90 ms apart, with a
+valley <=70% of the lower neighbour between them (no ASR). Validated 2.5–8 syll/s on connected synthetic speech. Metrics: `ddk_rate` (syll/s), `ddk_ioi_ms`, `ddk_cv` (rhythm), `ddk_decrement`,
+`ddk_loudness_cv`, `ddk_score` (1–5 vs own baseline: rate, rhythm, slowdown, loudness consistency).
 
 ## Spiral test (motor/spiral_*)
 Trace a 3-turn Archimedean spiral on a canvas. Angular offset is fitted (median of θ − r/k) so the start angle doesn't
@@ -110,5 +110,7 @@ Metrics: `read_f0_sd_st` (pitch SD in semitones; monopitch when low), `read_rang
 `raw.passage` tags the passage. sdF0 in read speech improved OFF→ON in Bern 2025.
 
 ## Score scales
-All test scores are 0–4 with 0 = at or better than baseline/normal and 4 = worst (UPDRS direction): `tremor_updrs`,
-`tap_updrs`, `voice_score`, `ddk_score`, `read_score`. QoL ratings stay 1–5 with 5 = best.
+Every consolidated score is 1–5 with 5 = best, matching QoL: `tremor_score` (= 5 − estimated UPDRS 3.17),
+`tap_score` (= 5 − tapping heuristic), `voice_score`, `ddk_score`, `read_score` (= 5 − number of features worse than
+the user's own baseline). `tremor_updrs` and `tap_updrs` (0–4) are kept as the clinical-style estimates.
+A one-time `migrateScores()` derived/flipped existing rows (tracked in the `migrations` table).

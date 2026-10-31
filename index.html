@@ -1410,7 +1410,7 @@
           {hrv.length > 0 && <path d={line(hrv, yh)} fill="none" stroke="#a3e635" strokeWidth="1.5" strokeDasharray="4 3" />}
           {hrv.map((p, i) => <circle key={i} cx={x(hourOf(p.ts) + 0.5)} cy={yh(p.value)} r="3" fill="#a3e635" />)}
           {(data.motor || []).map((m, i) => {
-            const isTap = m.tap_updrs != null; const score = isTap ? m.tap_updrs : m.updrs;
+            const isTap = m.tap_score != null; const score = isTap ? m.tap_score : m.score;
             return (
               <g key={"m" + i}>
                 <circle cx={x(hourOf(m.ts))} cy={H - padB - (isTap ? 20 : 8)} r="5" fill={isTap ? "#38bdf8" : "#f472b6"} stroke="#0f172a" strokeWidth="1" />
@@ -1463,7 +1463,7 @@
           <div className="card-header">
             <div>
               <div className="card-title">Day vitals</div>
-              <div className="card-subtitle">Hourly heart rate (band = min–max) and HRV (dashed), over your QoL ratings. Doses as dashed lines; tremor tests (pink) and tapping tests (blue) as dots with their estimated score.</div>
+              <div className="card-subtitle">Hourly heart rate (band = min–max) and HRV (dashed), over your QoL ratings. Doses as dashed lines; tremor tests (pink) and tapping tests (blue) as dots with their 1–5 score.</div>
             </div>
           </div>
           {err && <div className="card-subtitle">Couldn't load ({err}).</div>}
@@ -1505,15 +1505,15 @@
       ["hae/walking_double_support_percentage", "Double support %", "#f87171", 1],
       ["hae/walking_asymmetry_percentage", "Asymmetry %", "#fb923c", 1],
       ["oura/stress_high_min", "Stress (min/day, Oura)", "#f97316", 0],
-      ["motor/tremor_updrs", "Tremor, est. UPDRS (0–4)", "#f472b6", 1],
+      ["motor/tremor_score", "Tremor score (1–5)", "#f472b6", 1],
       ["motor/tremor_amp_cm", "Tremor amplitude (cm)", "#fb7185", 2],
       ["motor/tap_rate", "Tapping (taps/s)", "#38bdf8", 2],
-      ["motor/tap_updrs", "Tapping, est. score (0–4)", "#0ea5e9", 1],
-      ["motor/voice_score", "Voice vs baseline (0–4)", "#c084fc", 1],
+      ["motor/tap_score", "Tapping score (1–5)", "#0ea5e9", 1],
+      ["motor/voice_score", "Voice score (1–5)", "#c084fc", 1],
       ["motor/ddk_rate", "Pa-ta-ka (syll/s)", "#e879f9", 2],
-      ["motor/ddk_score", "Pa-ta-ka vs baseline (0–4)", "#d946ef", 1],
+      ["motor/ddk_score", "Pa-ta-ka score (1–5)", "#d946ef", 1],
       ["motor/read_f0_sd_st", "Reading pitch variability (st)", "#f0abfc", 2],
-      ["motor/read_score", "Reading vs baseline (0–4)", "#e879f9", 1],
+      ["motor/read_score", "Reading score (1–5)", "#e879f9", 1],
       ["motor/voice_hnr", "Voice HNR (dB)", "#c084fc", 1],
       ["motor/voice_jitter_pct", "Voice jitter (%)", "#a78bfa", 2],
       ["motor/voice_ppe", "Voice PPE", "#d8b4fe", 3],
@@ -1743,6 +1743,7 @@
           { ts, source: "motor", metric: "tremor_peak_hz", value: result.peakHz, raw },
           { ts, source: "motor", metric: "tremor_amp_cm", value: Number(result.ampCm.toFixed(4)), raw },
           { ts, source: "motor", metric: "tremor_updrs", value: result.updrs, raw },
+          { ts, source: "motor", metric: "tremor_score", value: 5 - result.updrs, raw },
         ];
         const r = await apiFetch("/api/observations", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(items) });
         if (r.ok) { setPhase("idle"); setResult(null); setNote(""); setMsg("Saved."); onSaved && onSaved(); } else setMsg("Save failed.");
@@ -1782,7 +1783,7 @@
           {phase === "done" && result && (
             <>
               <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8, marginTop: 6 }}>
-                {[["Est. UPDRS 3.17", String(result.updrs) + " / 4"], ["Amplitude", result.ampCm < 0.1 ? "<0.1 cm" : result.ampCm.toFixed(2) + " cm"], ["Tremor RMS", result.rmsBand.toFixed(3) + " m/s²"], ["Band share", Math.round(result.bandRatio * 100) + "%"], ["Peak", result.peakHz.toFixed(1) + " Hz"], ["Band peak", result.bandHz.toFixed(1) + " Hz"]].map(([k, v]) => (
+                {[["Score (1–5, 5 best)", String(5 - result.updrs)], ["Est. UPDRS 3.17", String(result.updrs) + " / 4"], ["Amplitude", result.ampCm < 0.1 ? "<0.1 cm" : result.ampCm.toFixed(2) + " cm"], ["Tremor RMS", result.rmsBand.toFixed(3) + " m/s²"], ["Band share", Math.round(result.bandRatio * 100) + "%"], ["Peak", result.peakHz.toFixed(1) + " Hz"], ["Band peak", result.bandHz.toFixed(1) + " Hz"]].map(([k, v]) => (
                   <div key={k} style={{ background: "#0f172a", borderRadius: 8, padding: "8px 10px" }}>
                     <div style={{ fontSize: 11, color: "#94a3b8" }}>{k}</div>
                     <div style={{ fontSize: 16, fontWeight: 600 }}>{v}</div>
@@ -1886,7 +1887,7 @@
         const raw = { hand, note: note || null, taps: result.taps, seconds: result.seconds, hesitations: result.hesitations };
         const items = [
           ["tap_rate", Number(result.rate.toFixed(3))], ["tap_iti_ms", Number(result.itiMs.toFixed(1))], ["tap_cv", Number(result.cv.toFixed(4))],
-          ["tap_decrement", Number(result.decrement.toFixed(4))], ["tap_accuracy", Number(result.accuracy.toFixed(4))], ["tap_updrs", result.score],
+          ["tap_decrement", Number(result.decrement.toFixed(4))], ["tap_accuracy", Number(result.accuracy.toFixed(4))], ["tap_updrs", result.score], ["tap_score", 5 - result.score],
         ].map(([metric, value]) => ({ ts, source: "motor", metric, value, raw }));
         const r = await apiFetch("/api/observations", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(items) });
         if (r.ok) { setPhase("idle"); setResult(null); setNote(""); setMsg("Saved."); } else setMsg("Save failed.");
@@ -1926,7 +1927,7 @@
           {phase === "done" && result && (
             <>
               <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8, marginTop: 6 }}>
-                {[["Est. score", result.score + " / 4"], ["Taps / s", result.rate.toFixed(2)], ["Taps", String(result.taps)],
+                {[["Score (1–5, 5 best)", String(5 - result.score)], ["Taps / s", result.rate.toFixed(2)], ["Taps", String(result.taps)],
                   ["Rhythm (CV)", Math.round(result.cv * 100) + "%"], ["Slowdown", Math.round(result.decrement * 100) + "%"], ["Alternation", Math.round(result.accuracy * 100) + "%"]].map(([k, v]) => (
                   <div key={k} style={{ background: "#0f172a", borderRadius: 8, padding: "8px 10px" }}>
                     <div style={{ fontSize: 11, color: "#94a3b8" }}>{k}</div>
@@ -2166,7 +2167,7 @@
         const items = [["voice_f0", Number(result.meanF0.toFixed(1))], ["voice_f0_sd", Number(result.f0sd.toFixed(2))], ["voice_jitter_pct", Number((result.jitter * 100).toFixed(3))],
           ["voice_shimmer_pct", Number((result.shimmer * 100).toFixed(3))], ["voice_hnr", Number(result.hnr.toFixed(2))], ["voice_loudness_db", Number(result.loudnessDb.toFixed(1))],
           ["voice_int_slope", Number(result.intSlope.toFixed(3))], ["voice_ppe", result.ppe == null ? null : Number(result.ppe.toFixed(4))],
-          ["voice_score", base && base.score != null ? base.score : null]].filter(([, v]) => v != null)
+          ["voice_score", base && base.score != null ? 5 - base.score : null]].filter(([, v]) => v != null)
           .map(([metric, value]) => ({ ts, source: "motor", metric, value, raw }));
         const r = await apiFetch("/api/observations", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(items) });
         if (r.ok) { setPhase("idle"); setResult(null); setNote(""); setMsg("Saved."); } else setMsg("Save failed.");
@@ -2210,10 +2211,10 @@
                 ))}
               </div>
               <div style={{ background: "#0f172a", borderRadius: 8, padding: "8px 10px", marginTop: 8 }}>
-                <div style={{ fontSize: 11, color: "#94a3b8" }}>Score vs your own baseline (0–4)</div>
+                <div style={{ fontSize: 11, color: "#94a3b8" }}>Score vs your own baseline (1–5, 5 = at or better than baseline)</div>
                 {base == null ? <div style={{ fontSize: 13 }}>…</div> : base.score == null
                   ? <div style={{ fontSize: 13 }}>Building baseline: {base.n} of 5 tests saved. No score until then.</div>
-                  : <div style={{ fontSize: 16, fontWeight: 600 }}>{base.score} / 4 <span style={{ fontSize: 11, fontWeight: 400, color: "#94a3b8" }}>· features worse than your mean by over 1 SD, from {base.n} prior tests</span></div>}
+                  : <div style={{ fontSize: 16, fontWeight: 600 }}>{5 - base.score} <span style={{ fontSize: 11, fontWeight: 400, color: "#94a3b8" }}>· {base.score} of jitter, shimmer, HNR, PPE worse than your mean by over 1 SD, from {base.n} prior tests</span></div>}
               </div>
               <svg viewBox="0 0 600 60" style={{ width: "100%", height: 60, display: "block", marginTop: 8 }}>
                 {(() => { const lo = Math.min(...result.f0s) * 0.95, hi = Math.max(...result.f0s) * 1.05; const x = (i) => 10 + (580 * i) / Math.max(1, result.f0s.length - 1); const y = (v) => 56 - (46 * (v - lo)) / (hi - lo || 1);
@@ -2247,31 +2248,41 @@
     // ---------- DDK test: repeat "pa-ta-ka" for 10 s; syllable onsets from the loudness envelope ----------
     const DDK_SECONDS = 10;
     function analyzeDdk(pcm, sampleRate) {
-      const hop = Math.round(sampleRate * 0.005), win = Math.round(sampleRate * 0.02); // 5 ms envelope
+      // Syllable nuclei = peaks of the loudness envelope with a dip on both sides (de Jong & Wempe style). No ASR.
+      const hop = Math.round(sampleRate * 0.005), win = Math.round(sampleRate * 0.02);
       const env = [];
       for (let st = 0; st + win <= pcm.length; st += hop) { let e = 0; for (let i = 0; i < win; i++) e += pcm[st + i] * pcm[st + i]; env.push(Math.sqrt(e / win)); }
       if (env.length < 100) return null;
-      // light smoothing (15 ms)
-      const sm = env.map((v, i) => (env[i - 1] || v) * 0.25 + v * 0.5 + (env[i + 1] || v) * 0.25);
-      const maxE = Math.max(...sm); const floor = Math.max(0.003, maxE * 0.15);
-      // onset = envelope crosses up through floor after being below it for >= 30 ms; refractory 80 ms
-      const onsets = []; let below = 10; const minGap = Math.round(0.08 / 0.005);
-      for (let i = 1; i < sm.length; i++) {
-        if (sm[i] < floor) { below++; continue; }
-        if (below >= 6 && (!onsets.length || i - onsets[onsets.length - 1] >= minGap)) onsets.push(i);
-        below = 0;
+      // ~30 ms smoothing
+      const sm = env.map((_, i) => { let a = 0, n = 0; for (let k = -3; k <= 3; k++) { const v = env[i + k]; if (v != null) { a += v; n++; } } return a / n; });
+      const maxE = Math.max(...sm); const floor = Math.max(0.003, maxE * 0.08);
+      const minDist = Math.round(0.09 / 0.005); // 90 ms -> up to ~11 syll/s
+      const half = Math.round(0.045 / 0.005);
+      const cand = [];
+      for (let i = half; i < sm.length - half; i++) {
+        if (sm[i] < floor) continue;
+        let isMax = true; for (let k = -half; k <= half; k++) if (sm[i + k] > sm[i]) { isMax = false; break; }
+        if (isMax && (!cand.length || i - cand[cand.length - 1] >= minDist)) cand.push(i); else if (isMax && sm[i] > sm[cand[cand.length - 1]]) cand[cand.length - 1] = i;
       }
-      if (onsets.length < 6) return { count: onsets.length, tooFew: true };
-      const t = onsets.map((i) => i * 0.005);
+      // keep peaks with a real dip to the previous kept peak (valley <= 70% of the lower of the two)
+      const peaks = [];
+      for (const i of cand) {
+        if (!peaks.length) { peaks.push(i); continue; }
+        const j = peaks[peaks.length - 1]; let valley = Infinity; for (let k = j; k <= i; k++) if (sm[k] < valley) valley = sm[k];
+        if (valley <= 0.7 * Math.min(sm[i], sm[j])) peaks.push(i);
+        else if (sm[i] > sm[j]) peaks[peaks.length - 1] = i;
+      }
+      if (peaks.length < 6) return { count: peaks.length, tooFew: true, env: sm, onsets: peaks };
+      const t = peaks.map((i) => i * 0.005);
       const ioi = []; for (let i = 1; i < t.length; i++) ioi.push(t[i] - t[i - 1]);
       const mean = ioi.reduce((a, b) => a + b, 0) / ioi.length;
       const sd = Math.sqrt(ioi.reduce((a, b) => a + (b - mean) ** 2, 0) / ioi.length);
       const span = t[t.length - 1] - t[0];
-      const half = Math.floor(ioi.length / 2);
-      const r1 = half / ioi.slice(0, half).reduce((a, b) => a + b, 0), r2 = (ioi.length - half) / ioi.slice(half).reduce((a, b) => a + b, 0);
-      const peaks = onsets.map((i) => Math.max(...sm.slice(i, Math.min(sm.length, i + 20))));
-      const pm = peaks.reduce((a, b) => a + b, 0) / peaks.length; const pcv = Math.sqrt(peaks.reduce((a, b) => a + (b - pm) ** 2, 0) / peaks.length) / pm;
-      return { count: onsets.length, rate: (onsets.length - 1) / span, ioiMs: mean * 1000, cv: sd / mean, decrement: (r1 - r2) / r1, loudnessCv: pcv, seconds: span, env: sm, onsets };
+      const h = Math.floor(ioi.length / 2);
+      const r1 = h / ioi.slice(0, h).reduce((a, b) => a + b, 0), r2 = (ioi.length - h) / ioi.slice(h).reduce((a, b) => a + b, 0);
+      const amps = peaks.map((i) => sm[i]); const pm = amps.reduce((a, b) => a + b, 0) / amps.length;
+      const pcv = Math.sqrt(amps.reduce((a, b) => a + (b - pm) ** 2, 0) / amps.length) / pm;
+      return { count: peaks.length, rate: (peaks.length - 1) / span, ioiMs: mean * 1000, cv: sd / mean, decrement: (r1 - r2) / r1, loudnessCv: pcv, seconds: span, env: sm, onsets: peaks };
     }
 
     function DdkTestCard() {
@@ -2311,7 +2322,7 @@
           stream.getTracks().forEach((t) => t.stop()); const sr = ctx.sampleRate; ctx.close(); audioRef.current = null;
           const total = chunks.reduce((a, c) => a + c.length, 0); const pcm = new Float32Array(total); let o = 0; chunks.forEach((c) => { pcm.set(c, o); o += c.length; });
           const res = total ? analyzeDdk(pcm, sr) : null;
-          if (!res || res.tooFew) { setPhase("idle"); setMsg(`Couldn't pick out syllables (${res ? res.count : 0} found). Say "pa-ta-ka" clearly and crisply, close to the phone.`); return; }
+          if (!res || res.tooFew) { setPhase("idle"); setMsg(`Only ${res ? res.count : 0} syllable peaks found in ${DDK_SECONDS} s. Keep the phone close and keep going for the whole 10 s; a steady "pa-ta-ka-pa-ta-ka" at any speed works.`); return; }
           setBase(null); setResult(res); setPhase("done");
         }, DDK_SECONDS * 1000 + 200);
       };
@@ -2319,7 +2330,7 @@
         const ts = new Date().toISOString();
         const raw = { note: note || null, count: result.count, seconds: Number(result.seconds.toFixed(2)) };
         const items = [["ddk_rate", Number(result.rate.toFixed(3))], ["ddk_ioi_ms", Number(result.ioiMs.toFixed(1))], ["ddk_cv", Number(result.cv.toFixed(4))], ["ddk_decrement", Number(result.decrement.toFixed(4))],
-          ["ddk_loudness_cv", Number(result.loudnessCv.toFixed(4))], ["ddk_score", base && base.score != null ? base.score : null]].filter(([, v]) => v != null)
+          ["ddk_loudness_cv", Number(result.loudnessCv.toFixed(4))], ["ddk_score", base && base.score != null ? 5 - base.score : null]].filter(([, v]) => v != null)
           .map(([metric, value]) => ({ ts, source: "motor", metric, value, raw }));
         const r = await apiFetch("/api/observations", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(items) });
         if (r.ok) { setPhase("idle"); setResult(null); setNote(""); setMsg("Saved."); } else setMsg("Save failed.");
@@ -2353,18 +2364,18 @@
                 ))}
               </div>
               <div style={{ background: "#0f172a", borderRadius: 8, padding: "8px 10px", marginTop: 8 }}>
-                <div style={{ fontSize: 11, color: "#94a3b8" }}>Score vs your own baseline (0–4)</div>
+                <div style={{ fontSize: 11, color: "#94a3b8" }}>Score vs your own baseline (1–5, 5 = at or better than baseline)</div>
                 {base == null ? <div style={{ fontSize: 13 }}>…</div> : base.score == null
                   ? <div style={{ fontSize: 13 }}>Building baseline: {base.n} of 5 tests saved. No score until then.</div>
-                  : <div style={{ fontSize: 16, fontWeight: 600 }}>{base.score} / 4 <span style={{ fontSize: 11, fontWeight: 400, color: "#94a3b8" }}>· of rate, rhythm, slowdown, loudness consistency worse than your mean by over 1 SD ({base.n} prior tests)</span></div>}
+                  : <div style={{ fontSize: 16, fontWeight: 600 }}>{5 - base.score} <span style={{ fontSize: 11, fontWeight: 400, color: "#94a3b8" }}>· {base.score} of rate, rhythm, slowdown, loudness consistency worse than your mean by over 1 SD ({base.n} prior tests)</span></div>}
               </div>
               <svg viewBox="0 0 600 70" style={{ width: "100%", height: 70, display: "block", marginTop: 8 }}>
                 {(() => { const e = result.env; const hi = Math.max(...e) || 1; const x = (i) => 10 + (580 * i) / (e.length - 1); const y = (v) => 62 - (50 * v) / hi;
-                  return <><text x="10" y="10" fontSize="10" fill="#64748b">loudness envelope with detected syllable onsets</text>
+                  return <><text x="10" y="10" fontSize="10" fill="#64748b">loudness envelope with detected syllable peaks</text>
                     <path d={"M" + e.filter((_, i) => i % 2 === 0).map((v, i) => `${x(i * 2).toFixed(1)} ${y(v).toFixed(1)}`).join(" L")} fill="none" stroke="#c084fc" strokeWidth="1" />
                     {result.onsets.map((i, k) => <line key={k} x1={x(i)} x2={x(i)} y1="14" y2="64" stroke="#a3e635" strokeWidth="1" opacity="0.7" />)}</>; })()}
               </svg>
-              <div style={{ fontSize: 10, color: "#64748b", marginTop: 2 }}>Healthy adults typically manage about 6–7 syllables/s; PD slows and becomes irregular and improves on levodopa (Cologne and Bern 2025). Onset detection is envelope-based, so crisp consonants matter.</div>
+              <div style={{ fontSize: 10, color: "#64748b", marginTop: 2 }}>Healthy adults typically manage about 6–7 syllables/s; PD slows and becomes irregular and improves on levodopa (Cologne and Bern 2025). Syllables are counted as loudness peaks with a dip between them (no speech recognition).</div>
               <div className="controls-row" style={{ gap: 8, marginTop: 6 }}>
                 <input value={note} onChange={(e) => setNote(e.target.value)} placeholder="Note (e.g. pre-dose)"
                   style={{ flex: 1, background: "#0f172a", color: "#e2e8f0", border: "1px solid #334155", borderRadius: 8, padding: "8px 10px", fontSize: 14 }} />
@@ -2489,7 +2500,7 @@
         const ts = new Date().toISOString();
         const raw = { passage: passage.id, note: note || null, seconds: Number(result.seconds.toFixed(1)), voicedSeconds: Number(result.voicedSeconds.toFixed(1)) };
         const items = [["read_f0_sd_st", Number(result.sdSt.toFixed(3))], ["read_range_st", Number(result.rangeSt.toFixed(2))], ["read_f0", Number(result.meanF0.toFixed(1))], ["read_rate", Number(result.rate.toFixed(3))],
-          ["read_pause_pct", Number(result.pausePct.toFixed(4))], ["read_seconds", Number(result.seconds.toFixed(1))], ["read_score", base && base.score != null ? base.score : null]].filter(([, v]) => v != null)
+          ["read_pause_pct", Number(result.pausePct.toFixed(4))], ["read_seconds", Number(result.seconds.toFixed(1))], ["read_score", base && base.score != null ? 5 - base.score : null]].filter(([, v]) => v != null)
           .map(([metric, value]) => ({ ts, source: "motor", metric, value, raw }));
         const r = await apiFetch("/api/observations", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(items) });
         if (r.ok) { setPhase("idle"); setResult(null); setNote(""); setMsg("Saved."); } else setMsg("Save failed.");
@@ -2533,10 +2544,10 @@
                 ))}
               </div>
               <div style={{ background: "#0f172a", borderRadius: 8, padding: "8px 10px", marginTop: 8 }}>
-                <div style={{ fontSize: 11, color: "#94a3b8" }}>Score vs your own baseline on this passage (0–4)</div>
+                <div style={{ fontSize: 11, color: "#94a3b8" }}>Score vs your own baseline on this passage (1–5, 5 = at or better than baseline)</div>
                 {base == null ? <div style={{ fontSize: 13 }}>…</div> : base.score == null
                   ? <div style={{ fontSize: 13 }}>Building baseline: {base.n} of 5 reads of "{passage.title}". No score until then.</div>
-                  : <div style={{ fontSize: 16, fontWeight: 600 }}>{base.score} / 4 <span style={{ fontSize: 11, fontWeight: 400, color: "#94a3b8" }}>· of pitch variability, range, rate, pauses worse than your mean by over 1 SD ({base.n} prior reads)</span></div>}
+                  : <div style={{ fontSize: 16, fontWeight: 600 }}>{5 - base.score} <span style={{ fontSize: 11, fontWeight: 400, color: "#94a3b8" }}>· {base.score} of pitch variability, range, rate, pauses worse than your mean by over 1 SD ({base.n} prior reads)</span></div>}
               </div>
               <svg viewBox="0 0 600 60" style={{ width: "100%", height: 60, display: "block", marginTop: 8 }}>
                 {(() => { const v = result.st; const x = (i) => 10 + (580 * i) / Math.max(1, v.length - 1); const y = (s) => 36 - s * 3;
