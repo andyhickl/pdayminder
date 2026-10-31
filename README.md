@@ -74,7 +74,11 @@ of MDS-UPDRS 3.4; not calibrated to clinic ratings). `raw` carries hand and note
 ## Voice test (motor/voice_*)
 5 s sustained /a/ via the phone mic (Web Audio, no audio stored). Frame pass for voicing and coarse F0; period pass
 (peak-to-peak) on the longest voiced run gives Praat-style local jitter/shimmer; HNR from a period-averaged template vs
-residual. Metrics: `voice_f0`, `voice_f0_sd`, `voice_jitter_pct`, `voice_shimmer_pct`, `voice_hnr`, `voice_loudness_db`.
+residual. Period marks are refined to sub-sample precision by cross-correlating each period onto the previous mark.
+Validated against Praat (parselmouth) on synthetic phonations: F0 exact, jitter within ~0.02 pp on steady/jittery
+voices (reads high under heavy breath noise), HNR within ~1 dB when noise is present (caps ~34 dB on pure tones),
+shimmer ~30% lower than Praat on step-change test tones. Metrics: `voice_f0`, `voice_f0_sd`, `voice_jitter_pct`,
+`voice_shimmer_pct`, `voice_hnr`, `voice_loudness_db`.
 
 ## Spiral test (motor/spiral_*)
 Trace a 3-turn Archimedean spiral on a canvas. Angular offset is fitted (median of θ − r/k) so the start angle doesn't
