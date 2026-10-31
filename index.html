@@ -2699,6 +2699,20 @@
       return { seconds: dur, steps: peaks.length, cadence, stepCv: sd / mean, stepRegularity: ac1, strideRegularity: ac2, asymmetry, rms, trace: Array.from(sm).filter((_, i) => i % 2 === 0), peaks: peaks.map((p) => Math.round(p / 2)) };
     }
 
+    // Synthesised four-on-the-floor beat (kick, hat, offbeat clap) at a given BPM via Web Audio. No recordings involved.
+    function startBeat(bpm) {
+      const AC = window.AudioContext || window.webkitAudioContext; if (!AC) return null;
+      const ctx = new AC(); const master = ctx.createGain(); master.gain.value = 0.5; master.connect(ctx.destination);
+      const beat = 60 / bpm; let next = ctx.currentTime + 0.1; let n = 0; let timer = null;
+      const kick = (t) => { const o = ctx.createOscillator(), g = ctx.createGain(); o.frequency.setValueAtTime(150, t); o.frequency.exponentialRampToValueAtTime(45, t + 0.12); g.gain.setValueAtTime(1, t); g.gain.exponentialRampToValueAtTime(0.001, t + 0.25); o.connect(g); g.connect(master); o.start(t); o.stop(t + 0.3); };
+      const hat = (t, open) => { const len = open ? 0.18 : 0.05; const buf = ctx.createBuffer(1, ctx.sampleRate * len, ctx.sampleRate); const d = buf.getChannelData(0); for (let i = 0; i < d.length; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / d.length, 2); const src = ctx.createBufferSource(); src.buffer = buf; const f = ctx.createBiquadFilter(); f.type = "highpass"; f.frequency.value = 7000; const g = ctx.createGain(); g.gain.value = open ? 0.25 : 0.18; src.connect(f); f.connect(g); g.connect(master); src.start(t); };
+      const clap = (t) => { const buf = ctx.createBuffer(1, ctx.sampleRate * 0.12, ctx.sampleRate); const d = buf.getChannelData(0); for (let i = 0; i < d.length; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / d.length, 3); const src = ctx.createBufferSource(); src.buffer = buf; const f = ctx.createBiquadFilter(); f.type = "bandpass"; f.frequency.value = 1800; f.Q.value = 0.8; const g = ctx.createGain(); g.gain.value = 0.5; src.connect(f); f.connect(g); g.connect(master); src.start(t); };
+      const bass = (t, i) => { const o = ctx.createOscillator(), g = ctx.createGain(); const notes = [55, 55, 65.4, 55, 73.4, 55, 65.4, 49]; o.type = "sawtooth"; o.frequency.value = notes[i % 8]; const f = ctx.createBiquadFilter(); f.type = "lowpass"; f.frequency.value = 400; g.gain.setValueAtTime(0.25, t); g.gain.exponentialRampToValueAtTime(0.001, t + beat * 0.45); o.connect(f); f.connect(g); g.connect(master); o.start(t); o.stop(t + beat * 0.5); };
+      const schedule = () => { while (next < ctx.currentTime + 0.4) { kick(next); bass(next, n); hat(next + beat / 2, n % 4 === 3); if (n % 2 === 1) clap(next); next += beat; n++; } };
+      schedule(); timer = setInterval(schedule, 100);
+      return { stop: () => { clearInterval(timer); try { master.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.3); setTimeout(() => ctx.close(), 400); } catch {} } };
+    }
+
     function GaitTestCard() {
       const [phase, setPhase] = useState("idle"); // idle | lead | recording | done
       const [left, setLeft] = useState(0);
@@ -2708,16 +2722,17 @@
       const [msg, setMsg] = useState("");
       const samples = useRef([]); const wake = useRef(null);
       const [placement, setPlacement] = useState(() => { try { return localStorage.getItem("pdm-gait-placement") || "hand"; } catch { return "hand"; } });
+      const [cued, setCued] = useState(false); const BEAT_BPM = 103; const beatRef = useRef(null);
       useEffect(() => { try { localStorage.setItem("pdm-gait-placement", placement); } catch {} }, [placement]);
       const [historyAll] = useJson("/api/observations?source=motor&metric=gait_cadence&limit=100", [phase]);
-      const history = historyAll ? historyAll.filter((h) => (h.raw && h.raw.placement) === placement) : null;
+      const history = historyAll ? historyAll.filter((h) => (h.raw && h.raw.placement) === placement && Boolean(h.raw && h.raw.cued) === cued) : null;
       const isHandheld = useMemo(() => { try { return window.matchMedia("(pointer: coarse)").matches || /iPhone|iPad|Android/i.test(navigator.userAgent); } catch { return false; } }, []);
       const GAIT_KEYS = [["gait_cadence", false], ["gait_step_cv", true], ["gait_stride_regularity", false], ["gait_asymmetry", true]];
       useEffect(() => {
         if (phase !== "done" || !result) return;
         (async () => {
           const out = {};
-          await Promise.all(GAIT_KEYS.map(async ([k]) => { const r = await apiFetch(`/api/observations?source=motor&metric=${k}&limit=100`); out[k] = r.ok ? (await r.json()).filter((o) => (o.raw && o.raw.placement) === placement).map((o) => o.value) : []; }));
+          await Promise.all(GAIT_KEYS.map(async ([k]) => { const r = await apiFetch(`/api/observations?source=motor&metric=${k}&limit=100`); out[k] = r.ok ? (await r.json()).filter((o) => (o.raw && o.raw.placement) === placement && Boolean(o.raw && o.raw.cued) === cued).map((o) => o.value) : []; }));
           setBase(baselineScore(GAIT_KEYS.map(([k, w]) => ({ key: k, value: k === "gait_cadence" ? result.cadence : k === "gait_step_cv" ? result.stepCv * 100 : k === "gait_stride_regularity" ? result.strideRegularity : result.asymmetry, higherIsWorse: w })), out));
         })();
       }, [phase]);
@@ -2739,10 +2754,11 @@
           const el = (performance.now() - t0) / 1000;
           if (el < GAIT_LEAD) setLeft(Math.ceil(GAIT_LEAD - el)); else { setPhase("recording"); setLeft(Math.max(0, Math.ceil(GAIT_LEAD + GAIT_SECONDS - el))); }
         }, 250);
-        setTimeout(() => window.addEventListener("devicemotion", handler), GAIT_LEAD * 1000);
+        setTimeout(() => { window.addEventListener("devicemotion", handler); if (cued) { try { beatRef.current = startBeat(BEAT_BPM); } catch {} } }, GAIT_LEAD * 1000);
         try { if (navigator.vibrate) { setTimeout(() => navigator.vibrate(200), GAIT_LEAD * 1000); setTimeout(() => navigator.vibrate([200, 100, 200]), (GAIT_LEAD + GAIT_SECONDS) * 1000); } } catch {}
         setTimeout(() => {
           window.removeEventListener("devicemotion", handler); clearInterval(tick);
+          try { if (beatRef.current) { beatRef.current.stop(); beatRef.current = null; } } catch {}
           try { if (wake.current) { wake.current.release(); wake.current = null; } } catch {}
           const res = analyzeGait(samples.current);
           if (!res || res.tooStill || res.tooFew) { setPhase("idle"); setMsg(res && res.tooFew ? `Only ${res.steps} steps detected over ${(samples.current.length ? (samples.current[samples.current.length - 1].t - samples.current[0].t) / 1000 : 0).toFixed(0)} s of motion data. If the phone locked, the recording stopped there; keep the screen on and walk the whole 30 s.` : "Not enough movement recorded. Keep walking until the countdown ends, and don't let the phone lock."); return; }
@@ -2752,10 +2768,12 @@
       const save = async () => {
         const ts = new Date().toISOString();
         const nrm = normScore([{ value: result.cadence, ...NORMS.gait_cadence }, { value: result.stepCv * 100, ...NORMS.gait_step_cv, higherIsWorse: true }]);
-        const raw = { note: note || null, placement, seconds: Number(result.seconds.toFixed(1)), steps: result.steps };
+        const raw = { note: note || null, placement, cued, bpm: cued ? BEAT_BPM : null, seconds: Number(result.seconds.toFixed(1)), steps: result.steps };
+        const beatLock = cued ? Math.abs(result.cadence - BEAT_BPM) / BEAT_BPM : null;
         const items = [["gait_cadence", Number(result.cadence.toFixed(1))], ["gait_step_cv", Number((result.stepCv * 100).toFixed(2))], ["gait_step_regularity", Number(result.stepRegularity.toFixed(3))],
           ["gait_stride_regularity", Number(result.strideRegularity.toFixed(3))], ["gait_asymmetry", Number(result.asymmetry.toFixed(3))], ["gait_rms", Number(result.rms.toFixed(3))],
-          ["gait_score", base && base.score != null ? 5 - base.score : null], ["gait_norm", nrm ? nrm.score : null]].filter(([, v]) => v != null)
+          ["gait_score", base && base.score != null ? 5 - base.score : null], ["gait_norm", cued ? null : (nrm ? nrm.score : null)],
+          ["gait_beat_error_pct", beatLock == null ? null : Number((beatLock * 100).toFixed(2))]].filter(([, v]) => v != null)
           .map(([metric, value]) => ({ ts, source: "motor", metric, value, raw }));
         const r = await apiFetch("/api/observations", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(items) });
         if (r.ok) { setPhase("idle"); setResult(null); setNote(""); setMsg("Saved."); } else setMsg("Save failed.");
@@ -2775,6 +2793,11 @@
               <div className="controls-row" style={{ gap: 8, marginTop: 6 }}>
                 {[["hand", "in hand, arm at side"], ["pocket", "front pocket"]].map(([k, l]) => <button key={k} type="button" className={"pill-btn" + (placement === k ? " primary" : "")} onClick={() => setPlacement(k)}>{l}</button>)}
               </div>
+              <div className="controls-row" style={{ gap: 8, marginTop: 6 }}>
+                <button type="button" className={"pill-btn" + (!cued ? " primary" : "")} onClick={() => setCued(false)}>free walk</button>
+                <button type="button" className={"pill-btn" + (cued ? " primary" : "")} onClick={() => setCued(true)}>cued walk · 103 BPM beat</button>
+              </div>
+              {cued && <div className="card-subtitle" style={{ marginTop: 4 }}>A synthesised disco beat at 103 BPM plays during the walk (turn the volume up). Cued walks are scored against their own baseline and skip the healthy-reference score, since walking to a beat changes cadence and variability.</div>}
               <div className="controls-row" style={{ marginTop: 6 }}><button type="button" className="pill-btn primary" onClick={start}>Start (5 s to get set, then 30 s walk)</button></div>
             </>
           )}
@@ -2783,7 +2806,7 @@
           {phase === "done" && result && (
             <>
               <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8, marginTop: 6 }}>
-                {[["Cadence", Math.round(result.cadence) + " /min"], ["Steps", `${result.steps} in ${result.seconds.toFixed(0)} s`], ["Step variability", (result.stepCv * 100).toFixed(1) + "%"],
+                {[["Cadence", Math.round(result.cadence) + " /min" + (cued ? ` (beat ${BEAT_BPM})` : "")], ["Steps", `${result.steps} in ${result.seconds.toFixed(0)} s`], ["Step variability", (result.stepCv * 100).toFixed(1) + "%"],
                   ["Stride regularity", result.strideRegularity.toFixed(2)], ["Asymmetry", result.asymmetry.toFixed(2)], ["Intensity", result.rms.toFixed(2) + " m/s²"]].map(([k, v]) => (
                   <div key={k} style={{ background: "#0f172a", borderRadius: 8, padding: "8px 10px" }}>
                     <div style={{ fontSize: 11, color: "#94a3b8" }}>{k}</div>
@@ -2797,7 +2820,8 @@
                   ? <div style={{ fontSize: 13 }}>Building baseline: {base.n} of 5 walks saved. No score until then.</div>
                   : <div style={{ fontSize: 16, fontWeight: 600, color: ratingColor(5 - base.score) }}>{5 - base.score} <span style={{ fontSize: 11, fontWeight: 400, color: "#94a3b8" }}>· {base.score} of cadence, variability, regularity, asymmetry worse than your mean by over 1 SD ({base.n} prior walks)</span></div>}
               </div>
-              <NormLine norm={normScore([{ value: result.cadence, ...NORMS.gait_cadence }, { value: result.stepCv * 100, ...NORMS.gait_step_cv, higherIsWorse: true }])} what="cadence vs ~112 ± 9 /min and step variability vs ~2.5 ± 1.5 % (healthy adults, preferred speed)" />
+              {!cued && <NormLine norm={normScore([{ value: result.cadence, ...NORMS.gait_cadence }, { value: result.stepCv * 100, ...NORMS.gait_step_cv, higherIsWorse: true }])} what="cadence vs ~112 ± 9 /min and step variability vs ~2.5 ± 1.5 % (healthy adults, preferred speed)" />}
+              {cued && <div style={{ background: "#0f172a", borderRadius: 8, padding: "8px 10px", marginTop: 8 }}><div style={{ fontSize: 11, color: "#94a3b8" }}>Beat lock</div><div style={{ fontSize: 16, fontWeight: 600 }}>{(Math.abs(result.cadence - BEAT_BPM) / BEAT_BPM * 100).toFixed(1)}% off the beat <span style={{ fontSize: 11, fontWeight: 400, color: "#94a3b8" }}>· how closely your cadence matched {BEAT_BPM} BPM; cueing response</span></div></div>}
               <svg viewBox="0 0 600 70" style={{ width: "100%", height: 70, display: "block", marginTop: 8 }}>
                 {(() => { const e = result.trace; const lo = Math.min(...e), hi = Math.max(...e); const x = (i) => 10 + (580 * i) / (e.length - 1); const y = (v) => 62 - (50 * (v - lo)) / (hi - lo || 1);
                   return <><text x="10" y="10" fontSize="10" fill="#64748b">acceleration (first 10 s shown) with detected steps</text>
@@ -2816,7 +2840,7 @@
           {msg && <div className="card-subtitle" style={{ marginTop: 6, color: msg === "Saved." ? "#a3e635" : "#f87171" }}>{msg}</div>}
           {hist.length > 1 && (
             <div style={{ marginTop: 10 }}>
-              <div style={{ fontSize: 11, color: "#94a3b8" }}>Cadence (steps/min), last {hist.length} walks ({placement})</div>
+              <div style={{ fontSize: 11, color: "#94a3b8" }}>Cadence (steps/min), last {hist.length} walks ({placement}{cued ? ", cued" : ", free"})</div>
               <svg viewBox="0 0 600 60" style={{ width: "100%", height: 60, display: "block" }}>
                 {(() => { const vals = hist.map((h) => h.value); const lo = Math.min(80, ...vals), hi = Math.max(130, ...vals); const x = (i) => 10 + (580 * i) / Math.max(1, hist.length - 1); const y = (v) => 52 - (46 * (v - lo)) / (hi - lo || 1);
                   return <><path d={"M" + hist.map((h, i) => `${x(i).toFixed(1)} ${y(h.value).toFixed(1)}`).join(" L")} fill="none" stroke="#34d399" strokeWidth="1.5" />
