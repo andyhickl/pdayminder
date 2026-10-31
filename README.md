@@ -65,3 +65,8 @@ Metrics per test: `tremor_rms` (m/s², band), `tremor_band_ratio`, `tremor_peak_
 hand excursion from x = a/(2πf)² at the band peak), `tremor_updrs` (MDS-UPDRS 3.17 amplitude bins: 0 <0.1 cm,
 1 <1 cm, 2 1–3 cm, 3 3–10 cm, 4 >10 cm — an estimate of the clinical score, not a rating). `raw` carries hand,
 posture, note. Phone only; laptops don't expose motion sensors to the browser.
+
+## Finger tapping test (motor/tap_*)
+Alternate taps between two targets for 20 s. Metrics: `tap_rate` (taps/s), `tap_iti_ms`, `tap_cv` (rhythm),
+`tap_decrement` (first-half vs second-half rate), `tap_accuracy` (alternation), `tap_updrs` (heuristic 0–4 in the spirit
+of MDS-UPDRS 3.4; not calibrated to clinic ratings). `raw` carries hand and note.
