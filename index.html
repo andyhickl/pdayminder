@@ -2706,13 +2706,20 @@
       const [base, setBase] = useState(null);
       const [note, setNote] = useState("");
       const [msg, setMsg] = useState("");
-      const samples = useRef([]);
-      const [history] = useJson("/api/observations?source=motor&metric=gait_cadence&limit=60", [phase]);
+      const samples = useRef([]); const wake = useRef(null);
+      const [placement, setPlacement] = useState(() => { try { return localStorage.getItem("pdm-gait-placement") || "hand"; } catch { return "hand"; } });
+      useEffect(() => { try { localStorage.setItem("pdm-gait-placement", placement); } catch {} }, [placement]);
+      const [historyAll] = useJson("/api/observations?source=motor&metric=gait_cadence&limit=100", [phase]);
+      const history = historyAll ? historyAll.filter((h) => (h.raw && h.raw.placement) === placement) : null;
       const isHandheld = useMemo(() => { try { return window.matchMedia("(pointer: coarse)").matches || /iPhone|iPad|Android/i.test(navigator.userAgent); } catch { return false; } }, []);
       const GAIT_KEYS = [["gait_cadence", false], ["gait_step_cv", true], ["gait_stride_regularity", false], ["gait_asymmetry", true]];
       useEffect(() => {
         if (phase !== "done" || !result) return;
-        loadHistory(GAIT_KEYS.map((k) => k[0])).then((h) => setBase(baselineScore(GAIT_KEYS.map(([k, w]) => ({ key: k, value: k === "gait_cadence" ? result.cadence : k === "gait_step_cv" ? result.stepCv * 100 : k === "gait_stride_regularity" ? result.strideRegularity : result.asymmetry, higherIsWorse: w })), h)));
+        (async () => {
+          const out = {};
+          await Promise.all(GAIT_KEYS.map(async ([k]) => { const r = await apiFetch(`/api/observations?source=motor&metric=${k}&limit=100`); out[k] = r.ok ? (await r.json()).filter((o) => (o.raw && o.raw.placement) === placement).map((o) => o.value) : []; }));
+          setBase(baselineScore(GAIT_KEYS.map(([k, w]) => ({ key: k, value: k === "gait_cadence" ? result.cadence : k === "gait_step_cv" ? result.stepCv * 100 : k === "gait_stride_regularity" ? result.strideRegularity : result.asymmetry, higherIsWorse: w })), out));
+        })();
       }, [phase]);
       const start = async () => {
         setMsg("");
@@ -2723,6 +2730,8 @@
         } catch (e) { setMsg("Couldn't request motion access: " + e.message); return; }
         if (typeof DeviceMotionEvent === "undefined") { setMsg("No motion sensors in this browser."); return; }
         samples.current = [];
+        // keep the screen awake for the whole test (iOS locks otherwise, which stops motion events)
+        try { if (navigator.wakeLock) wake.current = await navigator.wakeLock.request("screen"); } catch {}
         setPhase("lead"); setLeft(GAIT_LEAD);
         const t0 = performance.now();
         const handler = (e) => { const a = e.accelerationIncludingGravity || e.acceleration; if (!a) return; samples.current.push({ t: performance.now(), x: a.x || 0, y: a.y || 0, z: a.z || 0 }); };
@@ -2734,15 +2743,16 @@
         try { if (navigator.vibrate) { setTimeout(() => navigator.vibrate(200), GAIT_LEAD * 1000); setTimeout(() => navigator.vibrate([200, 100, 200]), (GAIT_LEAD + GAIT_SECONDS) * 1000); } } catch {}
         setTimeout(() => {
           window.removeEventListener("devicemotion", handler); clearInterval(tick);
+          try { if (wake.current) { wake.current.release(); wake.current = null; } } catch {}
           const res = analyzeGait(samples.current);
-          if (!res || res.tooStill || res.tooFew) { setPhase("idle"); setMsg(res && res.tooFew ? `Only ${res.steps} steps detected. Walk continuously for the whole 30 s with the phone in a front pocket.` : "Not enough movement recorded. Put the phone in a front trouser pocket and keep walking until it buzzes or the countdown ends."); return; }
+          if (!res || res.tooStill || res.tooFew) { setPhase("idle"); setMsg(res && res.tooFew ? `Only ${res.steps} steps detected over ${(samples.current.length ? (samples.current[samples.current.length - 1].t - samples.current[0].t) / 1000 : 0).toFixed(0)} s of motion data. If the phone locked, the recording stopped there; keep the screen on and walk the whole 30 s.` : "Not enough movement recorded. Keep walking until the countdown ends, and don't let the phone lock."); return; }
           setBase(null); setResult(res); setPhase("done");
         }, (GAIT_LEAD + GAIT_SECONDS) * 1000 + 100);
       };
       const save = async () => {
         const ts = new Date().toISOString();
         const nrm = normScore([{ value: result.cadence, ...NORMS.gait_cadence }, { value: result.stepCv * 100, ...NORMS.gait_step_cv, higherIsWorse: true }]);
-        const raw = { note: note || null, seconds: Number(result.seconds.toFixed(1)), steps: result.steps };
+        const raw = { note: note || null, placement, seconds: Number(result.seconds.toFixed(1)), steps: result.steps };
         const items = [["gait_cadence", Number(result.cadence.toFixed(1))], ["gait_step_cv", Number((result.stepCv * 100).toFixed(2))], ["gait_step_regularity", Number(result.stepRegularity.toFixed(3))],
           ["gait_stride_regularity", Number(result.strideRegularity.toFixed(3))], ["gait_asymmetry", Number(result.asymmetry.toFixed(3))], ["gait_rms", Number(result.rms.toFixed(3))],
           ["gait_score", base && base.score != null ? 5 - base.score : null], ["gait_norm", nrm ? nrm.score : null]].filter(([, v]) => v != null)
@@ -2756,14 +2766,19 @@
           <div className="card-header">
             <div>
               <div className="card-title">Gait test</div>
-              <div className="card-subtitle">Phone in a front trouser pocket, walk at your normal pace for 30 s (turn as needed). Cadence, step-to-step variability, stride regularity and left–right asymmetry from the accelerometer.</div>
+              <div className="card-subtitle">Walk at your normal pace for 30 s (turn as needed). Hold the phone in your hand with the arm hanging naturally at your side, screen toward your leg, or use a front trouser pocket. Keep the screen unlocked; the test stops if the phone locks. Cadence, step variability, stride regularity and asymmetry from the accelerometer.</div>
             </div>
           </div>
           {!isHandheld && phase === "idle" && <div className="card-subtitle" style={{ marginTop: 6 }}>Run this on your phone.</div>}
           {isHandheld && phase === "idle" && (
-            <div className="controls-row" style={{ marginTop: 6 }}><button type="button" className="pill-btn primary" onClick={start}>Start (5 s to pocket the phone, then 30 s walk)</button></div>
+            <>
+              <div className="controls-row" style={{ gap: 8, marginTop: 6 }}>
+                {[["hand", "in hand, arm at side"], ["pocket", "front pocket"]].map(([k, l]) => <button key={k} type="button" className={"pill-btn" + (placement === k ? " primary" : "")} onClick={() => setPlacement(k)}>{l}</button>)}
+              </div>
+              <div className="controls-row" style={{ marginTop: 6 }}><button type="button" className="pill-btn primary" onClick={start}>Start (5 s to get set, then 30 s walk)</button></div>
+            </>
           )}
-          {phase === "lead" && <div style={{ textAlign: "center", padding: "18px 0" }}><div style={{ fontSize: 48, fontWeight: 700 }}>{left}</div><div className="card-subtitle">Put the phone in your front pocket…</div></div>}
+          {phase === "lead" && <div style={{ textAlign: "center", padding: "18px 0" }}><div style={{ fontSize: 48, fontWeight: 700 }}>{left}</div><div className="card-subtitle">{placement === "pocket" ? "Slide the phone into your front pocket without pressing the side button…" : "Let your arm hang at your side with the phone in hand, screen toward your leg…"}</div></div>}
           {phase === "recording" && <div style={{ textAlign: "center", padding: "18px 0" }}><div style={{ fontSize: 48, fontWeight: 700 }}>{left}</div><div className="card-subtitle">Walking… keep going until it buzzes or reaches 0.</div></div>}
           {phase === "done" && result && (
             <>
@@ -2789,7 +2804,7 @@
                     <path d={"M" + e.slice(0, 250).map((v, i) => `${(10 + (580 * i) / 249).toFixed(1)} ${y(v).toFixed(1)}`).join(" L")} fill="none" stroke="#34d399" strokeWidth="1" />
                     {result.peaks.filter((p) => p < 250).map((p, k) => <line key={k} x1={10 + (580 * p) / 249} x2={10 + (580 * p) / 249} y1="14" y2="64" stroke="#a3e635" strokeWidth="1" opacity="0.6" />)}</>; })()}
               </svg>
-              <div style={{ fontSize: 10, color: "#64748b", marginTop: 2 }}>Regularity and asymmetry use autocorrelation at one-step and two-step lags (Moe-Nilssen & Helbostad). PD gait shows higher step variability and asymmetry before cadence changes. Same pocket, same shoes, same route when you can.</div>
+              <div style={{ fontSize: 10, color: "#64748b", marginTop: 2 }}>Regularity and asymmetry use autocorrelation at one-step and two-step lags (Moe-Nilssen & Helbostad). PD gait shows higher step variability and asymmetry before cadence changes. Baselines are kept per placement ({placement}); same placement, shoes and route when you can.</div>
               <div className="controls-row" style={{ gap: 8, marginTop: 6 }}>
                 <input value={note} onChange={(e) => setNote(e.target.value)} placeholder="Note (e.g. pre-dose, indoors)"
                   style={{ flex: 1, background: "#0f172a", color: "#e2e8f0", border: "1px solid #334155", borderRadius: 8, padding: "8px 10px", fontSize: 14 }} />
@@ -2801,7 +2816,7 @@
           {msg && <div className="card-subtitle" style={{ marginTop: 6, color: msg === "Saved." ? "#a3e635" : "#f87171" }}>{msg}</div>}
           {hist.length > 1 && (
             <div style={{ marginTop: 10 }}>
-              <div style={{ fontSize: 11, color: "#94a3b8" }}>Cadence (steps/min), last {hist.length} walks</div>
+              <div style={{ fontSize: 11, color: "#94a3b8" }}>Cadence (steps/min), last {hist.length} walks ({placement})</div>
               <svg viewBox="0 0 600 60" style={{ width: "100%", height: 60, display: "block" }}>
                 {(() => { const vals = hist.map((h) => h.value); const lo = Math.min(80, ...vals), hi = Math.max(130, ...vals); const x = (i) => 10 + (580 * i) / Math.max(1, hist.length - 1); const y = (v) => 52 - (46 * (v - lo)) / (hi - lo || 1);
                   return <><path d={"M" + hist.map((h, i) => `${x(i).toFixed(1)} ${y(h.value).toFixed(1)}`).join(" L")} fill="none" stroke="#34d399" strokeWidth="1.5" />
