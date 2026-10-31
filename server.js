@@ -181,6 +181,13 @@ async function saveClientPayload(userId, body) {
     }
     for (const [day, d] of Object.entries(body.days || {})) {
       if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) continue;
+      // Browsing the calendar creates placeholder days (sleep/empty segments, no meds). Don't store those,
+      // but do allow clearing a day that previously had data.
+      const hasContent = (d.segments || []).some((x) => x && x.type === "rating") || (Array.isArray(d.meds) && d.meds.length > 0);
+      if (!hasContent) {
+        const ex = await client.query("select 1 from qol_ratings where user_id = $1 and day = $2 and type = 'rating' limit 1", [userId, day]);
+        if (!ex.rows.length) continue;
+      }
       for (let seg = 0; seg < Math.min(12, (d.segments || []).length); seg++) {
         const s = d.segments[seg];
         if (!s || !Number.isInteger(s.rating)) continue;
@@ -736,39 +743,45 @@ app.delete("/api/integrations/oura", requireAuth, requireSession, async (req, re
   res.json({ ok: true });
 });
 
-// Per-metric summary over the last 30 days: last value, 7/14/30-day means of daily values, min/max/sd, daily series.
-// Keys: "qol" | "doses" | "rated" | "<source>/<metric>" (daily mean of observations; max for cumulative).
+// Per-metric summary: last value, 7/14/30-day means of daily values, min/max/sd over 30 days, 30-day series,
+// and a baseline (mean/sd of days 8–90 ago, >= 5 days) for "where am I vs usual".
+// Keys: "qol" | "doses" | "rated" | "<source>/<metric>".
 app.get("/api/stats", requireAuth, async (req, res) => {
   const uid = req.user.id;
-  const keys = String(req.query.metrics || "").split(",").map((k) => k.trim()).filter(Boolean).slice(0, 60);
-  const out = {};
-  const summarize = (series) => {
-    // series: [[day, value]] ascending, last 30 days
-    if (!series.length) return { n30: 0 };
-    const vals = series.map((p) => p[1]);
-    const today = new Date().toLocaleDateString("en-CA", { timeZone: TZ });
-    const dayDiff = (d) => Math.round((new Date(today) - new Date(d)) / 86400000);
-    const win = (n) => { const v = series.filter((p) => dayDiff(p[0]) < n).map((p) => p[1]); return v.length ? v.reduce((a, b) => a + b, 0) / v.length : null; };
-    const mean = vals.reduce((a, b) => a + b, 0) / vals.length;
-    return { n30: vals.length, last: vals[vals.length - 1], lastDay: series[series.length - 1][0], m7: win(7), m14: win(14), m30: mean,
-      min: Math.min(...vals), max: Math.max(...vals), sd: Math.sqrt(vals.reduce((a, b) => a + (b - mean) ** 2, 0) / vals.length), series };
+  const keys = String(req.query.metrics || "").split(",").map((k) => k.trim()).filter(Boolean).slice(0, 80);
+  const today = new Date().toLocaleDateString("en-CA", { timeZone: TZ });
+  const dayDiff = (d) => Math.round((new Date(today) - new Date(d)) / 86400000);
+  const summarize = (all, { fromFirstNonZero = false } = {}) => {
+    let series = all.filter((p) => p[0] <= today && p[1] != null);
+    if (fromFirstNonZero) { const i = series.findIndex((p) => p[1] > 0); series = i < 0 ? [] : series.slice(i); }
+    const last30 = series.filter((p) => dayDiff(p[0]) < 30);
+    const base = series.filter((p) => { const dd = dayDiff(p[0]); return dd >= 7 && dd < 90; }).map((p) => p[1]);
+    const stat = (v) => { const mean = v.reduce((a, b) => a + b, 0) / v.length; return { mean, sd: Math.sqrt(v.reduce((a, b) => a + (b - mean) ** 2, 0) / v.length), n: v.length }; };
+    const baseline = base.length >= 5 ? stat(base) : null;
+    if (!last30.length) return { n30: 0, baseline };
+    const vals = last30.map((p) => p[1]);
+    const win = (n) => { const v = last30.filter((p) => dayDiff(p[0]) < n).map((p) => p[1]); return v.length ? v.reduce((a, b) => a + b, 0) / v.length : null; };
+    const { mean, sd } = stat(vals);
+    return { n30: vals.length, last: vals[vals.length - 1], lastDay: last30[last30.length - 1][0], m7: win(7), m14: win(14), m30: mean,
+      min: Math.min(...vals), max: Math.max(...vals), sd, series: last30, baseline };
   };
+  const out = {};
   const q = await pool.query(
     `select to_char(day,'YYYY-MM-DD') as day, avg(rating) filter (where type = 'rating') as qol, count(*) filter (where type = 'rating')::int as rated
-     from qol_ratings where user_id = $1 and day >= (current_date at time zone $2)::date - 29 group by day order by day`, [uid, TZ]);
+     from qol_ratings where user_id = $1 and day >= (current_date at time zone $2)::date - 89 group by day order by day`, [uid, TZ]);
   const m = await pool.query(
-    `select to_char(day,'YYYY-MM-DD') as day, count(*)::int as doses from med_doses where user_id = $1 and day >= (current_date at time zone $2)::date - 29 group by day order by day`, [uid, TZ]);
+    `select to_char(day,'YYYY-MM-DD') as day, count(*)::int as doses from med_doses where user_id = $1 and day >= (current_date at time zone $2)::date - 89 group by day order by day`, [uid, TZ]);
   for (const k of keys) {
     if (k === "qol") out[k] = summarize(q.rows.filter((r) => r.qol != null).map((r) => [r.day, Number(r.qol)]));
-    else if (k === "rated") out[k] = summarize(q.rows.map((r) => [r.day, r.rated]));
-    else if (k === "doses") out[k] = summarize(m.rows.map((r) => [r.day, r.doses]));
+    else if (k === "rated") out[k] = summarize(q.rows.map((r) => [r.day, r.rated]), { fromFirstNonZero: true });
+    else if (k === "doses") out[k] = summarize(m.rows.map((r) => [r.day, r.doses]), { fromFirstNonZero: true });
     else {
       const [source, metric] = k.split("/");
       if (!source || !metric) continue;
       const r = await pool.query(
         `select to_char((ts at time zone $2)::date,'YYYY-MM-DD') as day, avg(value) as v
          from observations where user_id = $1 and source = $3 and metric = $4 and value is not null
-           and (ts at time zone $2)::date >= (current_date at time zone $2)::date - 29
+           and (ts at time zone $2)::date >= (current_date at time zone $2)::date - 89
          group by 1 order by 1`, [uid, TZ, source, metric]);
       out[k] = summarize(r.rows.map((x) => [x.day, Number(x.v)]));
     }
@@ -878,6 +891,9 @@ async function migrateScores() {
   await ensureFirstUser();
   await repairCumulative();
   await migrateScores();
+  await pool.query(`delete from qol_ratings q where type <> 'rating'
+    and not exists (select 1 from qol_ratings r where r.user_id = q.user_id and r.day = q.day and r.type = 'rating')
+    and not exists (select 1 from med_doses d where d.user_id = q.user_id and d.day = q.day)`).catch((e) => console.error("placeholder cleanup", e.message));
   app.listen(PORT, () => console.log(`PDayMinder on http://localhost:${PORT}`));
 })().catch((e) => {
   console.error(e);

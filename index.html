@@ -2754,9 +2754,10 @@
       );
     }
 
-    function TrendsCard() {
+    function TrendsCard({ settings }) {
       const [span, setSpan] = useState(30);
       const [pick, setPick] = useState("");
+      const enabled = new Set((settings && settings.trendMetrics) || DEFAULT_TREND_METRICS);
       const [lag, setLag] = useState(0); // -1: metric from the day before lines up with today's QoL
       const [metrics] = useJson("/api/metrics", []);
       const [src, met] = pick ? pick.split("|") : ["", ""];
@@ -2792,9 +2793,9 @@
             ))}
             <select value={pick} onChange={(e) => setPick(e.target.value)}
               style={{ background: "#0f172a", color: "#e2e8f0", border: "1px solid #334155", borderRadius: 8, padding: "6px 8px", fontSize: 13 }}>
-              <option value="">Overlay a synced metric…</option>
-              {(metrics || []).map((m) => (
-                <option key={m.source + "|" + m.metric} value={m.source + "|" + m.metric}>{m.source} · {m.metric} ({m.rows})</option>
+              <option value="">Overlay a metric…</option>
+              {(metrics || []).filter((m) => enabled.has(m.source + "/" + m.metric)).map((m) => (
+                <option key={m.source + "|" + m.metric} value={m.source + "|" + m.metric}>{metricLabel(m.source + "/" + m.metric)}</option>
               ))}
             </select>
             {pick && (
@@ -2815,7 +2816,7 @@
               <ChartLegend items={[
                 { label: "Mean QoL (1–5, left)", color: "#38bdf8" },
                 { label: "Doses / day", color: "#334155", bar: true },
-                pick && { label: `${met}${lag === -1 ? " (day before)" : lag === 1 ? " (day after)" : ""} (right)`, color: "#a3e635", dashed: true },
+                pick && { label: `${metricLabel(src + "/" + met)}${lag === -1 ? " (day before)" : lag === 1 ? " (day after)" : ""} (right)`, color: "#a3e635", dashed: true },
               ]} />
               <DualAxisChart
                 rows={rows}
@@ -2825,7 +2826,7 @@
               />
               {pick && (
                 <div style={{ fontSize: 12, color: "#cbd5e1", marginTop: 8, padding: "8px 10px", background: "#0f172a", borderRadius: 8 }}>
-                  <strong style={{ color: "#a3e635" }}>{met}</strong>{lag === -1 ? " (day before)" : lag === 1 ? " (day after)" : ""} vs QoL: {describeCorrelation(corr)}
+                  <strong style={{ color: "#a3e635" }}>{metricLabel(src + "/" + met)}</strong>{lag === -1 ? " (day before)" : lag === 1 ? " (day after)" : ""} vs QoL: {describeCorrelation(corr)}
                   <div style={{ color: "#64748b", marginTop: 2 }}>Spearman rank correlation over days with both values. Correlation isn't cause; use it to pick what to test deliberately.</div>
                 </div>
               )}
@@ -3132,6 +3133,57 @@
       );
     }
 
+    // Metrics shown in the Trends overlay picker by default (settings.trendMetrics overrides). Under ten, chosen for
+    // being the ones most likely to move with QoL over months: sleep, recovery, dose-sensitive tests, gait.
+    const DEFAULT_TREND_METRICS = ["oura/sleep_score", "oura/avg_hrv", "oura/total_sleep_h", "oura/readiness_score", "hae/resting_heart_rate",
+      "hae/walking_double_support_percentage", "motor/tremor_score", "motor/tap_score", "motor/ddk_score"];
+    const METRIC_LABELS = {
+      "oura/sleep_score": "Sleep score (Oura)", "oura/avg_hrv": "Night HRV (Oura)", "oura/total_sleep_h": "Sleep hours (Oura)", "oura/deep_h": "Deep sleep (Oura)",
+      "oura/readiness_score": "Readiness (Oura)", "oura/lowest_hr": "Lowest night HR (Oura)", "oura/temperature_deviation": "Temp deviation (Oura)", "oura/steps": "Steps (Oura)",
+      "oura/stress_high_min": "Stress minutes (Oura)", "hae/resting_heart_rate": "Resting HR (Watch)", "hae/heart_rate_variability": "Daytime HRV (Watch)", "hae/heart_rate_avg": "Hourly HR avg (Watch)",
+      "hae/step_count": "Steps (Watch)", "hae/walking_speed": "Walking speed", "hae/walking_step_length": "Step length", "hae/walking_double_support_percentage": "Double support %",
+      "hae/walking_asymmetry_percentage": "Walking asymmetry %", "hae/sleep_analysis_totalsleep": "Sleep hours (Watch)", "hae/respiratory_rate": "Respiratory rate (Watch)",
+      "motor/tremor_score": "Tremor score", "motor/tremor_amp_cm": "Tremor amplitude (cm)", "motor/tap_score": "Tapping score", "motor/tap_rate": "Taps / s",
+      "motor/ddk_score": "Pa-ta-ka score", "motor/ddk_rate": "Pa-ta-ka syll / s", "motor/voice_score": "Voice score", "motor/voice_hnr": "Voice HNR", "motor/voice_ppe": "Voice PPE",
+      "motor/voice_jitter_pct": "Voice jitter %", "motor/voice_int_slope": "Voice loudness slope", "motor/read_score": "Reading score", "motor/read_f0_sd_st": "Reading pitch variability",
+      "motor/spiral_error_pct": "Spiral deviation %", "motor/spiral_tremor_share": "Spiral tremor share",
+    };
+    const metricLabel = (k) => METRIC_LABELS[k] || k.replace("/", " · ");
+
+    function TrendMetricsCard({ settings, onUpdate }) {
+      const [metrics] = useJson("/api/metrics", []);
+      const enabled = new Set(settings.trendMetrics || DEFAULT_TREND_METRICS);
+      const toggle = (k) => { const next = new Set(enabled); next.has(k) ? next.delete(k) : next.add(k); onUpdate({ ...settings, trendMetrics: [...next] }); };
+      const groups = {};
+      (metrics || []).forEach((m) => { const k = m.source + "/" + m.metric; (groups[m.source] = groups[m.source] || []).push([k, m.rows]); });
+      return (
+        <div className="card">
+          <div className="card-header">
+            <div>
+              <div className="card-title">Trend metrics</div>
+              <div className="card-subtitle">Which synced metrics appear in the Trends overlay picker. Fewer is better; {enabled.size} selected.</div>
+            </div>
+          </div>
+          <div className="controls-row" style={{ gap: 8 }}>
+            <button type="button" className="pill-btn" onClick={() => onUpdate({ ...settings, trendMetrics: DEFAULT_TREND_METRICS })}>Reset to recommended</button>
+          </div>
+          {Object.entries(groups).map(([src, list]) => (
+            <div key={src} style={{ marginTop: 8 }}>
+              <div style={{ fontSize: 11, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.04em", marginBottom: 4 }}>{src}</div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 4 }}>
+                {list.map(([k, rows]) => (
+                  <label key={k} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, padding: "4px 6px", background: enabled.has(k) ? "rgba(56,189,248,0.1)" : "transparent", borderRadius: 6, cursor: "pointer" }}>
+                    <input type="checkbox" checked={enabled.has(k)} onChange={() => toggle(k)} />
+                    <span style={{ flex: 1 }}>{metricLabel(k)}</span>
+                  </label>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+      );
+    }
+
     const TABS = [["qol", "QoL", "◉"], ["tests", "Tests", "✚"], ["trends", "Trends", "↗"], ["stats", "Stats", "Σ"], ["settings", "Settings", "⚙"]];
     const TAB_TAGLINES = { qol: "Track meds and QoL, one ring per day.", tests: "Short objective tests. Same conditions each time.", trends: "What moves with what.", stats: "The numbers behind the charts.", settings: "Integrations, keys, data." };
 
@@ -3152,44 +3204,60 @@
       );
     }
 
-    // ---------- Stats tab: latest, 7/14/30-day means, min/max/SD per metric, from /api/stats ----------
+    // ---------- Stats tab ----------
+    // [key, label, decimals, direction, kind]  direction: 1 = higher is better, -1 = lower is better, 0 = neutral (no colour)
     const STAT_GROUPS = [
-      ["QoL & doses", [["qol", "Mean QoL (1–5)", 2], ["doses", "Doses / day", 1], ["rated", "Rated blocks / day", 1]]],
-      ["Test scores (1–5)", [["motor/tremor_score", "Tremor", 1], ["motor/tap_score", "Tapping", 1], ["motor/ddk_score", "Pa-ta-ka", 1], ["motor/voice_score", "Voice", 1], ["motor/read_score", "Reading", 1]]],
-      ["Test measures", [["motor/tremor_amp_cm", "Tremor amplitude (cm)", 2], ["motor/tap_rate", "Taps / s", 2], ["motor/ddk_rate", "Pa-ta-ka syll / s", 2], ["motor/voice_hnr", "Voice HNR (dB)", 1], ["motor/voice_ppe", "Voice PPE", 3], ["motor/read_f0_sd_st", "Reading pitch var. (st)", 2], ["motor/spiral_error_pct", "Spiral deviation (%)", 1]]],
-      ["Oura", [["oura/sleep_score", "Sleep score", 0], ["oura/readiness_score", "Readiness", 0], ["oura/total_sleep_h", "Sleep (h)", 1], ["oura/deep_h", "Deep (h)", 1], ["oura/avg_hrv", "Night HRV (ms)", 0], ["oura/lowest_hr", "Lowest HR", 0], ["oura/temperature_deviation", "Temp dev (°C)", 2]]],
-      ["Watch", [["hae/resting_heart_rate", "Resting HR", 0], ["hae/heart_rate_variability", "Daytime HRV (ms)", 0], ["hae/step_count", "Steps", 0], ["hae/walking_speed", "Walking speed", 2], ["hae/walking_step_length", "Step length", 2], ["hae/walking_double_support_percentage", "Double support %", 1], ["hae/walking_asymmetry_percentage", "Asymmetry %", 1]]],
+      ["QoL & doses", [["qol", "Mean QoL (1–5)", 2, 1, "score"], ["doses", "Doses / day", 1, 0], ["rated", "Rated blocks / day", 1, 0]]],
+      ["Test scores (1–5)", [["motor/tremor_score", "Tremor", 1, 1, "score"], ["motor/tap_score", "Tapping", 1, 1, "score"], ["motor/ddk_score", "Pa-ta-ka", 1, 1, "score"], ["motor/voice_score", "Voice", 1, 1, "score"], ["motor/read_score", "Reading", 1, 1, "score"]]],
+      ["Motor measures", [["motor/tremor_amp_cm", "Tremor amplitude (cm)", 2, -1], ["motor/tap_rate", "Taps / s", 2, 1], ["motor/tap_cv", "Tapping rhythm CV", 2, -1], ["motor/spiral_error_pct", "Spiral deviation (%)", 1, -1], ["motor/spiral_tremor_share", "Spiral tremor share", 2, -1]]],
+      ["Voice measures", [["motor/ddk_rate", "Pa-ta-ka syll / s", 2, 1], ["motor/ddk_cv", "Pa-ta-ka rhythm CV", 2, -1], ["motor/voice_hnr", "Voice HNR (dB)", 1, 1], ["motor/voice_jitter_pct", "Voice jitter (%)", 2, -1], ["motor/voice_ppe", "Voice PPE", 3, -1], ["motor/voice_int_slope", "Voice loudness slope (dB/s)", 2, 1], ["motor/read_f0_sd_st", "Reading pitch var. (st)", 2, 1], ["motor/read_rate", "Reading rate (/s)", 2, 1]]],
+      ["Oura", [["oura/sleep_score", "Sleep score", 0, 1], ["oura/readiness_score", "Readiness", 0, 1], ["oura/total_sleep_h", "Sleep (h)", 1, 1], ["oura/deep_h", "Deep (h)", 1, 1], ["oura/avg_hrv", "Night HRV (ms)", 0, 1], ["oura/lowest_hr", "Lowest HR", 0, -1], ["oura/temperature_deviation", "Temp dev (°C)", 2, 0]]],
+      ["Watch", [["hae/resting_heart_rate", "Resting HR", 0, -1], ["hae/heart_rate_variability", "Daytime HRV (ms)", 0, 1], ["hae/step_count", "Steps", 0, 1], ["hae/walking_speed", "Walking speed", 2, 1], ["hae/walking_step_length", "Step length", 2, 1], ["hae/walking_double_support_percentage", "Double support %", 1, -1], ["hae/walking_asymmetry_percentage", "Asymmetry %", 1, -1]]],
     ];
+    // Relative position of the latest value against the baseline as a 1–5 level: 3 = about baseline,
+    // 1–2 below (worse), 4–5 above (better), taking the metric's direction into account.
+    function relLevel(r, dir) {
+      if (!r || r.last == null || !r.baseline || !dir) return null;
+      const z = ((r.last - r.baseline.mean) / (r.baseline.sd || 1e-9)) * dir;
+      return z < -1.5 ? 1 : z < -0.5 ? 2 : z <= 0.5 ? 3 : z <= 1.5 ? 4 : 5;
+    }
     function StatsTab() {
       const keys = STAT_GROUPS.flatMap(([, rows]) => rows.map((r) => r[0]));
       const [data, err] = useJson(`/api/stats?metrics=${encodeURIComponent(keys.join(","))}`, []);
       const fmt = (v, d) => (v == null ? "–" : Number(v).toFixed(d));
+      const scoreColor = (v) => (v == null ? "inherit" : ratingColor(Math.max(1, Math.min(5, Math.round(v)))));
       return (
         <>
+          <div className="card" style={{ padding: "10px 14px" }}>
+            <div className="card-subtitle">Latest value coloured relative to your baseline (mean of days 8–90 ago): <span style={{ color: ratingColor(3) }}>■</span> about usual, <span style={{ color: ratingColor(1) }}>■</span><span style={{ color: ratingColor(2) }}>■</span> worse, <span style={{ color: ratingColor(4) }}>■</span><span style={{ color: ratingColor(5) }}>■</span> better. 1–5 scores and QoL are coloured on their own scale.</div>
+          </div>
           {err && <div className="card"><div className="card-subtitle">Couldn't load stats ({err}).</div></div>}
           {STAT_GROUPS.map(([group, rows]) => {
             const present = rows.filter(([k]) => data && data[k] && data[k].n30 > 0);
             if (data && !present.length) return null;
             return (
               <div className="card" key={group}>
-                <div className="card-header"><div><div className="card-title">{group}</div><div className="card-subtitle">Daily values; means over the last 7, 14 and 30 days; min, max and SD over 30 days.</div></div></div>
+                <div className="card-header"><div><div className="card-title">{group}</div><div className="card-subtitle">Daily values; means over the last 7, 14 and 30 days; min, max and SD over 30 days; baseline = days 8–90 ago.</div></div></div>
                 <div className="stats-list">
-                  {(data ? present : rows).map(([k, label, d]) => {
+                  {(data ? present : rows).map(([k, label, d, dir, kind]) => {
                     const r = data && data[k];
+                    const isScore = kind === "score";
+                    const level = isScore ? (r && r.last) : relLevel(r, dir);
+                    const color = isScore ? scoreColor(r && r.last) : level ? ratingColor(level) : "inherit";
                     return (
                       <div className="stat" key={k}>
                         <div className="stat-top">
-                          <div className="stats-label">{label}<div className="stats-n">{r ? `${r.n30} of 30 days` : ""}</div></div>
-                          <div className="stat-last">{fmt(r && r.last, d)}</div>
+                          <div className="stats-label">{label}<div className="stats-n">{r ? `${r.n30} of 30 days` : ""}{r && r.baseline ? ` · baseline ${fmt(r.baseline.mean, d)} ± ${fmt(r.baseline.sd, d)} (${r.baseline.n} d)` : r ? " · baseline n/a yet" : ""}</div></div>
+                          <div className="stat-last" style={{ color }}>{fmt(r && r.last, d)}</div>
                           <div>{r && r.series && r.series.length > 1 && (
                             <svg viewBox="0 0 90 26" style={{ width: 90, height: 26, display: "block" }}>
                               {(() => { const v = r.series.map((p) => p[1]); const lo = Math.min(...v), hi = Math.max(...v); const x = (i) => 2 + (86 * i) / Math.max(1, v.length - 1); const y = (q) => 23 - (20 * (q - lo)) / (hi - lo || 1);
-                                return <><path d={"M" + v.map((q, i) => `${x(i).toFixed(1)} ${y(q).toFixed(1)}`).join(" L")} fill="none" stroke="#38bdf8" strokeWidth="1.3" /><circle cx={x(v.length - 1)} cy={y(v[v.length - 1])} r="2" fill="#38bdf8" /></>; })()}
+                                return <><path d={"M" + v.map((q, i) => `${x(i).toFixed(1)} ${y(q).toFixed(1)}`).join(" L")} fill="none" stroke="#38bdf8" strokeWidth="1.3" /><circle cx={x(v.length - 1)} cy={y(v[v.length - 1])} r="2" fill={color === "inherit" ? "#38bdf8" : color} /></>; })()}
                             </svg>)}</div>
                         </div>
                         <div className="stat-row">
                           {[["7d", r && r.m7], ["14d", r && r.m14], ["30d", r && r.m30], ["min", r && r.min], ["max", r && r.max], ["sd", r && r.sd]].map(([l, v]) => (
-                            <div key={l} className="stat-chip"><span>{l}</span><strong>{fmt(v, d)}</strong></div>
+                            <div key={l} className="stat-chip"><span>{l}</span><strong style={{ color: isScore && l !== "sd" ? scoreColor(v) : "inherit" }}>{fmt(v, d)}</strong></div>
                           ))}
                         </div>
                       </div>
@@ -3208,7 +3276,7 @@
       const [days, setDays] = useState(loadDaysFromLocal);
       const [selectedDate, setSelectedDate] = useState(() => new Date());
       const [tab, setTab] = useState(() => { try { return localStorage.getItem("pdm-tab") || "qol"; } catch { return "qol"; } });
-      useEffect(() => { try { localStorage.setItem("pdm-tab", tab); } catch {} }, [tab]);
+      useEffect(() => { try { localStorage.setItem("pdm-tab", tab); } catch {} window.scrollTo({ top: 0, left: 0, behavior: "instant" }); }, [tab]);
       const [segmentModalState, setSegmentModalState] = useState({
         open: false,
         index: null,
@@ -3404,7 +3472,6 @@
             </div>
           </div>
 
-              <DayVitalsCard dateKey={dateKey} days={days} />
               <QoLSummaryCard days={days} onCellClick={handleSummaryCellClick} selectedKey={dateKey} />
             </>
           )}
@@ -3426,7 +3493,13 @@
 
           {tab === "trends" && (
             <>
-              <TrendsCard />
+              <div className="day-nav" style={{ marginTop: 0 }}>
+                <button className="day-nav-btn" type="button" onClick={() => goToOffsetDay(-1)}><span>←</span> <span>Prev</span></button>
+                <div className="day-nav-date" style={{ textDecoration: "none", cursor: "default" }}>{formatPrettyDate(selectedDate)}</div>
+                <button className="day-nav-btn" type="button" onClick={() => goToOffsetDay(1)}><span>Next</span> <span>→</span></button>
+              </div>
+              <DayVitalsCard dateKey={dateKey} days={days} />
+              <TrendsCard settings={settings} />
               <VitalsTrendsCard />
               <WorkoutsCard />
             </>
@@ -3437,6 +3510,7 @@
           {tab === "settings" && (
             <>
               <SettingsCard settings={settings} onUpdate={(next) => setSettings(next)} />
+              <TrendMetricsCard settings={settings} onUpdate={(next) => setSettings(next)} />
               <IntegrationsCard />
               <ApiKeysCard />
               <DataCard days={days} setDays={setDays} settings={settings} />

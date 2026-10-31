@@ -58,8 +58,10 @@ over 14 h are dropped as merged nights. `repairCumulative()` runs at boot to cle
 
 ## UI
 Five tabs (bottom bar on phones, top bar on desktop), remembered per device: QoL (day view, ring, day vitals, 7-day grid),
-Tests (Motor and Voice sections, collapsible), Trends, Stats (`/api/stats`: last, 7/14/30-day means, min/max/SD, 30-day
-sparkline per metric), Settings. Checkpoint before the tabbed layout: branch `checkpoint/0.1-qolAndTests`.
+Tests (Motor and Voice sections, collapsible), Trends (Day vitals first), Stats (`/api/stats`: last, 7/14/30-day means,
+min/max/SD, 30-day sparkline, baseline = mean±SD of days 8–90 ago; latest value coloured on the QoL palette relative to
+baseline, scores on their own 1–5 scale), Settings (incl. Trend metrics picker; `settings.trendMetrics` overrides
+`DEFAULT_TREND_METRICS`). Placeholder days (no ratings, no doses) are not stored. Checkpoint before the tabbed layout: branch `checkpoint/0.1-qolAndTests`.
 
 ## Backlog
 See `docs/BACKLOG.md`.
