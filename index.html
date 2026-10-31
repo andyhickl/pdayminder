@@ -1613,6 +1613,179 @@
       return `${strength}${a < 0.2 ? "" : " " + dir} relationship (r = ${c.r.toFixed(2)}, ${c.n} days; ${conf}).`;
     }
 
+    // ---------- Tremor test: 20 s of phone accelerometer, scored on 3.5–7.5 Hz band power ----------
+    const TREMOR_SECONDS = 20;
+    function analyzeTremor(samples) {
+      // samples: [{t (ms), x, y, z}], gravity removed when the browser provides it.
+      // Each axis is resampled to 50 Hz, detrended, Hann-windowed and transformed; power spectra are summed
+      // across axes (summing powers keeps frequencies intact, unlike taking the vector magnitude first).
+      if (samples.length < 100) return null;
+      const t0 = samples[0].t, dur = (samples[samples.length - 1].t - t0) / 1000;
+      const fs = 50, n = Math.floor(dur * fs);
+      const freqs = []; for (let f = 1; f <= 15.0001; f += 0.1) freqs.push(Number(f.toFixed(1)));
+      const power = new Float64Array(freqs.length);
+      let sumSq = 0;
+      for (const axis of ["x", "y", "z"]) {
+        const u = new Float64Array(n);
+        let j = 0;
+        for (let i = 0; i < n; i++) {
+          const tt = t0 + (i / fs) * 1000;
+          while (j < samples.length - 2 && samples[j + 1].t < tt) j++;
+          const a = samples[j], b = samples[j + 1];
+          const w = b.t === a.t ? 0 : (tt - a.t) / (b.t - a.t);
+          u[i] = a[axis] + (b[axis] - a[axis]) * w;
+        }
+        const mean = u.reduce((a, b) => a + b, 0) / n;
+        for (let i = 0; i < n; i++) { u[i] = (u[i] - mean) * (0.5 - 0.5 * Math.cos((2 * Math.PI * i) / (n - 1))); sumSq += u[i] * u[i]; }
+        freqs.forEach((f, fi) => {
+          let re = 0, im = 0; const k = (2 * Math.PI * f) / fs;
+          for (let i = 0; i < n; i++) { re += u[i] * Math.cos(k * i); im -= u[i] * Math.sin(k * i); }
+          power[fi] += (re * re + im * im) / n;
+        });
+      }
+      const total = power.reduce((a, b) => a + b, 0) || 1e-12;
+      let band = 0, peakI = 0;
+      freqs.forEach((f, i) => { if (f >= 3.5 && f <= 7.5) band += power[i]; if (power[i] > power[peakI]) peakI = i; });
+      const hannGain = 2.67; // 1 / mean(hann^2)
+      const rmsBand = Math.sqrt((band / n) * 2 * hannGain);
+      const rmsAll = Math.sqrt((sumSq / n) * hannGain);
+      const pmax = Math.max(...power) || 1;
+      return {
+        seconds: Number(dur.toFixed(1)), samples: samples.length, sampleRate: Number((samples.length / dur).toFixed(1)),
+        bandRatio: band / total, peakHz: freqs[peakI], rmsBand, rmsAll,
+        spectrum: freqs.map((f, i) => [f, power[i] / pmax]),
+      };
+    }
+
+    function TremorTestCard({ onSaved }) {
+      const [phase, setPhase] = useState("idle"); // idle | ready | recording | done | error
+      const [hand, setHand] = useState(() => { try { return localStorage.getItem("pdm-tremor-hand") || "right"; } catch { return "right"; } });
+      const [posture, setPosture] = useState("rest");
+      const [left, setLeft] = useState(TREMOR_SECONDS);
+      const [result, setResult] = useState(null);
+      const [note, setNote] = useState("");
+      const [msg, setMsg] = useState("");
+      const samples = useRef([]);
+      const [history] = useJson("/api/observations?source=motor&metric=tremor_rms&limit=60", [phase]);
+      // Laptops and desktops don't expose motion sensors to the browser; only offer the test on a phone/tablet.
+      const isHandheld = useMemo(() => {
+        try { return window.matchMedia("(pointer: coarse)").matches || /iPhone|iPad|Android/i.test(navigator.userAgent); } catch { return false; }
+      }, []);
+
+      useEffect(() => { try { localStorage.setItem("pdm-tremor-hand", hand); } catch {} }, [hand]);
+
+      const start = async () => {
+        setMsg("");
+        try {
+          if (typeof DeviceMotionEvent !== "undefined" && typeof DeviceMotionEvent.requestPermission === "function") {
+            const r = await DeviceMotionEvent.requestPermission();
+            if (r !== "granted") { setMsg("Motion access was denied. Allow it in Settings → Safari → Motion & Orientation Access."); return; }
+          }
+        } catch (e) { setMsg("Couldn't request motion access: " + e.message); return; }
+        if (typeof DeviceMotionEvent === "undefined") { setMsg("This device/browser doesn't expose motion sensors. Use the phone."); return; }
+        samples.current = [];
+        setPhase("recording"); setLeft(TREMOR_SECONDS);
+        const t0 = performance.now();
+        const handler = (e) => {
+          const a = e.acceleration && e.acceleration.x != null ? e.acceleration : e.accelerationIncludingGravity;
+          if (!a) return;
+          samples.current.push({ t: performance.now(), x: a.x || 0, y: a.y || 0, z: a.z || 0 });
+        };
+        window.addEventListener("devicemotion", handler);
+        const tick = setInterval(() => setLeft(Math.max(0, Math.ceil(TREMOR_SECONDS - (performance.now() - t0) / 1000))), 250);
+        setTimeout(() => {
+          window.removeEventListener("devicemotion", handler); clearInterval(tick);
+          const res = analyzeTremor(samples.current);
+          if (!res) { setPhase("error"); setMsg(`Not enough motion samples (${samples.current.length}). On iPhone this needs Safari with Motion & Orientation Access on.`); return; }
+          setResult(res); setPhase("done");
+        }, TREMOR_SECONDS * 1000 + 100);
+      };
+
+      const save = async () => {
+        const ts = new Date().toISOString();
+        const raw = { hand, posture, seconds: result.seconds, samples: result.samples, sampleRate: result.sampleRate, note: note || null, peakHz: result.peakHz, rmsAll: result.rmsAll };
+        const items = [
+          { ts, source: "motor", metric: "tremor_rms", value: Number(result.rmsBand.toFixed(4)), raw },
+          { ts, source: "motor", metric: "tremor_band_ratio", value: Number(result.bandRatio.toFixed(4)), raw },
+          { ts, source: "motor", metric: "tremor_peak_hz", value: result.peakHz, raw },
+        ];
+        const r = await apiFetch("/api/observations", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(items) });
+        if (r.ok) { setPhase("idle"); setResult(null); setNote(""); setMsg("Saved."); onSaved && onSaved(); } else setMsg("Save failed.");
+      };
+
+      const verdict = (r) => r.bandRatio < 0.25 ? "little tremor-band energy" : r.bandRatio < 0.5 ? "some tremor-band energy" : "tremor-band dominated";
+      const hist = history ? [...history].reverse() : [];
+      return (
+        <div className="card">
+          <div className="card-header">
+            <div>
+              <div className="card-title">Tremor test</div>
+              <div className="card-subtitle">20 s on the phone's accelerometer. Scores energy in the 3.5–7.5 Hz band where parkinsonian tremor sits.</div>
+            </div>
+          </div>
+          {!isHandheld && phase !== "done" && (
+            <div className="card-subtitle" style={{ marginTop: 6 }}>Run this on your phone: it needs the accelerometer, which laptops and desktops don't expose to the browser.</div>
+          )}
+          {isHandheld && phase !== "recording" && phase !== "done" && (
+            <>
+              <div className="controls-row" style={{ gap: 8, flexWrap: "wrap" }}>
+                {["left", "right"].map((h) => <button key={h} type="button" className={"pill-btn" + (hand === h ? " primary" : "")} onClick={() => setHand(h)}>{h} hand</button>)}
+                {[["rest", "rest (hand on lap)"], ["postural", "postural (arm out)"]].map(([k, l]) => <button key={k} type="button" className={"pill-btn" + (posture === k ? " primary" : "")} onClick={() => setPosture(k)}>{l}</button>)}
+              </div>
+              <div className="card-subtitle" style={{ marginTop: 6 }}>
+                Hold the phone loosely in your {hand} hand{posture === "rest" ? ", hand resting on your lap, and stay still" : ", arm held straight out, and stay still"}. Tap start, then don't touch the screen until it finishes.
+              </div>
+              <div className="controls-row"><button type="button" className="pill-btn primary" onClick={start}>Start 20-second test</button></div>
+            </>
+          )}
+          {phase === "recording" && (
+            <div style={{ textAlign: "center", padding: "18px 0" }}>
+              <div style={{ fontSize: 48, fontWeight: 700 }}>{left}</div>
+              <div className="card-subtitle">Hold still… {hand} hand, {posture}</div>
+            </div>
+          )}
+          {phase === "done" && result && (
+            <>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8, marginTop: 6 }}>
+                {[["Tremor RMS", result.rmsBand.toFixed(3) + " m/s²"], ["Band share", Math.round(result.bandRatio * 100) + "%"], ["Peak", result.peakHz.toFixed(1) + " Hz"]].map(([k, v]) => (
+                  <div key={k} style={{ background: "#0f172a", borderRadius: 8, padding: "8px 10px" }}>
+                    <div style={{ fontSize: 11, color: "#94a3b8" }}>{k}</div>
+                    <div style={{ fontSize: 16, fontWeight: 600 }}>{v}</div>
+                  </div>
+                ))}
+              </div>
+              <svg viewBox="0 0 600 80" style={{ width: "100%", height: 80, display: "block", marginTop: 8 }}>
+                <rect x={(3.5 - 1) / 14 * 600} y="0" width={(7.5 - 3.5) / 14 * 600} height="64" fill="#a3e635" opacity="0.12" />
+                <path d={"M" + result.spectrum.map(([f, p]) => `${((f - 1) / 14 * 600).toFixed(1)} ${(64 - p * 60).toFixed(1)}`).join(" L")} fill="none" stroke="#a3e635" strokeWidth="1.5" />
+                {[1, 4, 7, 10, 13].map((f) => <text key={f} x={(f - 1) / 14 * 600} y="78" fontSize="10" fill="#64748b" textAnchor="middle">{f} Hz</text>)}
+              </svg>
+              <div className="card-subtitle">{verdict(result)} · {result.samples} samples at {result.sampleRate} Hz over {result.seconds} s · {hand} hand, {posture}</div>
+              <div className="controls-row" style={{ gap: 8, marginTop: 6 }}>
+                <input value={note} onChange={(e) => setNote(e.target.value)} placeholder="Note (e.g. 40 min after dose)"
+                  style={{ flex: 1, background: "#0f172a", color: "#e2e8f0", border: "1px solid #334155", borderRadius: 8, padding: "8px 10px", fontSize: 14 }} />
+                <button type="button" className="pill-btn primary" onClick={save}>Save</button>
+                <button type="button" className="pill-btn" onClick={() => { setPhase("idle"); setResult(null); }}>Discard</button>
+              </div>
+            </>
+          )}
+          {msg && <div className="card-subtitle" style={{ marginTop: 6, color: msg === "Saved." ? "#a3e635" : "#f87171" }}>{msg}</div>}
+          {hist.length > 1 && (
+            <div style={{ marginTop: 10 }}>
+              <div style={{ fontSize: 11, color: "#94a3b8" }}>Tremor RMS, last {hist.length} tests</div>
+              <svg viewBox="0 0 600 60" style={{ width: "100%", height: 60, display: "block" }}>
+                {(() => { const vals = hist.map((h) => h.value); const hi = Math.max(...vals) || 1; const x = (i) => 10 + (580 * i) / Math.max(1, hist.length - 1); const y = (v) => 52 - (46 * v) / hi;
+                  return <>
+                    <path d={"M" + hist.map((h, i) => `${x(i).toFixed(1)} ${y(h.value).toFixed(1)}`).join(" L")} fill="none" stroke="#f472b6" strokeWidth="1.5" />
+                    {hist.map((h, i) => <circle key={i} cx={x(i)} cy={y(h.value)} r="2.5" fill={h.raw && h.raw.hand === "left" ? "#60a5fa" : "#f472b6"}><title>{new Date(h.ts).toLocaleString()} · {h.raw && h.raw.hand} {h.raw && h.raw.posture} · {h.value.toFixed(3)}{h.raw && h.raw.note ? " · " + h.raw.note : ""}</title></circle>)}
+                  </>; })()}
+              </svg>
+              <div style={{ fontSize: 10, color: "#64748b" }}>pink = right hand, blue = left. Compare like with like (same hand and posture).</div>
+            </div>
+          )}
+        </div>
+      );
+    }
+
     function TrendsCard() {
       const [span, setSpan] = useState(30);
       const [pick, setPick] = useState("");
@@ -2199,6 +2372,7 @@
           </div>
 
           <DayVitalsCard dateKey={dateKey} days={days} />
+          <TremorTestCard />
           <TrendsCard />
           <VitalsTrendsCard />
           <QoLSummaryCard days={days} onCellClick={handleSummaryCellClick} selectedKey={dateKey} />
