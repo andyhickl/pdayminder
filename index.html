@@ -1302,44 +1302,63 @@
       return [data, err];
     }
 
-    function LineChart({ rows, yKey, color, yMin, yMax, height = 120, label, bars, barKey }) {
-      const W = 600, H = height, padL = 30, padR = 10, padT = 8, padB = 20;
+    // Two series, shared x (days), independent y axes. Left = primary, right = overlay. Bars = optional counts.
+    function DualAxisChart({ rows, left, right, bars, height = 150 }) {
+      const W = 600, H = height, padL = 32, padR = right ? 36 : 10, padT = 8, padB = 20;
       const n = rows.length;
-      const vals = rows.map((r) => (r[yKey] == null ? null : Number(r[yKey])));
-      const present = vals.filter((v) => v != null);
-      const lo = yMin != null ? yMin : Math.min(...present, 0);
-      const hi = yMax != null ? yMax : Math.max(...present, 1);
       const x = (i) => padL + (n <= 1 ? 0 : (i * (W - padL - padR)) / (n - 1));
-      const y = (v) => padT + (H - padT - padB) * (1 - (v - lo) / (hi - lo || 1));
-      let d = "", pen = false;
-      vals.forEach((v, i) => {
-        if (v == null) { pen = false; return; }
-        d += (pen ? " L" : " M") + x(i).toFixed(1) + " " + y(v).toFixed(1);
-        pen = true;
-      });
-      const barMax = bars ? Math.max(1, ...rows.map((r) => Number(r[barKey]) || 0)) : 1;
-      const ticks = [lo, (lo + hi) / 2, hi];
+      const series = (cfg) => {
+        if (!cfg) return null;
+        const vals = rows.map((r) => (r[cfg.key] == null ? null : Number(r[cfg.key])));
+        const present = vals.filter((v) => v != null);
+        if (!present.length) return { vals, lo: 0, hi: 1, empty: true };
+        let lo = cfg.min != null ? cfg.min : Math.min(...present);
+        let hi = cfg.max != null ? cfg.max : Math.max(...present);
+        if (cfg.min == null && cfg.max == null) { const pad = (hi - lo || Math.abs(hi) || 1) * 0.08; lo -= pad; hi += pad; }
+        const y = (v) => padT + (H - padT - padB) * (1 - (v - lo) / (hi - lo || 1));
+        let d = "", pen = false;
+        vals.forEach((v, i) => { if (v == null) { pen = false; return; } d += (pen ? " L" : " M") + x(i).toFixed(1) + " " + y(v).toFixed(1); pen = true; });
+        return { vals, lo, hi, y, d };
+      };
+      const L = series(left), R = series(right);
+      const fmt = (v) => (Math.abs(v) >= 100 ? Math.round(v) : Number.isInteger(v) ? v : v.toFixed(1));
+      const barMax = bars ? Math.max(1, ...rows.map((r) => Number(r[bars.key]) || 0)) : 1;
       return (
         <svg viewBox={`0 0 ${W} ${H}`} style={{ width: "100%", height: H, display: "block" }}>
-          {ticks.map((t, i) => (
+          {L && [L.lo, (L.lo + L.hi) / 2, L.hi].map((t, i) => (
             <g key={i}>
-              <line x1={padL} x2={W - padR} y1={y(t)} y2={y(t)} stroke="#1f2937" strokeWidth="1" />
-              <text x={padL - 4} y={y(t) + 4} fontSize="10" fill="#64748b" textAnchor="end">{Number.isInteger(t) ? t : t.toFixed(1)}</text>
+              <line x1={padL} x2={W - padR} y1={L.y(t)} y2={L.y(t)} stroke="#1f2937" />
+              <text x={padL - 4} y={L.y(t) + 4} fontSize="10" fill={left.color} textAnchor="end">{fmt(t)}</text>
             </g>
           ))}
+          {R && !R.empty && [R.lo, (R.lo + R.hi) / 2, R.hi].map((t, i) => (
+            <text key={i} x={W - padR + 4} y={R.y(t) + 4} fontSize="10" fill={right.color}>{fmt(t)}</text>
+          ))}
           {bars && rows.map((r, i) => {
-            const v = Number(r[barKey]) || 0;
-            if (!v) return null;
+            const v = Number(r[bars.key]) || 0; if (!v) return null;
             const h = ((H - padT - padB) * v) / barMax;
             return <rect key={i} x={x(i) - 3} y={H - padB - h} width="6" height={h} fill="#334155" rx="1" />;
           })}
-          <path d={d} fill="none" stroke={color} strokeWidth="2" strokeLinejoin="round" />
-          {vals.map((v, i) => v == null ? null : <circle key={i} cx={x(i)} cy={y(v)} r="2.5" fill={color} />)}
+          {R && !R.empty && <path d={R.d} fill="none" stroke={right.color} strokeWidth="1.5" strokeDasharray="4 3" />}
+          {R && !R.empty && R.vals.map((v, i) => v == null ? null : <circle key={i} cx={x(i)} cy={R.y(v)} r="2" fill={right.color} />)}
+          {L && <path d={L.d} fill="none" stroke={left.color} strokeWidth="2" strokeLinejoin="round" />}
+          {L && L.vals.map((v, i) => v == null ? null : <circle key={i} cx={x(i)} cy={L.y(v)} r="2.5" fill={left.color} />)}
           {rows.map((r, i) => (i % Math.ceil(n / 6) === 0 || i === n - 1) ? (
             <text key={i} x={x(i)} y={H - 5} fontSize="10" fill="#64748b" textAnchor="middle">{r.day.slice(5)}</text>
           ) : null)}
-          {label && <text x={W - padR} y={padT + 10} fontSize="10" fill={color} textAnchor="end">{label}</text>}
         </svg>
+      );
+    }
+    function ChartLegend({ items }) {
+      return (
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 14, fontSize: 11, color: "#94a3b8", margin: "6px 0 2px" }}>
+          {items.filter(Boolean).map((it) => (
+            <span key={it.label} style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
+              <span style={{ width: 14, height: it.bar ? 8 : 0, borderTop: it.bar ? 0 : `2px ${it.dashed ? "dashed" : "solid"} ${it.color}`, background: it.bar ? it.color : "none", display: "inline-block" }} />
+              {it.label}
+            </span>
+          ))}
+        </div>
       );
     }
 
@@ -1598,10 +1617,17 @@
               <div className="card-subtitle" style={{ marginBottom: 4 }}>
                 Mean QoL {meanQol} over {rated.length} rated days · {doses} doses logged
               </div>
-              <LineChart rows={rows} yKey="qol" color="#38bdf8" yMin={1} yMax={5} bars barKey="doses" label="QoL 1–5" />
-              {pick && (
-                <LineChart rows={rows} yKey="metric_value" color="#a3e635" height={110} label={met + " (daily mean)"} />
-              )}
+              <ChartLegend items={[
+                { label: "Mean QoL (1–5, left)", color: "#38bdf8" },
+                { label: "Doses / day", color: "#334155", bar: true },
+                pick && { label: `${met} (daily mean, right)`, color: "#a3e635", dashed: true },
+              ]} />
+              <DualAxisChart
+                rows={rows}
+                left={{ key: "qol", color: "#38bdf8", min: 1, max: 5 }}
+                right={pick ? { key: "metric_value", color: "#a3e635" } : null}
+                bars={{ key: "doses" }}
+              />
             </>
           )}
         </div>
