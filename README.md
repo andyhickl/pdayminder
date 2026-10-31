@@ -101,3 +101,14 @@ downsampled stroke (≤200 points) for review.
 Reference ranges on the card come from the UCI Parkinsons dataset (Little et al. 2008). Note from the UCI telemonitoring
 set (Tsanas 2009, 42 PD patients over ~6 months): classic jitter/shimmer/HNR separate PD from healthy at group level
 (AUC ~0.75–0.78) but show ~zero within-person correlation with motor UPDRS over time, so treat voice as a slow, low-weight signal.
+
+## Reading test (motor/read_*)
+Read a passage aloud (Rainbow Passage is the scored standard; five public-domain literary passages for variety, each
+with its own baseline). 10 ms frames, autocorrelation pitch on voiced frames, octave errors dropped (>7 st from median).
+Metrics: `read_f0_sd_st` (pitch SD in semitones; monopitch when low), `read_range_st` (p5–p95), `read_f0`, `read_rate`
+(envelope peaks/s), `read_pause_pct`, `read_seconds`, `read_score` (0–4 vs own baseline on the same passage).
+`raw.passage` tags the passage. sdF0 in read speech improved OFF→ON in Bern 2025.
+
+## Score scales
+All test scores are 0–4 with 0 = at or better than baseline/normal and 4 = worst (UPDRS direction): `tremor_updrs`,
+`tap_updrs`, `voice_score`, `ddk_score`, `read_score`. QoL ratings stay 1–5 with 5 = best.

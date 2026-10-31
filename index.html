@@ -1511,7 +1511,9 @@
       ["motor/tap_updrs", "Tapping, est. score (0–4)", "#0ea5e9", 1],
       ["motor/voice_score", "Voice vs baseline (0–4)", "#c084fc", 1],
       ["motor/ddk_rate", "Pa-ta-ka (syll/s)", "#e879f9", 2],
-      ["motor/ddk_score", "Pa-ta-ka vs baseline (0–3)", "#d946ef", 1],
+      ["motor/ddk_score", "Pa-ta-ka vs baseline (0–4)", "#d946ef", 1],
+      ["motor/read_f0_sd_st", "Reading pitch variability (st)", "#f0abfc", 2],
+      ["motor/read_score", "Reading vs baseline (0–4)", "#e879f9", 1],
       ["motor/voice_hnr", "Voice HNR (dB)", "#c084fc", 1],
       ["motor/voice_jitter_pct", "Voice jitter (%)", "#a78bfa", 2],
       ["motor/voice_ppe", "Voice PPE", "#d8b4fe", 3],
@@ -2282,10 +2284,10 @@
       const [msg, setMsg] = useState("");
       const audioRef = useRef(null);
       const [history] = useJson("/api/observations?source=motor&metric=ddk_rate&limit=60", [phase]);
-      const DDK_KEYS = [["ddk_rate", false], ["ddk_cv", true], ["ddk_decrement", true]];
+      const DDK_KEYS = [["ddk_rate", false], ["ddk_cv", true], ["ddk_decrement", true], ["ddk_loudness_cv", true]];
       useEffect(() => {
         if (phase !== "done" || !result) return;
-        loadHistory(DDK_KEYS.map((k) => k[0])).then((h) => setBase(baselineScore(DDK_KEYS.map(([k, w]) => ({ key: k, value: k === "ddk_rate" ? result.rate : k === "ddk_cv" ? result.cv : result.decrement, higherIsWorse: w })), h)));
+        loadHistory(DDK_KEYS.map((k) => k[0])).then((h) => setBase(baselineScore(DDK_KEYS.map(([k, w]) => ({ key: k, value: k === "ddk_rate" ? result.rate : k === "ddk_cv" ? result.cv : k === "ddk_decrement" ? result.decrement : result.loudnessCv, higherIsWorse: w })), h)));
       }, [phase]);
       const start = async () => {
         setMsg("");
@@ -2351,10 +2353,10 @@
                 ))}
               </div>
               <div style={{ background: "#0f172a", borderRadius: 8, padding: "8px 10px", marginTop: 8 }}>
-                <div style={{ fontSize: 11, color: "#94a3b8" }}>Score vs your own baseline (0–3)</div>
+                <div style={{ fontSize: 11, color: "#94a3b8" }}>Score vs your own baseline (0–4)</div>
                 {base == null ? <div style={{ fontSize: 13 }}>…</div> : base.score == null
                   ? <div style={{ fontSize: 13 }}>Building baseline: {base.n} of 5 tests saved. No score until then.</div>
-                  : <div style={{ fontSize: 16, fontWeight: 600 }}>{base.score} / 3 <span style={{ fontSize: 11, fontWeight: 400, color: "#94a3b8" }}>· of rate, rhythm, slowdown worse than your mean by over 1 SD ({base.n} prior tests)</span></div>}
+                  : <div style={{ fontSize: 16, fontWeight: 600 }}>{base.score} / 4 <span style={{ fontSize: 11, fontWeight: 400, color: "#94a3b8" }}>· of rate, rhythm, slowdown, loudness consistency worse than your mean by over 1 SD ({base.n} prior tests)</span></div>}
               </div>
               <svg viewBox="0 0 600 70" style={{ width: "100%", height: 70, display: "block", marginTop: 8 }}>
                 {(() => { const e = result.env; const hi = Math.max(...e) || 1; const x = (i) => 10 + (580 * i) / (e.length - 1); const y = (v) => 62 - (50 * v) / hi;
@@ -2379,6 +2381,185 @@
                 {(() => { const vals = hist.map((h) => h.value); const hi = Math.max(7, ...vals); const x = (i) => 10 + (580 * i) / Math.max(1, hist.length - 1); const y = (v) => 52 - (46 * v) / hi;
                   return <><path d={"M" + hist.map((h, i) => `${x(i).toFixed(1)} ${y(h.value).toFixed(1)}`).join(" L")} fill="none" stroke="#c084fc" strokeWidth="1.5" />
                     {hist.map((h, i) => <circle key={i} cx={x(i)} cy={y(h.value)} r="2.5" fill="#c084fc"><title>{new Date(h.ts).toLocaleString()} · {h.value.toFixed(2)}/s{h.raw && h.raw.note ? " · " + h.raw.note : ""}</title></circle>)}</>; })()}
+              </svg>
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    // ---------- Reading test: pitch variability (monopitch) and rate over a read passage ----------
+    const PASSAGES = [
+      { id: "rainbow", title: "The Rainbow Passage (standard)", standard: true, text: "When the sunlight strikes raindrops in the air, they act as a prism and form a rainbow. The rainbow is a division of white light into many beautiful colors. These take the shape of a long round arch, with its path high above, and its two ends apparently beyond the horizon. There is, according to legend, a boiling pot of gold at one end. People look, but no one ever finds it. When a man looks for something beyond his reach, his friends say he is looking for the pot of gold at the end of the rainbow." },
+      { id: "grandfather", title: "The Grandfather Passage", text: "You wished to know all about my grandfather. Well, he is nearly ninety-three years old; he dresses himself in an ancient black frock coat, usually minus several buttons; yet he still thinks as swiftly as ever. A long, flowing beard clings to his chin, giving those who observe him a pronounced feeling of the utmost respect. When he speaks, his voice is just a bit cracked and quivers a trifle. Twice each day he plays skillfully and with zest upon our small organ. Except in the winter when the ooze or snow or ice prevents, he slowly takes a short walk in the open air each day." },
+      { id: "walden", title: "Thoreau, Walden (1854)", text: "I went to the woods because I wished to live deliberately, to front only the essential facts of life, and see if I could not learn what it had to teach, and not, when I came to die, discover that I had not lived. I did not wish to live what was not life, living is so dear; nor did I wish to practise resignation, unless it was quite necessary. I wanted to live deep and suck out all the marrow of life, to live so sturdily and Spartan-like as to put to rout all that was not life." },
+      { id: "mobydick", title: "Melville, Moby-Dick (1851)", text: "Call me Ishmael. Some years ago, never mind how long precisely, having little or no money in my purse, and nothing particular to interest me on shore, I thought I would sail about a little and see the watery part of the world. It is a way I have of driving off the spleen and regulating the circulation. Whenever I find myself growing grim about the mouth; whenever it is a damp, drizzly November in my soul; then, I account it high time to get to sea as soon as I can." },
+      { id: "darwin", title: "Darwin, On the Origin of Species (1859)", text: "It is interesting to contemplate an entangled bank, clothed with many plants of many kinds, with birds singing on the bushes, with various insects flitting about, and with worms crawling through the damp earth, and to reflect that these elaborately constructed forms, so different from each other, and dependent on each other in so complex a manner, have all been produced by laws acting around us. There is grandeur in this view of life, with its several powers, having been originally breathed into a few forms or into one." },
+      { id: "twain", title: "Twain, Life on the Mississippi (1883)", text: "The face of the water, in time, became a wonderful book, a book that was a dead language to the uneducated passenger, but which told its mind to me without reserve, delivering its most cherished secrets as clearly as if it uttered them with a voice. And it was not a book to be read once and thrown aside, for it had a new story to tell every day. Throughout the long twelve hundred miles there was never a page that was void of interest, never one that you could leave unread without loss." },
+    ];
+    function analyzeReading(pcm, sampleRate) {
+      const frame = Math.round(sampleRate * 0.04), hop = Math.round(sampleRate * 0.01);
+      const minLag = Math.round(sampleRate / 400), maxLag = Math.round(sampleRate / 70);
+      const frames = [];
+      for (let st = 0; st + frame <= pcm.length; st += hop) { let e = 0; for (let i = 0; i < frame; i++) e += pcm[st + i] * pcm[st + i]; frames.push({ st, rms: Math.sqrt(e / frame) }); }
+      if (frames.length < 50) return null;
+      const maxRms = Math.max(...frames.map((f) => f.rms)); const speechThresh = Math.max(0.003, maxRms * 0.08);
+      let voicedN = 0;
+      for (const f of frames) {
+        f.speech = f.rms >= speechThresh; f.voiced = false;
+        if (!f.speech || f.rms < maxRms * 0.15) continue;
+        let mean = 0; for (let i = 0; i < frame; i++) mean += pcm[f.st + i]; mean /= frame;
+        let best = 0, bestLag = 0, e0 = 0; for (let i = 0; i < frame; i++) { const v = pcm[f.st + i] - mean; e0 += v * v; }
+        for (let lag = minLag; lag <= maxLag; lag += 2) {
+          let num = 0, e1 = 0; for (let i = 0; i + lag < frame; i += 2) { const a = pcm[f.st + i] - mean, b = pcm[f.st + i + lag] - mean; num += a * b; e1 += b * b; }
+          const r = num / Math.sqrt((e0 || 1e-12) * (e1 || 1e-12)); if (r > best) { best = r; bestLag = lag; }
+        }
+        if (best > 0.6) { f.voiced = true; f.f0 = sampleRate / bestLag; voicedN++; }
+      }
+      if (voicedN < 30) return { tooShort: true, voicedSeconds: voicedN * 0.01 };
+      // semitone pitch; drop octave errors (> 7 st from running median)
+      let f0s = frames.filter((f) => f.voiced).map((f) => f.f0);
+      const med = [...f0s].sort((a, b) => a - b)[Math.floor(f0s.length / 2)];
+      const st = f0s.map((f) => 12 * Math.log2(f / med)).filter((v) => Math.abs(v) < 7);
+      const meanSt = st.reduce((a, b) => a + b, 0) / st.length;
+      const sdSt = Math.sqrt(st.reduce((a, b) => a + (b - meanSt) ** 2, 0) / st.length);
+      const sorted = [...st].sort((a, b) => a - b); const rangeSt = sorted[Math.floor(0.95 * (sorted.length - 1))] - sorted[Math.floor(0.05 * (sorted.length - 1))];
+      // syllable-ish rate from envelope peaks of speech frames (10 ms), pauses = runs of non-speech >= 150 ms
+      const env = frames.map((f) => f.rms); const sm = env.map((v, i) => ((env[i - 1] || v) + v + (env[i + 1] || v)) / 3);
+      let peaks = 0; for (let i = 1; i < sm.length - 1; i++) if (sm[i] > sm[i - 1] && sm[i] >= sm[i + 1] && sm[i] > speechThresh * 1.5 && (i < 2 || sm[i] > sm[i - 2])) { peaks++; i += 8; }
+      let pauseFrames = 0, run = 0; frames.forEach((f) => { if (!f.speech) { run++; } else { if (run >= 15) pauseFrames += run; run = 0; } }); if (run >= 15) pauseFrames += run;
+      const first = frames.findIndex((f) => f.speech); let last = frames.length - 1; while (last > 0 && !frames[last].speech) last--;
+      const seconds = Math.max(0.01, (last - first) * 0.01);
+      return { seconds, meanF0: med * Math.pow(2, meanSt / 12), sdSt, rangeSt, rate: peaks / seconds, pausePct: pauseFrames / Math.max(1, last - first), voicedSeconds: voicedN * 0.01, st };
+    }
+
+    function ReadingTestCard() {
+      const [phase, setPhase] = useState("idle");
+      const [pid, setPid] = useState(() => { try { return localStorage.getItem("pdm-passage") || "rainbow"; } catch { return "rainbow"; } });
+      const [elapsed, setElapsed] = useState(0);
+      const [level, setLevel] = useState(0);
+      const [result, setResult] = useState(null);
+      const [base, setBase] = useState(null);
+      const [note, setNote] = useState("");
+      const [msg, setMsg] = useState("");
+      const rec = useRef(null);
+      const passage = PASSAGES.find((p) => p.id === pid) || PASSAGES[0];
+      const [history] = useJson(`/api/observations?source=motor&metric=read_f0_sd_st&limit=100`, [phase]);
+      useEffect(() => { try { localStorage.setItem("pdm-passage", pid); } catch {} }, [pid]);
+      const READ_KEYS = [["read_f0_sd_st", false], ["read_range_st", false], ["read_rate", false], ["read_pause_pct", true]];
+      useEffect(() => {
+        if (phase !== "done" || !result) return;
+        (async () => {
+          const out = {};
+          await Promise.all(READ_KEYS.map(async ([k]) => { const r = await apiFetch(`/api/observations?source=motor&metric=${k}&limit=100`); out[k] = r.ok ? (await r.json()).filter((o) => o.raw && o.raw.passage === passage.id).map((o) => o.value) : []; }));
+          const val = (k) => k === "read_f0_sd_st" ? result.sdSt : k === "read_range_st" ? result.rangeSt : k === "read_rate" ? result.rate : result.pausePct;
+          setBase(baselineScore(READ_KEYS.map(([k, w]) => ({ key: k, value: val(k), higherIsWorse: w })), out));
+        })();
+      }, [phase]);
+      const start = async () => {
+        setMsg("");
+        const AC = window.AudioContext || window.webkitAudioContext;
+        if (!AC || !navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) { setMsg("This browser doesn't support microphone capture."); return; }
+        const ctx = new AC(); const resumeP = ctx.resume();
+        let stream;
+        try { stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false } }); }
+        catch (e) { ctx.close(); setMsg("Microphone access denied or unavailable (" + e.message + ")."); return; }
+        try { await resumeP; } catch {}
+        if (ctx.state !== "running") { try { await ctx.resume(); } catch {} }
+        const src = ctx.createMediaStreamSource(stream); const proc = ctx.createScriptProcessor(2048, 1, 1); const gain = ctx.createGain(); gain.gain.value = 0;
+        const chunks = [];
+        proc.onaudioprocess = (e) => { const d = e.inputBuffer.getChannelData(0); chunks.push(new Float32Array(d)); let s2 = 0; for (let i = 0; i < d.length; i++) s2 += d[i] * d[i]; setLevel(Math.sqrt(s2 / d.length)); };
+        src.connect(proc); proc.connect(gain); gain.connect(ctx.destination);
+        const t0 = performance.now();
+        const tick = setInterval(() => setElapsed((performance.now() - t0) / 1000), 250);
+        rec.current = { ctx, src, proc, gain, stream, chunks, tick, t0 };
+        setPhase("recording");
+        setTimeout(() => { if (rec.current && rec.current.t0 === t0) stop(); }, 90000);
+      };
+      const stop = () => {
+        const r = rec.current; if (!r) return; rec.current = null;
+        clearInterval(r.tick); try { r.proc.disconnect(); r.src.disconnect(); r.gain.disconnect(); } catch {}
+        r.stream.getTracks().forEach((t) => t.stop()); const sr = r.ctx.sampleRate; r.ctx.close();
+        const total = r.chunks.reduce((a, c) => a + c.length, 0); const pcm = new Float32Array(total); let o = 0; r.chunks.forEach((c) => { pcm.set(c, o); o += c.length; });
+        const res = total ? analyzeReading(pcm, sr) : null;
+        if (!res || res.tooShort) { setPhase("idle"); setMsg(`Not enough voiced speech captured (${res ? res.voicedSeconds.toFixed(1) : 0} s). Read the whole passage at a normal volume, close to the phone.`); return; }
+        setBase(null); setResult(res); setPhase("done");
+      };
+      const save = async () => {
+        const ts = new Date().toISOString();
+        const raw = { passage: passage.id, note: note || null, seconds: Number(result.seconds.toFixed(1)), voicedSeconds: Number(result.voicedSeconds.toFixed(1)) };
+        const items = [["read_f0_sd_st", Number(result.sdSt.toFixed(3))], ["read_range_st", Number(result.rangeSt.toFixed(2))], ["read_f0", Number(result.meanF0.toFixed(1))], ["read_rate", Number(result.rate.toFixed(3))],
+          ["read_pause_pct", Number(result.pausePct.toFixed(4))], ["read_seconds", Number(result.seconds.toFixed(1))], ["read_score", base && base.score != null ? base.score : null]].filter(([, v]) => v != null)
+          .map(([metric, value]) => ({ ts, source: "motor", metric, value, raw }));
+        const r = await apiFetch("/api/observations", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(items) });
+        if (r.ok) { setPhase("idle"); setResult(null); setNote(""); setMsg("Saved."); } else setMsg("Save failed.");
+      };
+      const hist = history ? [...history].reverse().filter((h) => h.raw && h.raw.passage === passage.id) : [];
+      return (
+        <div className="card">
+          <div className="card-header">
+            <div>
+              <div className="card-title">Reading test</div>
+              <div className="card-subtitle">Read the passage aloud at your normal pace and volume, phone about 15 cm away. Measures pitch variability (monopitch), rate and pauses. The Rainbow Passage is the scored standard; the others are for variety and tracked separately.</div>
+            </div>
+          </div>
+          {phase === "idle" && (
+            <>
+              <select value={pid} onChange={(e) => setPid(e.target.value)} style={{ width: "100%", background: "#0f172a", color: "#e2e8f0", border: "1px solid #334155", borderRadius: 8, padding: "8px", fontSize: 13, marginTop: 4 }}>
+                {PASSAGES.map((p) => <option key={p.id} value={p.id}>{p.title}</option>)}
+              </select>
+              <div className="controls-row" style={{ marginTop: 8 }}><button type="button" className="pill-btn primary" onClick={start}>Start recording</button></div>
+            </>
+          )}
+          {(phase === "recording" || phase === "idle") && (
+            <div style={{ background: "#0f172a", borderRadius: 10, padding: "12px 14px", marginTop: 8, fontSize: 17, lineHeight: 1.55, color: phase === "recording" ? "#f8fafc" : "#cbd5e1" }}>{passage.text}</div>
+          )}
+          {phase === "recording" && (
+            <div style={{ textAlign: "center", padding: "10px 0" }}>
+              <div style={{ height: 8, background: "#0f172a", borderRadius: 4, margin: "8px 40px" }}><div style={{ height: 8, borderRadius: 4, background: "#a3e635", width: `${Math.min(100, level * 400)}%` }} /></div>
+              <div className="card-subtitle">{elapsed.toFixed(0)} s</div>
+              <button type="button" className="pill-btn primary" onClick={stop} style={{ marginTop: 6 }}>Done reading</button>
+            </div>
+          )}
+          {phase === "done" && result && (
+            <>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8, marginTop: 6 }}>
+                {[["Pitch variability", result.sdSt.toFixed(2) + " st"], ["Pitch range", result.rangeSt.toFixed(1) + " st"], ["Mean pitch", Math.round(result.meanF0) + " Hz"],
+                  ["Rate", result.rate.toFixed(2) + " /s"], ["Pauses", Math.round(result.pausePct * 100) + "%"], ["Duration", result.seconds.toFixed(0) + " s"]].map(([k, v]) => (
+                  <div key={k} style={{ background: "#0f172a", borderRadius: 8, padding: "8px 10px" }}>
+                    <div style={{ fontSize: 11, color: "#94a3b8" }}>{k}</div>
+                    <div style={{ fontSize: 16, fontWeight: 600 }}>{v}</div>
+                  </div>
+                ))}
+              </div>
+              <div style={{ background: "#0f172a", borderRadius: 8, padding: "8px 10px", marginTop: 8 }}>
+                <div style={{ fontSize: 11, color: "#94a3b8" }}>Score vs your own baseline on this passage (0–4)</div>
+                {base == null ? <div style={{ fontSize: 13 }}>…</div> : base.score == null
+                  ? <div style={{ fontSize: 13 }}>Building baseline: {base.n} of 5 reads of "{passage.title}". No score until then.</div>
+                  : <div style={{ fontSize: 16, fontWeight: 600 }}>{base.score} / 4 <span style={{ fontSize: 11, fontWeight: 400, color: "#94a3b8" }}>· of pitch variability, range, rate, pauses worse than your mean by over 1 SD ({base.n} prior reads)</span></div>}
+              </div>
+              <svg viewBox="0 0 600 60" style={{ width: "100%", height: 60, display: "block", marginTop: 8 }}>
+                {(() => { const v = result.st; const x = (i) => 10 + (580 * i) / Math.max(1, v.length - 1); const y = (s) => 36 - s * 3;
+                  return <><text x="10" y="10" fontSize="10" fill="#64748b">pitch over the read, semitones around median</text><line x1="10" x2="590" y1={y(0)} y2={y(0)} stroke="#334155" strokeDasharray="3 3" />
+                    {v.map((s, i) => <circle key={i} cx={x(i)} cy={Math.max(12, Math.min(58, y(s)))} r="1.2" fill="#c084fc" />)}</>; })()}
+              </svg>
+              <div style={{ fontSize: 10, color: "#64748b", marginTop: 2 }}>Pitch variability in read speech (monopitch) improved after levodopa in the Bern 2025 study; the text matters, so scores are kept per passage.</div>
+              <div className="controls-row" style={{ gap: 8, marginTop: 6 }}>
+                <input value={note} onChange={(e) => setNote(e.target.value)} placeholder="Note (e.g. pre-dose)"
+                  style={{ flex: 1, background: "#0f172a", color: "#e2e8f0", border: "1px solid #334155", borderRadius: 8, padding: "8px 10px", fontSize: 14 }} />
+                <button type="button" className="pill-btn primary" onClick={save}>Save</button>
+                <button type="button" className="pill-btn" onClick={() => { setPhase("idle"); setResult(null); }}>Discard</button>
+              </div>
+            </>
+          )}
+          {msg && <div className="card-subtitle" style={{ marginTop: 6, color: msg === "Saved." ? "#a3e635" : "#f87171" }}>{msg}</div>}
+          {hist.length > 1 && (
+            <div style={{ marginTop: 10 }}>
+              <div style={{ fontSize: 11, color: "#94a3b8" }}>Pitch variability (semitones) on "{passage.title}", last {hist.length} reads · higher = more expressive</div>
+              <svg viewBox="0 0 600 60" style={{ width: "100%", height: 60, display: "block" }}>
+                {(() => { const vals = hist.map((h) => h.value); const hi = Math.max(3, ...vals); const x = (i) => 10 + (580 * i) / Math.max(1, hist.length - 1); const y = (v) => 52 - (46 * v) / hi;
+                  return <><path d={"M" + hist.map((h, i) => `${x(i).toFixed(1)} ${y(h.value).toFixed(1)}`).join(" L")} fill="none" stroke="#c084fc" strokeWidth="1.5" />
+                    {hist.map((h, i) => <circle key={i} cx={x(i)} cy={y(h.value)} r="2.5" fill="#c084fc"><title>{new Date(h.ts).toLocaleString()} · {h.value.toFixed(2)} st{h.raw && h.raw.note ? " · " + h.raw.note : ""}</title></circle>)}</>; })()}
               </svg>
             </div>
           )}
@@ -3104,6 +3285,7 @@
           <TapTestCard />
           <VoiceTestCard />
           <DdkTestCard />
+          <ReadingTestCard />
           <SpiralTestCard />
           <TrendsCard />
           <VitalsTrendsCard />
