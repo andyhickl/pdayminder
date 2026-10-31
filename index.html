@@ -1509,6 +1509,9 @@
       ["motor/tremor_amp_cm", "Tremor amplitude (cm)", "#fb7185", 2],
       ["motor/tap_rate", "Tapping (taps/s)", "#38bdf8", 2],
       ["motor/tap_updrs", "Tapping, est. score (0–4)", "#0ea5e9", 1],
+      ["motor/voice_score", "Voice vs baseline (0–4)", "#c084fc", 1],
+      ["motor/ddk_rate", "Pa-ta-ka (syll/s)", "#e879f9", 2],
+      ["motor/ddk_score", "Pa-ta-ka vs baseline (0–3)", "#d946ef", 1],
       ["motor/voice_hnr", "Voice HNR (dB)", "#c084fc", 1],
       ["motor/voice_jitter_pct", "Voice jitter (%)", "#a78bfa", 2],
       ["motor/voice_ppe", "Voice PPE", "#d8b4fe", 3],
@@ -1963,6 +1966,36 @@
       );
     }
 
+    // Personal-baseline score: how many of the given features are worse than this person's own history (mean + 1 SD),
+    // computed from prior saved tests. Needs at least `minN` prior tests; returns null until then.
+    // features: [{key, value, higherIsWorse}], history: {key: [values...]}
+    function baselineScore(features, history, minN = 5) {
+      const n = Math.min(...features.map((f) => (history[f.key] || []).length));
+      if (!isFinite(n) || n < minN) return { score: null, n: isFinite(n) ? n : 0, details: [] };
+      let score = 0; const details = [];
+      for (const f of features) {
+        const h = history[f.key]; const mean = h.reduce((a, b) => a + b, 0) / h.length;
+        const sd = Math.sqrt(h.reduce((a, b) => a + (b - mean) ** 2, 0) / h.length) || 1e-9;
+        const z = (f.value - mean) / sd; const worse = f.higherIsWorse ? z > 1 : z < -1;
+        if (worse) score++; details.push({ key: f.key, z: f.higherIsWorse ? z : -z });
+      }
+      return { score, n, details };
+    }
+    async function loadHistory(keys, limit = 60) {
+      const out = {};
+      await Promise.all(keys.map(async (k) => { const r = await apiFetch(`/api/observations?source=motor&metric=${k}&limit=${limit}`); out[k] = r.ok ? (await r.json()).map((o) => o.value) : []; }));
+      return out;
+    }
+    // Where a value sits among the UCI healthy reference recordings (studio mic): percentile 0-100, higher = more of healthy below it.
+    const UCI_H = { voice_jitter_pct: [0.19, 0.21, 0.27, 0.34, 0.45, 0.56, 0.74], voice_shimmer_pct: [1.01, 1.18, 1.46, 1.68, 2.02, 2.31, 2.57], voice_hnr: [19.1, 19.5, 23.1, 25.0, 26.1, 26.8, 31.7], voice_ppe: [0.058, 0.076, 0.095, 0.117, 0.148, 0.180, 0.214] };
+    const UCI_P = [5, 10, 25, 50, 75, 90, 95];
+    function healthyPct(key, v) {
+      const q = UCI_H[key]; if (!q) return null;
+      if (v <= q[0]) return UCI_P[0]; if (v >= q[q.length - 1]) return UCI_P[UCI_P.length - 1];
+      for (let i = 1; i < q.length; i++) if (v <= q[i]) return Math.round(UCI_P[i - 1] + ((v - q[i - 1]) / (q[i] - q[i - 1] || 1e-9)) * (UCI_P[i] - UCI_P[i - 1]));
+      return 50;
+    }
+
     // ---------- Voice test: 5 s sustained "ahh", frame-based jitter / shimmer / HNR ----------
     const VOICE_SECONDS = 5;
     function analyzeVoice(pcm, sampleRate) {
@@ -2130,19 +2163,20 @@
         const raw = { note: note || null, voicedSeconds: Number(result.voicedSeconds.toFixed(2)), maxPhonation: Number(result.maxPhonation.toFixed(2)) };
         const items = [["voice_f0", Number(result.meanF0.toFixed(1))], ["voice_f0_sd", Number(result.f0sd.toFixed(2))], ["voice_jitter_pct", Number((result.jitter * 100).toFixed(3))],
           ["voice_shimmer_pct", Number((result.shimmer * 100).toFixed(3))], ["voice_hnr", Number(result.hnr.toFixed(2))], ["voice_loudness_db", Number(result.loudnessDb.toFixed(1))],
-          ["voice_int_slope", Number(result.intSlope.toFixed(3))], ["voice_ppe", result.ppe == null ? null : Number(result.ppe.toFixed(4))]].filter(([, v]) => v != null)
+          ["voice_int_slope", Number(result.intSlope.toFixed(3))], ["voice_ppe", result.ppe == null ? null : Number(result.ppe.toFixed(4))],
+          ["voice_score", base && base.score != null ? base.score : null]].filter(([, v]) => v != null)
           .map(([metric, value]) => ({ ts, source: "motor", metric, value, raw }));
         const r = await apiFetch("/api/observations", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(items) });
         if (r.ok) { setPhase("idle"); setResult(null); setNote(""); setMsg("Saved."); } else setMsg("Save failed.");
       };
-      // Reference medians from the UCI Parkinsons dataset (Little et al. 2008; 48 healthy / 147 PD sustained-vowel recordings).
-      const REF = { jitter: { h: 0.0033, pd: 0.0049 }, shimmer: { h: 0.0170, pd: 0.0280 }, hnr: { h: 25.0, pd: 21.4 }, ppe: { h: 0.15, pd: 0.22 } };
-      const ref = (v, key, higherIsWorse) => {
-        const { h, pd } = REF[key]; const mid = (h + pd) / 2;
-        const side = higherIsWorse ? (v <= h ? "healthy range" : v <= mid ? "between" : "PD range") : (v >= h ? "healthy range" : v >= mid ? "between" : "PD range");
-        const color = side === "healthy range" ? "#a3e635" : side === "between" ? "#fbbf24" : "#f87171";
-        return <span style={{ color, fontSize: 10 }}>{side}</span>;
-      };
+      const VOICE_KEYS = [["voice_jitter_pct", true], ["voice_shimmer_pct", true], ["voice_hnr", false], ["voice_ppe", true]];
+      const [base, setBase] = useState(null);
+      useEffect(() => {
+        if (phase !== "done" || !result) return;
+        loadHistory(VOICE_KEYS.map((k) => k[0])).then((h) => setBase(baselineScore(VOICE_KEYS.map(([k, w]) => ({ key: k, value: valueFor(k), higherIsWorse: w })), h)));
+      }, [phase]);
+      const valueFor = (k) => k === "voice_jitter_pct" ? result.jitter * 100 : k === "voice_shimmer_pct" ? result.shimmer * 100 : k === "voice_hnr" ? result.hnr : result.ppe;
+      const refNote = (k, v, lowerIsWorse) => { const p = healthyPct(k, v); if (p == null) return null; return <span style={{ color: "#64748b", fontSize: 10 }}>{lowerIsWorse ? `lower than ${100 - p}%` : `higher than ${p}%`} of healthy ref.</span>; };
       const hist = history ? [...history].reverse() : [];
       return (
         <div className="card">
@@ -2163,21 +2197,28 @@
           {phase === "done" && result && (
             <>
               <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8, marginTop: 6 }}>
-                {[["Jitter", (result.jitter * 100).toFixed(2) + "%", ref(result.jitter, "jitter", true)], ["Shimmer", (result.shimmer * 100).toFixed(2) + "%", ref(result.shimmer, "shimmer", true)], ["HNR", result.hnr.toFixed(1) + " dB", ref(result.hnr, "hnr", false)],
-                  ["PPE", result.ppe == null ? "–" : result.ppe.toFixed(3), result.ppe == null ? null : ref(result.ppe, "ppe", true)], ["Loudness slope", result.intSlope.toFixed(2) + " dB/s"], ["Pitch", Math.round(result.meanF0) + " Hz"],
+                {[["Jitter", (result.jitter * 100).toFixed(2) + "%", refNote("voice_jitter_pct", result.jitter * 100)], ["Shimmer", (result.shimmer * 100).toFixed(2) + "%", refNote("voice_shimmer_pct", result.shimmer * 100)], ["HNR", result.hnr.toFixed(1) + " dB", refNote("voice_hnr", result.hnr, true)],
+                  ["PPE", result.ppe == null ? "–" : result.ppe.toFixed(3), result.ppe == null ? null : refNote("voice_ppe", result.ppe)], ["Loudness slope", result.intSlope.toFixed(2) + " dB/s"], ["Pitch", Math.round(result.meanF0) + " Hz"],
                   ["Pitch spread", result.f0sd.toFixed(1) + " Hz"], ["Loudness", result.loudnessDb.toFixed(0) + " dBFS"]].map(([k, v, f]) => (
                   <div key={k} style={{ background: "#0f172a", borderRadius: 8, padding: "8px 10px" }}>
-                    <div style={{ fontSize: 11, color: "#94a3b8" }}>{k} {f}</div>
+                    <div style={{ fontSize: 11, color: "#94a3b8" }}>{k}</div>
                     <div style={{ fontSize: 16, fontWeight: 600 }}>{v}</div>
+                    {f && <div>{f}</div>}
                   </div>
                 ))}
+              </div>
+              <div style={{ background: "#0f172a", borderRadius: 8, padding: "8px 10px", marginTop: 8 }}>
+                <div style={{ fontSize: 11, color: "#94a3b8" }}>Score vs your own baseline (0–4)</div>
+                {base == null ? <div style={{ fontSize: 13 }}>…</div> : base.score == null
+                  ? <div style={{ fontSize: 13 }}>Building baseline: {base.n} of 5 tests saved. No score until then.</div>
+                  : <div style={{ fontSize: 16, fontWeight: 600 }}>{base.score} / 4 <span style={{ fontSize: 11, fontWeight: 400, color: "#94a3b8" }}>· features worse than your mean by over 1 SD, from {base.n} prior tests</span></div>}
               </div>
               <svg viewBox="0 0 600 60" style={{ width: "100%", height: 60, display: "block", marginTop: 8 }}>
                 {(() => { const lo = Math.min(...result.f0s) * 0.95, hi = Math.max(...result.f0s) * 1.05; const x = (i) => 10 + (580 * i) / Math.max(1, result.f0s.length - 1); const y = (v) => 56 - (46 * (v - lo)) / (hi - lo || 1);
                   return <><text x="10" y="10" fontSize="10" fill="#64748b">pitch over time (Hz), voiced frames</text><path d={"M" + result.f0s.map((v, i) => `${x(i).toFixed(1)} ${y(v).toFixed(1)}`).join(" L")} fill="none" stroke="#c084fc" strokeWidth="1.5" /></>; })()}
               </svg>
               <div className="card-subtitle">{result.voicedSeconds.toFixed(1)} s voiced · longest run {result.maxPhonation.toFixed(1)} s · {result.periods} glottal periods</div>
-              <div style={{ fontSize: 10, color: "#64748b", marginTop: 2 }}>Praat-like: jitter and HNR agree with Praat within a few hundredths of a percent and ~1 dB on test signals; shimmer reads somewhat lower than Praat. Range tags compare to medians in the UCI Parkinsons dataset (healthy vs PD: jitter 0.33% vs 0.49%, shimmer 1.7% vs 2.8%, HNR 25.0 vs 21.4 dB, PPE 0.15 vs 0.22), which used studio mics; phone mic and room shift these, so your own history is the real reference. Loudness slope (how the "ahh" fades) is the sustained-vowel measure shown to improve after levodopa.</div>
+              <div style={{ fontSize: 10, color: "#64748b", marginTop: 2 }}>Praat-like: jitter and HNR agree with Praat within a few hundredths of a percent and ~1 dB on test signals; shimmer reads somewhat lower than Praat. The grey reference lines place a value among healthy recordings in the UCI Parkinsons dataset, which used a studio mic and Praat; phone recordings read noisier, so they are context, not a verdict, and say nothing about whether anyone has PD. The score that matters is against your own baseline. Loudness slope (how the "ahh" fades) is the sustained-vowel measure shown to improve after levodopa.</div>
               <div className="controls-row" style={{ gap: 8, marginTop: 6 }}>
                 <input value={note} onChange={(e) => setNote(e.target.value)} placeholder="Note (e.g. pre-dose)"
                   style={{ flex: 1, background: "#0f172a", color: "#e2e8f0", border: "1px solid #334155", borderRadius: 8, padding: "8px 10px", fontSize: 14 }} />
@@ -2194,6 +2235,150 @@
                 {(() => { const vals = hist.map((h) => h.value); const lo = Math.min(0, ...vals), hi = Math.max(25, ...vals); const x = (i) => 10 + (580 * i) / Math.max(1, hist.length - 1); const y = (v) => 52 - (46 * (v - lo)) / (hi - lo || 1);
                   return <><path d={"M" + hist.map((h, i) => `${x(i).toFixed(1)} ${y(h.value).toFixed(1)}`).join(" L")} fill="none" stroke="#c084fc" strokeWidth="1.5" />
                     {hist.map((h, i) => <circle key={i} cx={x(i)} cy={y(h.value)} r="2.5" fill="#c084fc"><title>{new Date(h.ts).toLocaleString()} · {h.value.toFixed(1)} dB{h.raw && h.raw.note ? " · " + h.raw.note : ""}</title></circle>)}</>; })()}
+              </svg>
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    // ---------- DDK test: repeat "pa-ta-ka" for 10 s; syllable onsets from the loudness envelope ----------
+    const DDK_SECONDS = 10;
+    function analyzeDdk(pcm, sampleRate) {
+      const hop = Math.round(sampleRate * 0.005), win = Math.round(sampleRate * 0.02); // 5 ms envelope
+      const env = [];
+      for (let st = 0; st + win <= pcm.length; st += hop) { let e = 0; for (let i = 0; i < win; i++) e += pcm[st + i] * pcm[st + i]; env.push(Math.sqrt(e / win)); }
+      if (env.length < 100) return null;
+      // light smoothing (15 ms)
+      const sm = env.map((v, i) => (env[i - 1] || v) * 0.25 + v * 0.5 + (env[i + 1] || v) * 0.25);
+      const maxE = Math.max(...sm); const floor = Math.max(0.003, maxE * 0.15);
+      // onset = envelope crosses up through floor after being below it for >= 30 ms; refractory 80 ms
+      const onsets = []; let below = 10; const minGap = Math.round(0.08 / 0.005);
+      for (let i = 1; i < sm.length; i++) {
+        if (sm[i] < floor) { below++; continue; }
+        if (below >= 6 && (!onsets.length || i - onsets[onsets.length - 1] >= minGap)) onsets.push(i);
+        below = 0;
+      }
+      if (onsets.length < 6) return { count: onsets.length, tooFew: true };
+      const t = onsets.map((i) => i * 0.005);
+      const ioi = []; for (let i = 1; i < t.length; i++) ioi.push(t[i] - t[i - 1]);
+      const mean = ioi.reduce((a, b) => a + b, 0) / ioi.length;
+      const sd = Math.sqrt(ioi.reduce((a, b) => a + (b - mean) ** 2, 0) / ioi.length);
+      const span = t[t.length - 1] - t[0];
+      const half = Math.floor(ioi.length / 2);
+      const r1 = half / ioi.slice(0, half).reduce((a, b) => a + b, 0), r2 = (ioi.length - half) / ioi.slice(half).reduce((a, b) => a + b, 0);
+      const peaks = onsets.map((i) => Math.max(...sm.slice(i, Math.min(sm.length, i + 20))));
+      const pm = peaks.reduce((a, b) => a + b, 0) / peaks.length; const pcv = Math.sqrt(peaks.reduce((a, b) => a + (b - pm) ** 2, 0) / peaks.length) / pm;
+      return { count: onsets.length, rate: (onsets.length - 1) / span, ioiMs: mean * 1000, cv: sd / mean, decrement: (r1 - r2) / r1, loudnessCv: pcv, seconds: span, env: sm, onsets };
+    }
+
+    function DdkTestCard() {
+      const [phase, setPhase] = useState("idle");
+      const [left, setLeft] = useState(DDK_SECONDS);
+      const [level, setLevel] = useState(0);
+      const [result, setResult] = useState(null);
+      const [base, setBase] = useState(null);
+      const [note, setNote] = useState("");
+      const [msg, setMsg] = useState("");
+      const audioRef = useRef(null);
+      const [history] = useJson("/api/observations?source=motor&metric=ddk_rate&limit=60", [phase]);
+      const DDK_KEYS = [["ddk_rate", false], ["ddk_cv", true], ["ddk_decrement", true]];
+      useEffect(() => {
+        if (phase !== "done" || !result) return;
+        loadHistory(DDK_KEYS.map((k) => k[0])).then((h) => setBase(baselineScore(DDK_KEYS.map(([k, w]) => ({ key: k, value: k === "ddk_rate" ? result.rate : k === "ddk_cv" ? result.cv : result.decrement, higherIsWorse: w })), h)));
+      }, [phase]);
+      const start = async () => {
+        setMsg("");
+        const AC = window.AudioContext || window.webkitAudioContext;
+        if (!AC || !navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) { setMsg("This browser doesn't support microphone capture."); return; }
+        const ctx = new AC(); const resumeP = ctx.resume();
+        let stream;
+        try { stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false } }); }
+        catch (e) { ctx.close(); setMsg("Microphone access denied or unavailable (" + e.message + ")."); return; }
+        try { await resumeP; } catch {}
+        if (ctx.state !== "running") { try { await ctx.resume(); } catch {} }
+        const src = ctx.createMediaStreamSource(stream); const proc = ctx.createScriptProcessor(2048, 1, 1); const gain = ctx.createGain(); gain.gain.value = 0;
+        const chunks = [];
+        proc.onaudioprocess = (e) => { const d = e.inputBuffer.getChannelData(0); chunks.push(new Float32Array(d)); let s2 = 0; for (let i = 0; i < d.length; i++) s2 += d[i] * d[i]; setLevel(Math.sqrt(s2 / d.length)); };
+        src.connect(proc); proc.connect(gain); gain.connect(ctx.destination); audioRef.current = { ctx, src, proc, gain, stream };
+        setPhase("recording"); setLeft(DDK_SECONDS);
+        const t0 = performance.now();
+        const tick = setInterval(() => setLeft(Math.max(0, Math.ceil(DDK_SECONDS - (performance.now() - t0) / 1000))), 200);
+        setTimeout(() => {
+          clearInterval(tick); try { proc.disconnect(); src.disconnect(); gain.disconnect(); } catch {}
+          stream.getTracks().forEach((t) => t.stop()); const sr = ctx.sampleRate; ctx.close(); audioRef.current = null;
+          const total = chunks.reduce((a, c) => a + c.length, 0); const pcm = new Float32Array(total); let o = 0; chunks.forEach((c) => { pcm.set(c, o); o += c.length; });
+          const res = total ? analyzeDdk(pcm, sr) : null;
+          if (!res || res.tooFew) { setPhase("idle"); setMsg(`Couldn't pick out syllables (${res ? res.count : 0} found). Say "pa-ta-ka" clearly and crisply, close to the phone.`); return; }
+          setBase(null); setResult(res); setPhase("done");
+        }, DDK_SECONDS * 1000 + 200);
+      };
+      const save = async () => {
+        const ts = new Date().toISOString();
+        const raw = { note: note || null, count: result.count, seconds: Number(result.seconds.toFixed(2)) };
+        const items = [["ddk_rate", Number(result.rate.toFixed(3))], ["ddk_ioi_ms", Number(result.ioiMs.toFixed(1))], ["ddk_cv", Number(result.cv.toFixed(4))], ["ddk_decrement", Number(result.decrement.toFixed(4))],
+          ["ddk_loudness_cv", Number(result.loudnessCv.toFixed(4))], ["ddk_score", base && base.score != null ? base.score : null]].filter(([, v]) => v != null)
+          .map(([metric, value]) => ({ ts, source: "motor", metric, value, raw }));
+        const r = await apiFetch("/api/observations", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(items) });
+        if (r.ok) { setPhase("idle"); setResult(null); setNote(""); setMsg("Saved."); } else setMsg("Save failed.");
+      };
+      const hist = history ? [...history].reverse() : [];
+      return (
+        <div className="card">
+          <div className="card-header">
+            <div>
+              <div className="card-title">Pa-ta-ka test (DDK)</div>
+              <div className="card-subtitle">Repeat "pa-ta-ka" as fast and evenly as you can for 10 s, phone about 15 cm from your mouth. Measures articulation speed and rhythm; the speech task most responsive to levodopa.</div>
+            </div>
+          </div>
+          {phase === "idle" && <div className="controls-row"><button type="button" className="pill-btn primary" onClick={start}>Start 10-second recording</button></div>}
+          {phase === "recording" && (
+            <div style={{ textAlign: "center", padding: "14px 0" }}>
+              <div style={{ fontSize: 48, fontWeight: 700 }}>{left}</div>
+              <div style={{ height: 8, background: "#0f172a", borderRadius: 4, margin: "8px 40px" }}><div style={{ height: 8, borderRadius: 4, background: "#a3e635", width: `${Math.min(100, level * 400)}%` }} /></div>
+              <div className="card-subtitle">pa-ta-ka pa-ta-ka pa-ta-ka…</div>
+            </div>
+          )}
+          {phase === "done" && result && (
+            <>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8, marginTop: 6 }}>
+                {[["Syllables / s", result.rate.toFixed(2)], ["Syllables", String(result.count)], ["Rhythm (CV)", Math.round(result.cv * 100) + "%"],
+                  ["Slowdown", Math.round(result.decrement * 100) + "%"], ["Loudness CV", Math.round(result.loudnessCv * 100) + "%"], ["Interval", Math.round(result.ioiMs) + " ms"]].map(([k, v]) => (
+                  <div key={k} style={{ background: "#0f172a", borderRadius: 8, padding: "8px 10px" }}>
+                    <div style={{ fontSize: 11, color: "#94a3b8" }}>{k}</div>
+                    <div style={{ fontSize: 16, fontWeight: 600 }}>{v}</div>
+                  </div>
+                ))}
+              </div>
+              <div style={{ background: "#0f172a", borderRadius: 8, padding: "8px 10px", marginTop: 8 }}>
+                <div style={{ fontSize: 11, color: "#94a3b8" }}>Score vs your own baseline (0–3)</div>
+                {base == null ? <div style={{ fontSize: 13 }}>…</div> : base.score == null
+                  ? <div style={{ fontSize: 13 }}>Building baseline: {base.n} of 5 tests saved. No score until then.</div>
+                  : <div style={{ fontSize: 16, fontWeight: 600 }}>{base.score} / 3 <span style={{ fontSize: 11, fontWeight: 400, color: "#94a3b8" }}>· of rate, rhythm, slowdown worse than your mean by over 1 SD ({base.n} prior tests)</span></div>}
+              </div>
+              <svg viewBox="0 0 600 70" style={{ width: "100%", height: 70, display: "block", marginTop: 8 }}>
+                {(() => { const e = result.env; const hi = Math.max(...e) || 1; const x = (i) => 10 + (580 * i) / (e.length - 1); const y = (v) => 62 - (50 * v) / hi;
+                  return <><text x="10" y="10" fontSize="10" fill="#64748b">loudness envelope with detected syllable onsets</text>
+                    <path d={"M" + e.filter((_, i) => i % 2 === 0).map((v, i) => `${x(i * 2).toFixed(1)} ${y(v).toFixed(1)}`).join(" L")} fill="none" stroke="#c084fc" strokeWidth="1" />
+                    {result.onsets.map((i, k) => <line key={k} x1={x(i)} x2={x(i)} y1="14" y2="64" stroke="#a3e635" strokeWidth="1" opacity="0.7" />)}</>; })()}
+              </svg>
+              <div style={{ fontSize: 10, color: "#64748b", marginTop: 2 }}>Healthy adults typically manage about 6–7 syllables/s; PD slows and becomes irregular and improves on levodopa (Cologne and Bern 2025). Onset detection is envelope-based, so crisp consonants matter.</div>
+              <div className="controls-row" style={{ gap: 8, marginTop: 6 }}>
+                <input value={note} onChange={(e) => setNote(e.target.value)} placeholder="Note (e.g. pre-dose)"
+                  style={{ flex: 1, background: "#0f172a", color: "#e2e8f0", border: "1px solid #334155", borderRadius: 8, padding: "8px 10px", fontSize: 14 }} />
+                <button type="button" className="pill-btn primary" onClick={save}>Save</button>
+                <button type="button" className="pill-btn" onClick={() => { setPhase("idle"); setResult(null); }}>Discard</button>
+              </div>
+            </>
+          )}
+          {msg && <div className="card-subtitle" style={{ marginTop: 6, color: msg === "Saved." ? "#a3e635" : "#f87171" }}>{msg}</div>}
+          {hist.length > 1 && (
+            <div style={{ marginTop: 10 }}>
+              <div style={{ fontSize: 11, color: "#94a3b8" }}>Syllables per second, last {hist.length} tests</div>
+              <svg viewBox="0 0 600 60" style={{ width: "100%", height: 60, display: "block" }}>
+                {(() => { const vals = hist.map((h) => h.value); const hi = Math.max(7, ...vals); const x = (i) => 10 + (580 * i) / Math.max(1, hist.length - 1); const y = (v) => 52 - (46 * v) / hi;
+                  return <><path d={"M" + hist.map((h, i) => `${x(i).toFixed(1)} ${y(h.value).toFixed(1)}`).join(" L")} fill="none" stroke="#c084fc" strokeWidth="1.5" />
+                    {hist.map((h, i) => <circle key={i} cx={x(i)} cy={y(h.value)} r="2.5" fill="#c084fc"><title>{new Date(h.ts).toLocaleString()} · {h.value.toFixed(2)}/s{h.raw && h.raw.note ? " · " + h.raw.note : ""}</title></circle>)}</>; })()}
               </svg>
             </div>
           )}
@@ -2918,6 +3103,7 @@
           <TremorTestCard />
           <TapTestCard />
           <VoiceTestCard />
+          <DdkTestCard />
           <SpiralTestCard />
           <TrendsCard />
           <VitalsTrendsCard />

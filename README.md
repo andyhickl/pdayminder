@@ -84,6 +84,15 @@ shimmer ~30% lower than Praat on step-change test tones. Metrics: `voice_f0`, `v
 `voice_shimmer_pct`, `voice_hnr`, `voice_loudness_db`, `voice_int_slope` (dB/s over the phonation; improves OFF→ON per
 Bern 2025), `voice_ppe` (pitch period entropy, Little 2009: normalized entropy of the AR(2) residual of semitone pitch).
 
+Scoring: `voice_score` (0–4) counts how many of jitter, shimmer, HNR, PPE are worse than the user's own prior mean by
+>1 SD (needs 5 prior tests). Group-reference labels were removed: the UCI reference used studio mics and the groups
+overlap (AUC ~0.75), so single values can't say anything about diagnosis; the card shows only a muted percentile.
+
+## Pa-ta-ka / DDK test (motor/ddk_*)
+10 s of repeated /pa-ta-ka/. Syllable onsets from a 5 ms RMS envelope (upward crossing of 15% of max after >=30 ms
+below, 80 ms refractory). Metrics: `ddk_rate` (syll/s), `ddk_ioi_ms`, `ddk_cv` (rhythm), `ddk_decrement`,
+`ddk_loudness_cv`, `ddk_score` (0–3 vs own baseline: rate, rhythm, slowdown).
+
 ## Spiral test (motor/spiral_*)
 Trace a 3-turn Archimedean spiral on a canvas. Angular offset is fitted (median of θ − r/k) so the start angle doesn't
 matter; residual r − kθ scores deviation. Metrics: `spiral_error_pct` (mean |residual| / R), `spiral_tremor_share`
