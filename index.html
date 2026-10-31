@@ -2700,9 +2700,9 @@
     }
 
     // Synthesised four-on-the-floor beat (kick, hat, offbeat clap) at a given BPM via Web Audio. No recordings involved.
-    function startBeat(bpm) {
-      const AC = window.AudioContext || window.webkitAudioContext; if (!AC) return null;
-      const ctx = new AC(); const master = ctx.createGain(); master.gain.value = 0.5; master.connect(ctx.destination);
+    function startBeat(bpm, ctx) {
+      if (!ctx) return null;
+      const master = ctx.createGain(); master.gain.value = 0.5; master.connect(ctx.destination);
       const beat = 60 / bpm; let next = ctx.currentTime + 0.1; let n = 0; let timer = null;
       const kick = (t) => { const o = ctx.createOscillator(), g = ctx.createGain(); o.frequency.setValueAtTime(150, t); o.frequency.exponentialRampToValueAtTime(45, t + 0.12); g.gain.setValueAtTime(1, t); g.gain.exponentialRampToValueAtTime(0.001, t + 0.25); o.connect(g); g.connect(master); o.start(t); o.stop(t + 0.3); };
       const hat = (t, open) => { const len = open ? 0.18 : 0.05; const buf = ctx.createBuffer(1, ctx.sampleRate * len, ctx.sampleRate); const d = buf.getChannelData(0); for (let i = 0; i < d.length; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / d.length, 2); const src = ctx.createBufferSource(); src.buffer = buf; const f = ctx.createBiquadFilter(); f.type = "highpass"; f.frequency.value = 7000; const g = ctx.createGain(); g.gain.value = open ? 0.25 : 0.18; src.connect(f); f.connect(g); g.connect(master); src.start(t); };
@@ -2738,6 +2738,15 @@
       }, [phase]);
       const start = async () => {
         setMsg("");
+        // iOS: audio must be created and unlocked synchronously inside the tap, before any await.
+        let audioCtx = null;
+        if (cued) {
+          try {
+            const AC = window.AudioContext || window.webkitAudioContext;
+            audioCtx = new AC(); audioCtx.resume();
+            const unlock = audioCtx.createBufferSource(); unlock.buffer = audioCtx.createBuffer(1, 1, audioCtx.sampleRate); unlock.connect(audioCtx.destination); unlock.start(0);
+          } catch (e) { setMsg("Couldn't start audio: " + e.message); audioCtx = null; }
+        }
         try {
           if (typeof DeviceMotionEvent !== "undefined" && typeof DeviceMotionEvent.requestPermission === "function") {
             const r = await DeviceMotionEvent.requestPermission(); if (r !== "granted") { setMsg("Motion access was denied."); return; }
@@ -2754,7 +2763,7 @@
           const el = (performance.now() - t0) / 1000;
           if (el < GAIT_LEAD) setLeft(Math.ceil(GAIT_LEAD - el)); else { setPhase("recording"); setLeft(Math.max(0, Math.ceil(GAIT_LEAD + GAIT_SECONDS - el))); }
         }, 250);
-        setTimeout(() => { window.addEventListener("devicemotion", handler); if (cued) { try { beatRef.current = startBeat(BEAT_BPM); } catch {} } }, GAIT_LEAD * 1000);
+        setTimeout(() => { window.addEventListener("devicemotion", handler); if (cued && audioCtx) { try { if (audioCtx.state !== "running") audioCtx.resume(); beatRef.current = startBeat(BEAT_BPM, audioCtx); } catch {} } }, GAIT_LEAD * 1000);
         try { if (navigator.vibrate) { setTimeout(() => navigator.vibrate(200), GAIT_LEAD * 1000); setTimeout(() => navigator.vibrate([200, 100, 200]), (GAIT_LEAD + GAIT_SECONDS) * 1000); } } catch {}
         setTimeout(() => {
           window.removeEventListener("devicemotion", handler); clearInterval(tick);
@@ -2797,7 +2806,7 @@
                 <button type="button" className={"pill-btn" + (!cued ? " primary" : "")} onClick={() => setCued(false)}>free walk</button>
                 <button type="button" className={"pill-btn" + (cued ? " primary" : "")} onClick={() => setCued(true)}>cued walk · 103 BPM beat</button>
               </div>
-              {cued && <div className="card-subtitle" style={{ marginTop: 4 }}>A synthesised disco beat at 103 BPM plays during the walk (turn the volume up). Cued walks are scored against their own baseline and skip the healthy-reference score, since walking to a beat changes cadence and variability.</div>}
+              {cued && <div className="card-subtitle" style={{ marginTop: 4 }}>A synthesised disco beat at 103 BPM plays during the walk. Turn the volume up and make sure the ring/silent switch isn't on silent (iPhone mutes web audio on silent). Cued walks are scored against their own baseline and skip the healthy-reference score, since walking to a beat changes cadence and variability.</div>}
               <div className="controls-row" style={{ marginTop: 6 }}><button type="button" className="pill-btn primary" onClick={start}>Start (5 s to get set, then 30 s walk)</button></div>
             </>
           )}
