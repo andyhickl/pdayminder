@@ -504,7 +504,12 @@
       border-radius: 3px;
       background: #000000;
       box-shadow: 0 0 0 1px rgba(15, 23, 42, 0.7);
+      cursor: pointer;
     }
+    .matrix-cell:hover { box-shadow: 0 0 0 2px #38bdf8; }
+    .matrix-cell.selected-day { box-shadow: 0 0 0 1px rgba(56, 189, 248, 0.55); }
+    .matrix-cell.future { cursor: default; opacity: 0.5; }
+    .matrix-cell.future:hover { box-shadow: 0 0 0 1px rgba(15, 23, 42, 0.7); }
 
     .summary-legend {
       margin-top: 6px;
@@ -1680,7 +1685,7 @@
       );
     }
 
-    function QoLSummaryCard({ days }) {
+    function QoLSummaryCard({ days, onCellClick, selectedKey }) {
       const counts = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 };
       let ratedSegments = 0;
       let totalSegments = 0;
@@ -1739,9 +1744,15 @@
           cells.push({
             key: `${rowIndex}-${segIndex}`,
             color,
+            dateKey: key,
+            segIndex,
+            label: `${dateObj.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" })} · ${String(segIndex * 2).padStart(2, "0")}:00–${String(segIndex * 2 + 2).padStart(2, "0")}:00`,
+            future: isToday && segMidMinute > nowMinutes,
+            isSelectedDay: key === selectedKey,
           });
         }
       });
+      const rowLabels = last7Dates.map((d) => d.toLocaleDateString(undefined, { weekday: "short" }).slice(0, 2) + " " + d.getDate());
 
       return (
         <div className="card summary-card">
@@ -1756,13 +1767,23 @@
           <div style={{ fontSize: "11px", color: "var(--muted)", marginTop: 4 }}>
             Each cell is a 2-hour block: red → lower QoL, green/blue → better QoL, gray = sleep, black = no data / not yet logged.
           </div>
-          <div className="summary-chart">
+          <div style={{ fontSize: "11px", color: "var(--muted)", marginTop: 2 }}>
+            Tap any cell to rate that block.
+          </div>
+          <div className="summary-chart" style={{ display: "grid", gridTemplateColumns: "34px 1fr", gap: 4, alignItems: "stretch" }}>
+            <div style={{ display: "grid", gridTemplateRows: "repeat(7, 1fr)", fontSize: 10, color: "var(--muted)", gap: 3 }}>
+              {rowLabels.map((l, i) => (
+                <div key={i} style={{ display: "flex", alignItems: "center", fontWeight: last7Dates[i] && toDateKey(last7Dates[i]) === selectedKey ? 700 : 400, color: toDateKey(last7Dates[i]) === selectedKey ? "var(--text)" : "var(--muted)" }}>{l}</div>
+              ))}
+            </div>
             <div className="matrix-grid">
               {cells.map((cell) => (
                 <div
                   key={cell.key}
-                  className="matrix-cell"
+                  className={"matrix-cell" + (cell.isSelectedDay ? " selected-day" : "") + (cell.future ? " future" : "")}
                   style={{ backgroundColor: cell.color }}
+                  title={cell.label}
+                  onClick={() => !cell.future && onCellClick && onCellClick(cell.dateKey, cell.segIndex, cell.label)}
                 />
               ))}
             </div>
@@ -1928,20 +1949,24 @@
 
       const handleSegmentClick = (index, label) => {
         const seg = day.segments[index];
-        setSegmentModalState({
-          open: true,
-          index,
-          label,
-          segment: seg,
-        });
+        setSegmentModalState({ open: true, index, label, segment: seg, dateKey });
+      };
+
+      // From the 7-day summary: rate a block on any day without leaving the page.
+      const handleSummaryCellClick = (cellDateKey, index, label) => {
+        const existing = days[cellDateKey] || createEmptyDay(cellDateKey, settings);
+        const [y, m, d] = cellDateKey.split("-").map(Number);
+        setSelectedDate(new Date(y, m - 1, d));
+        setSegmentModalState({ open: true, index, label, segment: existing.segments[index], dateKey: cellDateKey });
       };
 
       const handleSegmentSave = (index, newSeg) => {
+        const targetKey = segmentModalState.dateKey || dateKey;
         setDays((prev) => {
-          const existing = prev[dateKey] || createEmptyDay(dateKey, settings);
+          const existing = prev[targetKey] || createEmptyDay(targetKey, settings);
           const dayCopy = { ...existing };
           dayCopy.segments = dayCopy.segments.map((s, i) => (i === index ? { ...newSeg } : s));
-          return { ...prev, [dateKey]: dayCopy };
+          return { ...prev, [targetKey]: dayCopy };
         });
         setSegmentModalState((s) => ({ ...s, open: false }));
       };
@@ -2061,7 +2086,7 @@
           <DayVitalsCard dateKey={dateKey} days={days} />
           <TrendsCard />
           <VitalsTrendsCard />
-          <QoLSummaryCard days={days} />
+          <QoLSummaryCard days={days} onCellClick={handleSummaryCellClick} selectedKey={dateKey} />
           <WorkoutsCard />
           <SourcesCard />
           <DataCard days={days} setDays={setDays} settings={settings} />
