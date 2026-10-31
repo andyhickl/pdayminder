@@ -117,6 +117,19 @@ Metrics: `read_f0_sd_st` (pitch SD in semitones; monopitch when low), `read_rang
 (envelope peaks/s), `read_pause_pct`, `read_seconds`, `read_score` (0–4 vs own baseline on the same passage).
 `raw.passage` tags the passage. sdF0 in read speech improved OFF→ON in Bern 2025.
 
+## Gait test (motor/gait_*)
+Phone in a front pocket, 5 s lead-in, 30 s walk. Orientation-free acceleration magnitude at 50 Hz, 1 s moving mean removed.
+Steps = peaks >= 0.5×RMS, >= 0.3 s apart. Metrics: `gait_cadence` (steps/min), `gait_step_cv` (%), `gait_step_regularity`
+and `gait_stride_regularity` (normalised autocorrelation at 1- and 2-step lags, Moe-Nilssen & Helbostad), `gait_asymmetry`
+(|AC1 − AC2|), `gait_rms`, `gait_score` (1–5 vs own baseline), `gait_norm` (1–5 vs healthy cadence 112±9 and step CV 2.5±1.5 %).
+
+## Norm-referenced scores (`*_norm`, 1–5)
+Alongside each personal-baseline score, mic-robust measures are compared to healthy-control references: pa-ta-ka rate
+vs 7.16±0.73 syll/s and reading F0 SD vs 2.48±0.56 st (Rusz et al. 2011, 23 HC), sustained-vowel jitter vs 0.37±0.20 %
+and PPE vs 0.12±0.05 (UCI healthy recordings), gait as above. z (direction-adjusted) → 5 at z ≥ −0.5, 4 ≥ −1, 3 ≥ −1.5,
+2 ≥ −2, else 1. Shimmer and HNR are excluded as microphone-dependent. Stats shows `rollup:motor` and `rollup:voice`
+(daily mean of component personal scores).
+
 ## Score scales
 Every consolidated score is 1–5 with 5 = best, matching QoL: `tremor_score` (= 5 − estimated UPDRS 3.17),
 `tap_score` (= 5 − tapping heuristic), `voice_score`, `ddk_score`, `read_score` (= 5 − number of features worse than

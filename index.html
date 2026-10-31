@@ -1547,6 +1547,9 @@
       ["motor/tremor_amp_cm", "Tremor amplitude (cm)", "#fb7185", 2],
       ["motor/tap_rate", "Tapping (taps/s)", "#38bdf8", 2],
       ["motor/tap_score", "Tapping score (1–5)", "#0ea5e9", 1],
+      ["motor/gait_score", "Gait score (1–5)", "#34d399", 1],
+      ["motor/gait_cadence", "Cadence (steps/min)", "#6ee7b7", 0],
+      ["motor/gait_step_cv", "Step variability (%)", "#5eead4", 1],
       ["motor/voice_score", "Voice score (1–5)", "#c084fc", 1],
       ["motor/ddk_rate", "Pa-ta-ka (syll/s)", "#e879f9", 2],
       ["motor/ddk_score", "Pa-ta-ka score (1–5)", "#d946ef", 1],
@@ -2022,6 +2025,33 @@
       }
       return { score, n, details };
     }
+    // Norm-referenced score: z against a healthy reference (mean, sd), direction-adjusted so + is good, mapped to 1–5.
+    // 5 = within half an SD of (or better than) the healthy mean; 1 = two or more SDs worse.
+    function normScore(features) {
+      // features: [{value, mean, sd, higherIsWorse}]
+      const zs = features.filter((f) => f.value != null).map((f) => ((f.value - f.mean) / (f.sd || 1e-9)) * (f.higherIsWorse ? -1 : 1));
+      if (!zs.length) return null;
+      const z = zs.reduce((a, b) => a + b, 0) / zs.length;
+      return { z, score: z >= -0.5 ? 5 : z >= -1 ? 4 : z >= -1.5 ? 3 : z >= -2 ? 2 : 1 };
+    }
+    // Healthy-control references. Rusz et al. 2011 (23 HC, mean age 58): pa-ta-ka 7.16±0.73 syll/s, reading F0 SD 2.48±0.56 st.
+    // UCI Parkinsons healthy recordings (sustained /a/, studio mic): jitter ~0.37±0.20 %, PPE ~0.12±0.05.
+    // Gait, phone/IMU literature for healthy adults at preferred speed: cadence ~112±9 steps/min, step-time CV ~2.5±1.5 %.
+    const NORMS = {
+      ddk_rate: { mean: 7.16, sd: 0.73 }, read_f0_sd_st: { mean: 2.48, sd: 0.56 },
+      voice_jitter_pct: { mean: 0.37, sd: 0.20 }, voice_ppe: { mean: 0.12, sd: 0.05 },
+      gait_cadence: { mean: 112, sd: 9 }, gait_step_cv: { mean: 2.5, sd: 1.5 },
+    };
+    function NormLine({ norm, what }) {
+      if (!norm) return null;
+      return (
+        <div style={{ background: "#0f172a", borderRadius: 8, padding: "8px 10px", marginTop: 8 }}>
+          <div style={{ fontSize: 11, color: "#94a3b8" }}>Score vs healthy reference (1–5, 5 = at the healthy mean)</div>
+          <div style={{ fontSize: 16, fontWeight: 600, color: ratingColor(norm.score) }}>{norm.score} <span style={{ fontSize: 11, fontWeight: 400, color: "#94a3b8" }}>· {what} · z = {norm.z.toFixed(2)} vs healthy controls</span></div>
+        </div>
+      );
+    }
+
     async function loadHistory(keys, limit = 60) {
       const out = {};
       await Promise.all(keys.map(async (k) => { const r = await apiFetch(`/api/observations?source=motor&metric=${k}&limit=${limit}`); out[k] = r.ok ? (await r.json()).map((o) => o.value) : []; }));
@@ -2205,7 +2235,8 @@
         const items = [["voice_f0", Number(result.meanF0.toFixed(1))], ["voice_f0_sd", Number(result.f0sd.toFixed(2))], ["voice_jitter_pct", Number((result.jitter * 100).toFixed(3))],
           ["voice_shimmer_pct", Number((result.shimmer * 100).toFixed(3))], ["voice_hnr", Number(result.hnr.toFixed(2))], ["voice_loudness_db", Number(result.loudnessDb.toFixed(1))],
           ["voice_int_slope", Number(result.intSlope.toFixed(3))], ["voice_ppe", result.ppe == null ? null : Number(result.ppe.toFixed(4))],
-          ["voice_score", base && base.score != null ? 5 - base.score : null]].filter(([, v]) => v != null)
+          ["voice_score", base && base.score != null ? 5 - base.score : null],
+          ["voice_norm", (() => { const n = normScore([{ value: result.jitter * 100, ...NORMS.voice_jitter_pct, higherIsWorse: true }, { value: result.ppe, ...NORMS.voice_ppe, higherIsWorse: true }]); return n ? n.score : null; })()]].filter(([, v]) => v != null)
           .map(([metric, value]) => ({ ts, source: "motor", metric, value, raw }));
         const r = await apiFetch("/api/observations", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(items) });
         if (r.ok) { setPhase("idle"); setResult(null); setNote(""); setMsg("Saved."); } else setMsg("Save failed.");
@@ -2254,6 +2285,7 @@
                   ? <div style={{ fontSize: 13 }}>Building baseline: {base.n} of 5 tests saved. No score until then.</div>
                   : <div style={{ fontSize: 16, fontWeight: 600 }}>{5 - base.score} <span style={{ fontSize: 11, fontWeight: 400, color: "#94a3b8" }}>· {base.score} of jitter, shimmer, HNR, PPE worse than your mean by over 1 SD, from {base.n} prior tests</span></div>}
               </div>
+              <NormLine norm={normScore([{ value: result.jitter * 100, ...NORMS.voice_jitter_pct, higherIsWorse: true }, { value: result.ppe, ...NORMS.voice_ppe, higherIsWorse: true }])} what="jitter and PPE vs healthy /a/ recordings (UCI); shimmer and HNR excluded as mic-dependent" />
               <svg viewBox="0 0 600 60" style={{ width: "100%", height: 60, display: "block", marginTop: 8 }}>
                 {(() => { const lo = Math.min(...result.f0s) * 0.95, hi = Math.max(...result.f0s) * 1.05; const x = (i) => 10 + (580 * i) / Math.max(1, result.f0s.length - 1); const y = (v) => 56 - (46 * (v - lo)) / (hi - lo || 1);
                   return <><text x="10" y="10" fontSize="10" fill="#64748b">pitch over time (Hz), voiced frames</text><path d={"M" + result.f0s.map((v, i) => `${x(i).toFixed(1)} ${y(v).toFixed(1)}`).join(" L")} fill="none" stroke="#c084fc" strokeWidth="1.5" /></>; })()}
@@ -2374,8 +2406,9 @@
       const save = async () => {
         const ts = new Date().toISOString();
         const raw = { note: note || null, count: result.count, seconds: Number(result.seconds.toFixed(2)), coverage: Number(result.coverage.toFixed(2)) };
+        const nrm = normScore([{ value: result.rate, ...NORMS.ddk_rate }]);
         const items = [["ddk_rate", Number(result.rate.toFixed(3))], ["ddk_ioi_ms", Number(result.ioiMs.toFixed(1))], ["ddk_cv", Number(result.cv.toFixed(4))], ["ddk_decrement", Number(result.decrement.toFixed(4))],
-          ["ddk_loudness_cv", Number(result.loudnessCv.toFixed(4))], ["ddk_score", base && base.score != null ? 5 - base.score : null]].filter(([, v]) => v != null)
+          ["ddk_loudness_cv", Number(result.loudnessCv.toFixed(4))], ["ddk_score", base && base.score != null ? 5 - base.score : null], ["ddk_norm", nrm ? nrm.score : null]].filter(([, v]) => v != null)
           .map(([metric, value]) => ({ ts, source: "motor", metric, value, raw }));
         const r = await apiFetch("/api/observations", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(items) });
         if (r.ok) { setPhase("idle"); setResult(null); setNote(""); setMsg("Saved."); } else setMsg("Save failed.");
@@ -2414,6 +2447,7 @@
                   ? <div style={{ fontSize: 13 }}>Building baseline: {base.n} of 5 tests saved. No score until then.</div>
                   : <div style={{ fontSize: 16, fontWeight: 600 }}>{5 - base.score} <span style={{ fontSize: 11, fontWeight: 400, color: "#94a3b8" }}>· {base.score} of rate, rhythm, slowdown, loudness consistency worse than your mean by over 1 SD ({base.n} prior tests)</span></div>}
               </div>
+              <NormLine norm={normScore([{ value: result.rate, ...NORMS.ddk_rate }])} what="syllable rate vs 7.16 ± 0.73 /s (Rusz 2011)" />
               {result.coverage < 0.6 && (
                 <div style={{ fontSize: 12, color: "#fbbf24", marginTop: 6 }}>Only {Math.round(result.coverage * 100)}% of your {result.speechSeconds.toFixed(0)} s of speech was counted; the detector lost the syllables partway. Check the envelope below and consider discarding this run.</div>
               )}
@@ -2548,7 +2582,8 @@
         const ts = new Date().toISOString();
         const raw = { passage: passage.id, note: note || null, seconds: Number(result.seconds.toFixed(1)), voicedSeconds: Number(result.voicedSeconds.toFixed(1)) };
         const items = [["read_f0_sd_st", Number(result.sdSt.toFixed(3))], ["read_range_st", Number(result.rangeSt.toFixed(2))], ["read_f0", Number(result.meanF0.toFixed(1))], ["read_rate", Number(result.rate.toFixed(3))],
-          ["read_pause_pct", Number(result.pausePct.toFixed(4))], ["read_seconds", Number(result.seconds.toFixed(1))], ["read_score", base && base.score != null ? 5 - base.score : null]].filter(([, v]) => v != null)
+          ["read_pause_pct", Number(result.pausePct.toFixed(4))], ["read_seconds", Number(result.seconds.toFixed(1))], ["read_score", base && base.score != null ? 5 - base.score : null],
+          ["read_norm", (() => { const n = normScore([{ value: result.sdSt, ...NORMS.read_f0_sd_st }]); return n ? n.score : null; })()]].filter(([, v]) => v != null)
           .map(([metric, value]) => ({ ts, source: "motor", metric, value, raw }));
         const r = await apiFetch("/api/observations", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(items) });
         if (r.ok) { setPhase("idle"); setResult(null); setNote(""); setMsg("Saved."); } else setMsg("Save failed.");
@@ -2597,6 +2632,7 @@
                   ? <div style={{ fontSize: 13 }}>Building baseline: {base.n} of 5 reads of "{passage.title}". No score until then.</div>
                   : <div style={{ fontSize: 16, fontWeight: 600 }}>{5 - base.score} <span style={{ fontSize: 11, fontWeight: 400, color: "#94a3b8" }}>· {base.score} of pitch variability, range, rate, pauses worse than your mean by over 1 SD ({base.n} prior reads)</span></div>}
               </div>
+              <NormLine norm={normScore([{ value: result.sdSt, ...NORMS.read_f0_sd_st }])} what="pitch variability vs 2.48 ± 0.56 st (Rusz 2011, read text)" />
               <svg viewBox="0 0 600 60" style={{ width: "100%", height: 60, display: "block", marginTop: 8 }}>
                 {(() => { const v = result.st; const x = (i) => 10 + (580 * i) / Math.max(1, v.length - 1); const y = (s) => 36 - s * 3;
                   return <><text x="10" y="10" fontSize="10" fill="#64748b">pitch over the read, semitones around median</text><line x1="10" x2="590" y1={y(0)} y2={y(0)} stroke="#334155" strokeDasharray="3 3" />
@@ -2619,6 +2655,157 @@
                 {(() => { const vals = hist.map((h) => h.value); const hi = Math.max(3, ...vals); const x = (i) => 10 + (580 * i) / Math.max(1, hist.length - 1); const y = (v) => 52 - (46 * v) / hi;
                   return <><path d={"M" + hist.map((h, i) => `${x(i).toFixed(1)} ${y(h.value).toFixed(1)}`).join(" L")} fill="none" stroke="#c084fc" strokeWidth="1.5" />
                     {hist.map((h, i) => <circle key={i} cx={x(i)} cy={y(h.value)} r="2.5" fill="#c084fc"><title>{new Date(h.ts).toLocaleString()} · {h.value.toFixed(2)} st{h.raw && h.raw.note ? " · " + h.raw.note : ""}</title></circle>)}</>; })()}
+              </svg>
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    // ---------- Gait test: phone in a front pocket, 30 s walk ----------
+    const GAIT_SECONDS = 30, GAIT_LEAD = 5;
+    function analyzeGait(samples) {
+      // samples: [{t, x, y, z}] with gravity. Orientation-free magnitude, 50 Hz, 1 s moving-mean removed, light smoothing.
+      if (samples.length < 200) return null;
+      const t0 = samples[0].t, dur = (samples[samples.length - 1].t - t0) / 1000, fs = 50, n = Math.floor(dur * fs);
+      const mag = samples.map((p) => Math.sqrt(p.x * p.x + p.y * p.y + p.z * p.z));
+      const u = new Float64Array(n); let j = 0;
+      for (let i = 0; i < n; i++) { const tt = t0 + (i / fs) * 1000; while (j < samples.length - 2 && samples[j + 1].t < tt) j++; const a = samples[j], b = samples[j + 1]; const w = b.t === a.t ? 0 : (tt - a.t) / (b.t - a.t); u[i] = mag[j] + (mag[j + 1] - mag[j]) * w; }
+      const d = new Float64Array(n);
+      for (let i = 0; i < n; i++) { let a = 0, c = 0; for (let k = -25; k <= 25; k++) { const v = u[i + k]; if (v != null) { a += v; c++; } } d[i] = u[i] - a / c; }
+      const sm = new Float64Array(n);
+      for (let i = 0; i < n; i++) { let a = 0, c = 0; for (let k = -2; k <= 2; k++) { const v = d[i + k]; if (v != null) { a += v; c++; } } sm[i] = a / c; }
+      const rms = Math.sqrt(sm.reduce((a, b) => a + b * b, 0) / n);
+      if (rms < 0.3) return { tooStill: true, rms };
+      // step peaks: local maxima >= 0.3*rms*... use adaptive threshold, min 0.3 s apart (max 200 steps/min)
+      const thr = 0.5 * rms, minDist = Math.round(0.3 * fs), half = Math.round(0.15 * fs);
+      const peaks = [];
+      for (let i = half; i < n - half; i++) {
+        if (sm[i] < thr) continue;
+        let isMax = true; for (let k = -half; k <= half; k++) if (sm[i + k] > sm[i]) { isMax = false; break; }
+        if (!isMax) continue;
+        if (!peaks.length || i - peaks[peaks.length - 1] >= minDist) peaks.push(i); else if (sm[i] > sm[peaks[peaks.length - 1]]) peaks[peaks.length - 1] = i;
+      }
+      if (peaks.length < 15) return { tooFew: true, steps: peaks.length, rms };
+      const st = []; for (let i = 1; i < peaks.length; i++) st.push((peaks[i] - peaks[i - 1]) / fs);
+      const mean = st.reduce((a, b) => a + b, 0) / st.length;
+      const sd = Math.sqrt(st.reduce((a, b) => a + (b - mean) ** 2, 0) / st.length);
+      const cadence = 60 / mean;
+      // autocorrelation (unbiased, normalized) around step and stride lags
+      const ac = (lag) => { let num = 0, e = 0; const m = sm.reduce((a, b) => a + b, 0) / n; for (let i = 0; i + lag < n; i++) { num += (sm[i] - m) * (sm[i + lag] - m); } for (let i = 0; i < n; i++) e += (sm[i] - m) ** 2; return num / (e * ((n - lag) / n) || 1e-9); };
+      const best = (lagC) => { let b = -Infinity; for (let L = Math.round(lagC * 0.8); L <= Math.round(lagC * 1.2); L++) b = Math.max(b, ac(L)); return b; };
+      const stepLag = mean * fs, ac1 = best(stepLag), ac2 = best(2 * stepLag);
+      const asymmetry = Math.abs(ac1 - ac2);
+      return { seconds: dur, steps: peaks.length, cadence, stepCv: sd / mean, stepRegularity: ac1, strideRegularity: ac2, asymmetry, rms, trace: Array.from(sm).filter((_, i) => i % 2 === 0), peaks: peaks.map((p) => Math.round(p / 2)) };
+    }
+
+    function GaitTestCard() {
+      const [phase, setPhase] = useState("idle"); // idle | lead | recording | done
+      const [left, setLeft] = useState(0);
+      const [result, setResult] = useState(null);
+      const [base, setBase] = useState(null);
+      const [note, setNote] = useState("");
+      const [msg, setMsg] = useState("");
+      const samples = useRef([]);
+      const [history] = useJson("/api/observations?source=motor&metric=gait_cadence&limit=60", [phase]);
+      const isHandheld = useMemo(() => { try { return window.matchMedia("(pointer: coarse)").matches || /iPhone|iPad|Android/i.test(navigator.userAgent); } catch { return false; } }, []);
+      const GAIT_KEYS = [["gait_cadence", false], ["gait_step_cv", true], ["gait_stride_regularity", false], ["gait_asymmetry", true]];
+      useEffect(() => {
+        if (phase !== "done" || !result) return;
+        loadHistory(GAIT_KEYS.map((k) => k[0])).then((h) => setBase(baselineScore(GAIT_KEYS.map(([k, w]) => ({ key: k, value: k === "gait_cadence" ? result.cadence : k === "gait_step_cv" ? result.stepCv * 100 : k === "gait_stride_regularity" ? result.strideRegularity : result.asymmetry, higherIsWorse: w })), h)));
+      }, [phase]);
+      const start = async () => {
+        setMsg("");
+        try {
+          if (typeof DeviceMotionEvent !== "undefined" && typeof DeviceMotionEvent.requestPermission === "function") {
+            const r = await DeviceMotionEvent.requestPermission(); if (r !== "granted") { setMsg("Motion access was denied."); return; }
+          }
+        } catch (e) { setMsg("Couldn't request motion access: " + e.message); return; }
+        if (typeof DeviceMotionEvent === "undefined") { setMsg("No motion sensors in this browser."); return; }
+        samples.current = [];
+        setPhase("lead"); setLeft(GAIT_LEAD);
+        const t0 = performance.now();
+        const handler = (e) => { const a = e.accelerationIncludingGravity || e.acceleration; if (!a) return; samples.current.push({ t: performance.now(), x: a.x || 0, y: a.y || 0, z: a.z || 0 }); };
+        const tick = setInterval(() => {
+          const el = (performance.now() - t0) / 1000;
+          if (el < GAIT_LEAD) setLeft(Math.ceil(GAIT_LEAD - el)); else { setPhase("recording"); setLeft(Math.max(0, Math.ceil(GAIT_LEAD + GAIT_SECONDS - el))); }
+        }, 250);
+        setTimeout(() => window.addEventListener("devicemotion", handler), GAIT_LEAD * 1000);
+        try { if (navigator.vibrate) { setTimeout(() => navigator.vibrate(200), GAIT_LEAD * 1000); setTimeout(() => navigator.vibrate([200, 100, 200]), (GAIT_LEAD + GAIT_SECONDS) * 1000); } } catch {}
+        setTimeout(() => {
+          window.removeEventListener("devicemotion", handler); clearInterval(tick);
+          const res = analyzeGait(samples.current);
+          if (!res || res.tooStill || res.tooFew) { setPhase("idle"); setMsg(res && res.tooFew ? `Only ${res.steps} steps detected. Walk continuously for the whole 30 s with the phone in a front pocket.` : "Not enough movement recorded. Put the phone in a front trouser pocket and keep walking until it buzzes or the countdown ends."); return; }
+          setBase(null); setResult(res); setPhase("done");
+        }, (GAIT_LEAD + GAIT_SECONDS) * 1000 + 100);
+      };
+      const save = async () => {
+        const ts = new Date().toISOString();
+        const nrm = normScore([{ value: result.cadence, ...NORMS.gait_cadence }, { value: result.stepCv * 100, ...NORMS.gait_step_cv, higherIsWorse: true }]);
+        const raw = { note: note || null, seconds: Number(result.seconds.toFixed(1)), steps: result.steps };
+        const items = [["gait_cadence", Number(result.cadence.toFixed(1))], ["gait_step_cv", Number((result.stepCv * 100).toFixed(2))], ["gait_step_regularity", Number(result.stepRegularity.toFixed(3))],
+          ["gait_stride_regularity", Number(result.strideRegularity.toFixed(3))], ["gait_asymmetry", Number(result.asymmetry.toFixed(3))], ["gait_rms", Number(result.rms.toFixed(3))],
+          ["gait_score", base && base.score != null ? 5 - base.score : null], ["gait_norm", nrm ? nrm.score : null]].filter(([, v]) => v != null)
+          .map(([metric, value]) => ({ ts, source: "motor", metric, value, raw }));
+        const r = await apiFetch("/api/observations", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(items) });
+        if (r.ok) { setPhase("idle"); setResult(null); setNote(""); setMsg("Saved."); } else setMsg("Save failed.");
+      };
+      const hist = history ? [...history].reverse() : [];
+      return (
+        <div className="card">
+          <div className="card-header">
+            <div>
+              <div className="card-title">Gait test</div>
+              <div className="card-subtitle">Phone in a front trouser pocket, walk at your normal pace for 30 s (turn as needed). Cadence, step-to-step variability, stride regularity and left–right asymmetry from the accelerometer.</div>
+            </div>
+          </div>
+          {!isHandheld && phase === "idle" && <div className="card-subtitle" style={{ marginTop: 6 }}>Run this on your phone.</div>}
+          {isHandheld && phase === "idle" && (
+            <div className="controls-row" style={{ marginTop: 6 }}><button type="button" className="pill-btn primary" onClick={start}>Start (5 s to pocket the phone, then 30 s walk)</button></div>
+          )}
+          {phase === "lead" && <div style={{ textAlign: "center", padding: "18px 0" }}><div style={{ fontSize: 48, fontWeight: 700 }}>{left}</div><div className="card-subtitle">Put the phone in your front pocket…</div></div>}
+          {phase === "recording" && <div style={{ textAlign: "center", padding: "18px 0" }}><div style={{ fontSize: 48, fontWeight: 700 }}>{left}</div><div className="card-subtitle">Walking… keep going until it buzzes or reaches 0.</div></div>}
+          {phase === "done" && result && (
+            <>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8, marginTop: 6 }}>
+                {[["Cadence", Math.round(result.cadence) + " /min"], ["Steps", `${result.steps} in ${result.seconds.toFixed(0)} s`], ["Step variability", (result.stepCv * 100).toFixed(1) + "%"],
+                  ["Stride regularity", result.strideRegularity.toFixed(2)], ["Asymmetry", result.asymmetry.toFixed(2)], ["Intensity", result.rms.toFixed(2) + " m/s²"]].map(([k, v]) => (
+                  <div key={k} style={{ background: "#0f172a", borderRadius: 8, padding: "8px 10px" }}>
+                    <div style={{ fontSize: 11, color: "#94a3b8" }}>{k}</div>
+                    <div style={{ fontSize: 16, fontWeight: 600 }}>{v}</div>
+                  </div>
+                ))}
+              </div>
+              <div style={{ background: "#0f172a", borderRadius: 8, padding: "8px 10px", marginTop: 8 }}>
+                <div style={{ fontSize: 11, color: "#94a3b8" }}>Score vs your own baseline (1–5, 5 = at or better than baseline)</div>
+                {base == null ? <div style={{ fontSize: 13 }}>…</div> : base.score == null
+                  ? <div style={{ fontSize: 13 }}>Building baseline: {base.n} of 5 walks saved. No score until then.</div>
+                  : <div style={{ fontSize: 16, fontWeight: 600, color: ratingColor(5 - base.score) }}>{5 - base.score} <span style={{ fontSize: 11, fontWeight: 400, color: "#94a3b8" }}>· {base.score} of cadence, variability, regularity, asymmetry worse than your mean by over 1 SD ({base.n} prior walks)</span></div>}
+              </div>
+              <NormLine norm={normScore([{ value: result.cadence, ...NORMS.gait_cadence }, { value: result.stepCv * 100, ...NORMS.gait_step_cv, higherIsWorse: true }])} what="cadence vs ~112 ± 9 /min and step variability vs ~2.5 ± 1.5 % (healthy adults, preferred speed)" />
+              <svg viewBox="0 0 600 70" style={{ width: "100%", height: 70, display: "block", marginTop: 8 }}>
+                {(() => { const e = result.trace; const lo = Math.min(...e), hi = Math.max(...e); const x = (i) => 10 + (580 * i) / (e.length - 1); const y = (v) => 62 - (50 * (v - lo)) / (hi - lo || 1);
+                  return <><text x="10" y="10" fontSize="10" fill="#64748b">acceleration (first 10 s shown) with detected steps</text>
+                    <path d={"M" + e.slice(0, 250).map((v, i) => `${(10 + (580 * i) / 249).toFixed(1)} ${y(v).toFixed(1)}`).join(" L")} fill="none" stroke="#34d399" strokeWidth="1" />
+                    {result.peaks.filter((p) => p < 250).map((p, k) => <line key={k} x1={10 + (580 * p) / 249} x2={10 + (580 * p) / 249} y1="14" y2="64" stroke="#a3e635" strokeWidth="1" opacity="0.6" />)}</>; })()}
+              </svg>
+              <div style={{ fontSize: 10, color: "#64748b", marginTop: 2 }}>Regularity and asymmetry use autocorrelation at one-step and two-step lags (Moe-Nilssen & Helbostad). PD gait shows higher step variability and asymmetry before cadence changes. Same pocket, same shoes, same route when you can.</div>
+              <div className="controls-row" style={{ gap: 8, marginTop: 6 }}>
+                <input value={note} onChange={(e) => setNote(e.target.value)} placeholder="Note (e.g. pre-dose, indoors)"
+                  style={{ flex: 1, background: "#0f172a", color: "#e2e8f0", border: "1px solid #334155", borderRadius: 8, padding: "8px 10px", fontSize: 14 }} />
+                <button type="button" className="pill-btn primary" onClick={save}>Save</button>
+                <button type="button" className="pill-btn" onClick={() => { setPhase("idle"); setResult(null); }}>Discard</button>
+              </div>
+            </>
+          )}
+          {msg && <div className="card-subtitle" style={{ marginTop: 6, color: msg === "Saved." ? "#a3e635" : "#f87171" }}>{msg}</div>}
+          {hist.length > 1 && (
+            <div style={{ marginTop: 10 }}>
+              <div style={{ fontSize: 11, color: "#94a3b8" }}>Cadence (steps/min), last {hist.length} walks</div>
+              <svg viewBox="0 0 600 60" style={{ width: "100%", height: 60, display: "block" }}>
+                {(() => { const vals = hist.map((h) => h.value); const lo = Math.min(80, ...vals), hi = Math.max(130, ...vals); const x = (i) => 10 + (580 * i) / Math.max(1, hist.length - 1); const y = (v) => 52 - (46 * (v - lo)) / (hi - lo || 1);
+                  return <><path d={"M" + hist.map((h, i) => `${x(i).toFixed(1)} ${y(h.value).toFixed(1)}`).join(" L")} fill="none" stroke="#34d399" strokeWidth="1.5" />
+                    {hist.map((h, i) => <circle key={i} cx={x(i)} cy={y(h.value)} r="2.5" fill="#34d399"><title>{new Date(h.ts).toLocaleString()} · {Math.round(h.value)} /min{h.raw && h.raw.note ? " · " + h.raw.note : ""}</title></circle>)}</>; })()}
               </svg>
             </div>
           )}
@@ -3136,7 +3323,7 @@
     // Metrics shown in the Trends overlay picker by default (settings.trendMetrics overrides). Under ten, chosen for
     // being the ones most likely to move with QoL over months: sleep, recovery, dose-sensitive tests, gait.
     const DEFAULT_TREND_METRICS = ["oura/sleep_score", "oura/avg_hrv", "oura/total_sleep_h", "oura/readiness_score", "hae/resting_heart_rate",
-      "hae/walking_double_support_percentage", "motor/tremor_score", "motor/tap_score", "motor/ddk_score"];
+      "hae/walking_double_support_percentage", "motor/tremor_score", "motor/tap_score", "motor/ddk_score", "motor/gait_score"];
     const METRIC_LABELS = {
       "oura/sleep_score": "Sleep score (Oura)", "oura/avg_hrv": "Night HRV (Oura)", "oura/total_sleep_h": "Sleep hours (Oura)", "oura/deep_h": "Deep sleep (Oura)",
       "oura/readiness_score": "Readiness (Oura)", "oura/lowest_hr": "Lowest night HR (Oura)", "oura/temperature_deviation": "Temp deviation (Oura)", "oura/steps": "Steps (Oura)",
@@ -3147,6 +3334,8 @@
       "motor/ddk_score": "Pa-ta-ka score", "motor/ddk_rate": "Pa-ta-ka syll / s", "motor/voice_score": "Voice score", "motor/voice_hnr": "Voice HNR", "motor/voice_ppe": "Voice PPE",
       "motor/voice_jitter_pct": "Voice jitter %", "motor/voice_int_slope": "Voice loudness slope", "motor/read_score": "Reading score", "motor/read_f0_sd_st": "Reading pitch variability",
       "motor/spiral_error_pct": "Spiral deviation %", "motor/spiral_tremor_share": "Spiral tremor share",
+      "motor/gait_score": "Gait score", "motor/gait_cadence": "Cadence (steps/min)", "motor/gait_step_cv": "Step variability %", "motor/gait_asymmetry": "Gait asymmetry", "motor/gait_stride_regularity": "Stride regularity",
+      "motor/ddk_norm": "Pa-ta-ka vs healthy", "motor/read_norm": "Reading vs healthy", "motor/voice_norm": "Vowel vs healthy", "motor/gait_norm": "Gait vs healthy",
     };
     const metricLabel = (k) => METRIC_LABELS[k] || k.replace("/", " · ");
 
@@ -3208,8 +3397,10 @@
     // [key, label, decimals, direction, kind]  direction: 1 = higher is better, -1 = lower is better, 0 = neutral (no colour)
     const STAT_GROUPS = [
       ["QoL & doses", [["qol", "Mean QoL (1–5)", 2, 1, "score"], ["doses", "Doses / day", 1, 0], ["rated", "Rated blocks / day", 1, 0]]],
-      ["Test scores (1–5)", [["motor/tremor_score", "Tremor", 1, 1, "score"], ["motor/tap_score", "Tapping", 1, 1, "score"], ["motor/ddk_score", "Pa-ta-ka", 1, 1, "score"], ["motor/voice_score", "Voice", 1, 1, "score"], ["motor/read_score", "Reading", 1, 1, "score"]]],
-      ["Motor measures", [["motor/tremor_amp_cm", "Tremor amplitude (cm)", 2, -1], ["motor/tap_rate", "Taps / s", 2, 1], ["motor/tap_cv", "Tapping rhythm CV", 2, -1], ["motor/spiral_error_pct", "Spiral deviation (%)", 1, -1], ["motor/spiral_tremor_share", "Spiral tremor share", 2, -1]]],
+      ["Test scores vs your baseline (1–5)", [["rollup:motor", "Motor overall", 1, 1, "score"], ["motor/tremor_score", "Tremor", 1, 1, "score"], ["motor/tap_score", "Tapping", 1, 1, "score"], ["motor/gait_score", "Gait", 1, 1, "score"],
+        ["rollup:voice", "Voice overall", 1, 1, "score"], ["motor/ddk_score", "Pa-ta-ka", 1, 1, "score"], ["motor/voice_score", "Sustained vowel", 1, 1, "score"], ["motor/read_score", "Reading", 1, 1, "score"]]],
+      ["Test scores vs healthy reference (1–5)", [["motor/ddk_norm", "Pa-ta-ka rate", 1, 1, "score"], ["motor/read_norm", "Reading pitch variability", 1, 1, "score"], ["motor/voice_norm", "Sustained vowel (jitter, PPE)", 1, 1, "score"], ["motor/gait_norm", "Gait (cadence, variability)", 1, 1, "score"]]],
+      ["Motor measures", [["motor/tremor_amp_cm", "Tremor amplitude (cm)", 2, -1], ["motor/tap_rate", "Taps / s", 2, 1], ["motor/tap_cv", "Tapping rhythm CV", 2, -1], ["motor/gait_cadence", "Cadence (steps/min)", 0, 1], ["motor/gait_step_cv", "Step variability (%)", 1, -1], ["motor/gait_stride_regularity", "Stride regularity", 2, 1], ["motor/gait_asymmetry", "Gait asymmetry", 2, -1], ["motor/spiral_error_pct", "Spiral deviation (%)", 1, -1], ["motor/spiral_tremor_share", "Spiral tremor share", 2, -1]]],
       ["Voice measures", [["motor/ddk_rate", "Pa-ta-ka syll / s", 2, 1], ["motor/ddk_cv", "Pa-ta-ka rhythm CV", 2, -1], ["motor/voice_hnr", "Voice HNR (dB)", 1, 1], ["motor/voice_jitter_pct", "Voice jitter (%)", 2, -1], ["motor/voice_ppe", "Voice PPE", 3, -1], ["motor/voice_int_slope", "Voice loudness slope (dB/s)", 2, 1], ["motor/read_f0_sd_st", "Reading pitch var. (st)", 2, 1], ["motor/read_rate", "Reading rate (/s)", 2, 1]]],
       ["Oura", [["oura/sleep_score", "Sleep score", 0, 1], ["oura/readiness_score", "Readiness", 0, 1], ["oura/total_sleep_h", "Sleep (h)", 1, 1], ["oura/deep_h", "Deep (h)", 1, 1], ["oura/avg_hrv", "Night HRV (ms)", 0, 1], ["oura/lowest_hr", "Lowest HR", 0, -1], ["oura/temperature_deviation", "Temp dev (°C)", 2, 0]]],
       ["Watch", [["hae/resting_heart_rate", "Resting HR", 0, -1], ["hae/heart_rate_variability", "Daytime HRV (ms)", 0, 1], ["hae/step_count", "Steps", 0, 1], ["hae/walking_speed", "Walking speed", 2, 1], ["hae/walking_step_length", "Step length", 2, 1], ["hae/walking_double_support_percentage", "Double support %", 1, -1], ["hae/walking_asymmetry_percentage", "Asymmetry %", 1, -1]]],
@@ -3221,9 +3412,22 @@
       const z = ((r.last - r.baseline.mean) / (r.baseline.sd || 1e-9)) * dir;
       return z < -1.5 ? 1 : z < -0.5 ? 2 : z <= 0.5 ? 3 : z <= 1.5 ? 4 : 5;
     }
+    const ROLLUPS = { "rollup:motor": ["motor/tremor_score", "motor/tap_score", "motor/gait_score"], "rollup:voice": ["motor/ddk_score", "motor/voice_score", "motor/read_score"] };
+    // Daily mean of whichever component scores exist that day, then summarised like any metric.
+    function buildRollup(data, parts) {
+      const byDay = {};
+      parts.forEach((k) => { const r = data[k]; if (r && r.series) r.series.forEach(([d, v]) => { (byDay[d] = byDay[d] || []).push(v); }); });
+      const series = Object.keys(byDay).sort().map((d) => [d, byDay[d].reduce((a, b) => a + b, 0) / byDay[d].length]);
+      if (!series.length) return { n30: 0 };
+      const vals = series.map((p) => p[1]); const today = new Date(); const dd = (d) => Math.round((today - new Date(d)) / 86400000);
+      const win = (n) => { const v = series.filter((p) => dd(p[0]) < n).map((p) => p[1]); return v.length ? v.reduce((a, b) => a + b, 0) / v.length : null; };
+      const mean = vals.reduce((a, b) => a + b, 0) / vals.length;
+      return { n30: vals.length, last: vals[vals.length - 1], m7: win(7), m14: win(14), m30: mean, min: Math.min(...vals), max: Math.max(...vals), sd: Math.sqrt(vals.reduce((a, b) => a + (b - mean) ** 2, 0) / vals.length), series, baseline: null };
+    }
     function StatsTab() {
-      const keys = STAT_GROUPS.flatMap(([, rows]) => rows.map((r) => r[0]));
-      const [data, err] = useJson(`/api/stats?metrics=${encodeURIComponent(keys.join(","))}`, []);
+      const keys = STAT_GROUPS.flatMap(([, rows]) => rows.map((r) => r[0])).filter((k) => !k.startsWith("rollup:"));
+      const [raw, err] = useJson(`/api/stats?metrics=${encodeURIComponent(keys.join(","))}`, []);
+      const data = useMemo(() => { if (!raw) return null; const d = { ...raw }; Object.entries(ROLLUPS).forEach(([k, parts]) => { d[k] = buildRollup(raw, parts); }); return d; }, [raw]);
       const fmt = (v, d) => (v == null ? "–" : Number(v).toFixed(d));
       const scoreColor = (v) => (v == null ? "inherit" : ratingColor(Math.max(1, Math.min(5, Math.round(v)))));
       return (
@@ -3481,6 +3685,7 @@
               <Section title="Motor" subtitle="Tremor, tapping, spiral. Same hand each time; pre-dose and ~1 h post-dose is the most useful pair." storageKey="motor">
                 <TremorTestCard />
                 <TapTestCard />
+                <GaitTestCard />
                 <SpiralTestCard />
               </Section>
               <Section title="Voice" subtitle="Pa-ta-ka tracks levodopa state; sustained vowel and reading are slower baselines (weekly is fine)." storageKey="voice">

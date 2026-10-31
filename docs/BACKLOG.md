@@ -7,8 +7,7 @@ Ordered roughly by value. Dates are when the item was added.
 - Calendar "has data" dots for days with synced wearable data, not just QoL entries.
 
 ## Tests and features
-- **Gait test** (2026-10-31). Phone in pocket, walk 30 s. Cadence, step regularity, asymmetry from the accelerometer.
-  Reuses the tremor-test capture code. On demand, so pre/post-dose comparison is possible (Watch gait is daily only).
+- ~~Gait test~~ Done 2026-10-31.
 - ~~DDK / pa-ta-ka test~~ Done 2026-10-31.
 - ~~Reading-passage sdF0~~ Done 2026-10-31 (six passages, per-passage baselines).
 - **Balance / sway test**. Phone against chest, 30 s eyes open then closed; sway area. Only domain nothing else covers.
