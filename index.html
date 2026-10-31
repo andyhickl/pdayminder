@@ -206,10 +206,13 @@
     }
 
     .mini-cal-header {
-      display: flex;
+      display: grid;
+      grid-template-columns: 1fr auto 1fr;
       align-items: center;
-      justify-content: space-between;
       margin-bottom: 4px;
+    }
+    .mini-cal-header .mini-cal-nav:last-child {
+      justify-content: flex-end;
     }
 
     .mini-cal-grid {
@@ -827,6 +830,7 @@
       return (
         <div className="mini-calendar">
           <div className="mini-cal-header">
+            <div />
             <div className="mini-cal-nav">
               <button type="button" onClick={() => shiftMonth(-1)} aria-label="Previous month">‹</button>
               <span className="mini-cal-month">{view.toLocaleDateString(undefined, { month: "long", year: "numeric" })}</span>
@@ -1992,7 +1996,16 @@
               <button className="day-nav-btn" type="button" onClick={() => goToOffsetDay(-1)}>
                 <span>←</span> <span>Prev</span>
               </button>
-              <label className="day-nav-date" title="Pick a date">
+              <label
+                className="day-nav-date"
+                title="Pick a date"
+                onClick={(e) => {
+                  const input = e.currentTarget.querySelector("input");
+                  if (!input) return;
+                  e.preventDefault();
+                  try { input.showPicker(); } catch { input.focus(); input.click(); }
+                }}
+              >
                 {formatPrettyDate(selectedDate)}
                 <input
                   type="date"
