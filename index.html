@@ -3445,6 +3445,59 @@
       );
     }
 
+    function Spark({ series, color, w = 120, h = 30 }) {
+      if (!series || !series.length) return null;
+      const v = series.map((p) => p[1]); const lo = Math.min(1, ...v), hi = Math.max(5, ...v);
+      const x = (i) => 2 + ((w - 4) * i) / Math.max(1, v.length - 1); const y = (q) => h - 3 - ((h - 6) * (q - lo)) / (hi - lo || 1);
+      return (
+        <svg viewBox={`0 0 ${w} ${h}`} preserveAspectRatio="none" style={{ width: "100%", height: h, display: "block", minWidth: 0 }}>
+          <line x1="2" x2={w - 2} y1={y(3)} y2={y(3)} stroke="#334155" strokeDasharray="2 3" />
+          {v.length > 1 && <path d={"M" + v.map((q, i) => `${x(i).toFixed(1)} ${y(q).toFixed(1)}`).join(" L")} fill="none" stroke={color} strokeWidth="1.4" />}
+          <circle cx={x(v.length - 1)} cy={y(v[v.length - 1])} r="2.5" fill={color} />
+        </svg>
+      );
+    }
+    function StatusCard() {
+      const keys = [...new Set(Object.values(ROLLUPS).flat())];
+      const [raw, err] = useJson(`/api/stats?metrics=${encodeURIComponent(keys.join(","))}`, []);
+      const data = useMemo(() => withRollups(raw), [raw]);
+      const fmt = (v) => (v == null ? "–" : Number(v).toFixed(1));
+      const col = (v) => (v == null ? "#64748b" : ratingColor(Math.max(1, Math.min(5, Math.round(v)))));
+      const rows = [["Overall", "rollup:overall_norm", "rollup:overall_base"], ["Motor", "rollup:motor_norm", "rollup:motor_base"], ["Voice", "rollup:voice_norm", "rollup:voice_base"]];
+      const cell = (k) => { const r = data && data[k]; const has = r && r.n30 > 0; return (
+        <div style={{ minWidth: 0 }}>
+          <div style={{ display: "flex", alignItems: "baseline", gap: 6 }}>
+            <div style={{ fontSize: 22, fontWeight: 700, color: col(has ? r.last : null), lineHeight: 1 }}>{has ? fmt(r.last) : "–"}</div>
+            <div style={{ fontSize: 10, color: "#64748b", whiteSpace: "nowrap" }}>{has ? `7d ${fmt(r.m7)} · 30d ${fmt(r.m30)}` : "no tests yet"}</div>
+          </div>
+          {has && <div style={{ marginTop: 4 }}><Spark series={r.series} color={col(r.last)} h={26} /></div>}
+        </div>); };
+      return (
+        <div className="card">
+          <div className="card-header">
+            <div>
+              <div className="card-title">Status</div>
+              <div className="card-subtitle">Composite test scores (1–5, 5 best), daily means over 30 days. Left: vs healthy reference. Right: vs your own baseline. They answer different questions; both can be true at once.</div>
+            </div>
+          </div>
+          {err && <div className="card-subtitle">Couldn't load ({err}).</div>}
+          <div style={{ display: "grid", gridTemplateColumns: "52px minmax(0, 1fr) minmax(0, 1fr)", gap: 6, alignItems: "center", marginTop: 6 }}>
+            <div />
+            <div style={{ fontSize: 10, color: "#94a3b8", textTransform: "uppercase", letterSpacing: "0.04em" }}>vs healthy</div>
+            <div style={{ fontSize: 10, color: "#94a3b8", textTransform: "uppercase", letterSpacing: "0.04em" }}>vs baseline</div>
+            {rows.map(([label, kn, kb]) => (
+              <React.Fragment key={label}>
+                <div style={{ fontSize: 14, fontWeight: 600 }}>{label}</div>
+                <div style={{ background: "#0f172a", borderRadius: 8, padding: "6px 8px" }}>{cell(kn)}</div>
+                <div style={{ background: "#0f172a", borderRadius: 8, padding: "6px 8px" }}>{cell(kb)}</div>
+              </React.Fragment>
+            ))}
+          </div>
+          <div style={{ fontSize: 10, color: "#64748b", marginTop: 8 }}>Motor = tremor, tapping, gait. Voice = pa-ta-ka, sustained vowel, reading. Overall = mean of the two. Healthy references assume straight-line walking and lab-style recordings; a low number there with a high one on the right means "stable, but below the reference". The dashed line is 3.</div>
+        </div>
+      );
+    }
+
     const TABS = [["qol", "QoL", "◉"], ["tests", "Tests", "✚"], ["trends", "Trends", "↗"], ["stats", "Stats", "Σ"], ["settings", "Settings", "⚙"]];
     const TAB_TAGLINES = { qol: "Track meds and QoL, one ring per day.", tests: "Short objective tests. Same conditions each time.", trends: "What moves with what.", stats: "The numbers behind the charts.", settings: "Integrations, keys, data." };
 
@@ -3469,9 +3522,10 @@
     // [key, label, decimals, direction, kind]  direction: 1 = higher is better, -1 = lower is better, 0 = neutral (no colour)
     const STAT_GROUPS = [
       ["QoL & doses", [["qol", "Mean QoL (1–5)", 2, 1, "score"], ["doses", "Doses / day", 1, 0], ["rated", "Rated blocks / day", 1, 0]]],
-      ["Test scores vs your baseline (1–5)", [["rollup:motor", "Motor overall", 1, 1, "score"], ["motor/tremor_score", "Tremor", 1, 1, "score"], ["motor/tap_score", "Tapping", 1, 1, "score"], ["motor/gait_score", "Gait", 1, 1, "score"],
-        ["rollup:voice", "Voice overall", 1, 1, "score"], ["motor/ddk_score", "Pa-ta-ka", 1, 1, "score"], ["motor/voice_score", "Sustained vowel", 1, 1, "score"], ["motor/read_score", "Reading", 1, 1, "score"]]],
-      ["Test scores vs healthy reference (1–5)", [["motor/ddk_norm", "Pa-ta-ka rate", 1, 1, "score"], ["motor/read_norm", "Reading pitch variability", 1, 1, "score"], ["motor/voice_norm", "Sustained vowel (jitter, PPE)", 1, 1, "score"], ["motor/gait_norm", "Gait (cadence, variability)", 1, 1, "score"]]],
+      ["Test scores vs healthy reference (1–5)", [["rollup:overall_norm", "Overall", 1, 1, "score"], ["rollup:motor_norm", "Motor", 1, 1, "score"], ["motor/tremor_score", "Tremor (UPDRS-based)", 1, 1, "score"], ["motor/tap_score", "Tapping", 1, 1, "score"], ["motor/gait_norm", "Gait (cadence, variability)", 1, 1, "score"],
+        ["rollup:voice_norm", "Voice", 1, 1, "score"], ["motor/ddk_norm", "Pa-ta-ka rate", 1, 1, "score"], ["motor/voice_norm", "Sustained vowel (jitter, PPE)", 1, 1, "score"], ["motor/read_norm", "Reading pitch variability", 1, 1, "score"]]],
+      ["Test scores vs your baseline (1–5)", [["rollup:overall_base", "Overall", 1, 1, "score"], ["rollup:motor_base", "Motor", 1, 1, "score"], ["motor/gait_score", "Gait", 1, 1, "score"],
+        ["rollup:voice_base", "Voice", 1, 1, "score"], ["motor/ddk_score", "Pa-ta-ka", 1, 1, "score"], ["motor/voice_score", "Sustained vowel", 1, 1, "score"], ["motor/read_score", "Reading", 1, 1, "score"]]],
       ["Motor measures", [["motor/tremor_amp_cm", "Tremor amplitude (cm)", 2, -1], ["motor/tap_rate", "Taps / s", 2, 1], ["motor/tap_cv", "Tapping rhythm CV", 2, -1], ["motor/gait_cadence", "Cadence (steps/min)", 0, 1], ["motor/gait_step_cv", "Step variability (%)", 1, -1], ["motor/gait_stride_regularity", "Stride regularity", 2, 1], ["motor/gait_asymmetry", "Gait asymmetry", 2, -1], ["motor/spiral_error_pct", "Spiral deviation (%)", 1, -1], ["motor/spiral_tremor_share", "Spiral tremor share", 2, -1]]],
       ["Voice measures", [["motor/ddk_rate", "Pa-ta-ka syll / s", 2, 1], ["motor/ddk_cv", "Pa-ta-ka rhythm CV", 2, -1], ["motor/voice_hnr", "Voice HNR (dB)", 1, 1], ["motor/voice_jitter_pct", "Voice jitter (%)", 2, -1], ["motor/voice_ppe", "Voice PPE", 3, -1], ["motor/voice_int_slope", "Voice loudness slope (dB/s)", 2, 1], ["motor/read_f0_sd_st", "Reading pitch var. (st)", 2, 1], ["motor/read_rate", "Reading rate (/s)", 2, 1]]],
       ["Oura", [["oura/sleep_score", "Sleep score", 0, 1], ["oura/readiness_score", "Readiness", 0, 1], ["oura/total_sleep_h", "Sleep (h)", 1, 1], ["oura/deep_h", "Deep (h)", 1, 1], ["oura/avg_hrv", "Night HRV (ms)", 0, 1], ["oura/lowest_hr", "Lowest HR", 0, -1], ["oura/temperature_deviation", "Temp dev (°C)", 2, 0]]],
@@ -3484,7 +3538,14 @@
       const z = ((r.last - r.baseline.mean) / (r.baseline.sd || 1e-9)) * dir;
       return z < -1.5 ? 1 : z < -0.5 ? 2 : z <= 0.5 ? 3 : z <= 1.5 ? 4 : 5;
     }
-    const ROLLUPS = { "rollup:motor": ["motor/tremor_score", "motor/tap_score", "motor/gait_score"], "rollup:voice": ["motor/ddk_score", "motor/voice_score", "motor/read_score"] };
+    // Composites. "norm" = vs healthy reference (tremor and tapping scores are already absolute scales); "base" = vs own baseline.
+    const ROLLUPS = {
+      "rollup:motor_norm": ["motor/tremor_score", "motor/tap_score", "motor/gait_norm"],
+      "rollup:motor_base": ["motor/tremor_score", "motor/tap_score", "motor/gait_score"],
+      "rollup:voice_norm": ["motor/ddk_norm", "motor/voice_norm", "motor/read_norm"],
+      "rollup:voice_base": ["motor/ddk_score", "motor/voice_score", "motor/read_score"],
+    };
+    const OVERALL = { "rollup:overall_norm": ["rollup:motor_norm", "rollup:voice_norm"], "rollup:overall_base": ["rollup:motor_base", "rollup:voice_base"] };
     // Daily mean of whichever component scores exist that day, then summarised like any metric.
     function buildRollup(data, parts) {
       const byDay = {};
@@ -3496,10 +3557,16 @@
       const mean = vals.reduce((a, b) => a + b, 0) / vals.length;
       return { n30: vals.length, last: vals[vals.length - 1], m7: win(7), m14: win(14), m30: mean, min: Math.min(...vals), max: Math.max(...vals), sd: Math.sqrt(vals.reduce((a, b) => a + (b - mean) ** 2, 0) / vals.length), series, baseline: null };
     }
+    function withRollups(raw) {
+      if (!raw) return null; const d = { ...raw };
+      Object.entries(ROLLUPS).forEach(([k, parts]) => { d[k] = buildRollup(raw, parts); });
+      Object.entries(OVERALL).forEach(([k, parts]) => { d[k] = buildRollup(d, parts); });
+      return d;
+    }
     function StatsTab() {
       const keys = STAT_GROUPS.flatMap(([, rows]) => rows.map((r) => r[0])).filter((k) => !k.startsWith("rollup:"));
       const [raw, err] = useJson(`/api/stats?metrics=${encodeURIComponent(keys.join(","))}`, []);
-      const data = useMemo(() => { if (!raw) return null; const d = { ...raw }; Object.entries(ROLLUPS).forEach(([k, parts]) => { d[k] = buildRollup(raw, parts); }); return d; }, [raw]);
+      const data = useMemo(() => withRollups(raw), [raw]);
       const fmt = (v, d) => (v == null ? "–" : Number(v).toFixed(d));
       const scoreColor = (v) => (v == null ? "inherit" : ratingColor(Math.max(1, Math.min(5, Math.round(v)))));
       return (
@@ -3525,7 +3592,7 @@
                         <div className="stat-top">
                           <div className="stats-label">{label}<div className="stats-n">{r ? `${r.n30} of 30 days` : ""}{r && r.baseline ? ` · baseline ${fmt(r.baseline.mean, d)} ± ${fmt(r.baseline.sd, d)} (${r.baseline.n} d)` : r ? " · baseline n/a yet" : ""}</div></div>
                           <div className="stat-last" style={{ color }}>{fmt(r && r.last, d)}</div>
-                          <div>{r && r.series && r.series.length > 1 && (
+                          <div>{r && r.series && r.series.length > 0 && (
                             <svg viewBox="0 0 90 26" style={{ width: 90, height: 26, display: "block" }}>
                               {(() => { const v = r.series.map((p) => p[1]); const lo = Math.min(...v), hi = Math.max(...v); const x = (i) => 2 + (86 * i) / Math.max(1, v.length - 1); const y = (q) => 23 - (20 * (q - lo)) / (hi - lo || 1);
                                 return <><path d={"M" + v.map((q, i) => `${x(i).toFixed(1)} ${y(q).toFixed(1)}`).join(" L")} fill="none" stroke="#38bdf8" strokeWidth="1.3" /><circle cx={x(v.length - 1)} cy={y(v[v.length - 1])} r="2" fill={color === "inherit" ? "#38bdf8" : color} /></>; })()}
@@ -3770,6 +3837,7 @@
 
           {tab === "trends" && (
             <>
+              <StatusCard />
               <div className="day-nav" style={{ marginTop: 0 }}>
                 <button className="day-nav-btn" type="button" onClick={() => goToOffsetDay(-1)}><span>←</span> <span>Prev</span></button>
                 <div className="day-nav-date" style={{ textDecoration: "none", cursor: "default" }}>{formatPrettyDate(selectedDate)}</div>
