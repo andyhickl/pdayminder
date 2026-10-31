@@ -157,6 +157,43 @@
       text-align: center;
       font-size: 13px;
       font-weight: 500;
+      position: relative;
+      cursor: pointer;
+      text-decoration: underline dotted var(--muted);
+      text-underline-offset: 3px;
+    }
+    .day-nav-date input[type="date"] {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      opacity: 0;
+      cursor: pointer;
+      font-size: 16px; /* keeps iOS from zooming */
+    }
+    .mini-cal-nav {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+    }
+    .mini-cal-nav button {
+      background: rgba(15, 23, 42, 0.9);
+      border: 1px solid var(--border);
+      color: var(--text);
+      border-radius: 6px;
+      padding: 2px 8px;
+      font-size: 12px;
+      cursor: pointer;
+      line-height: 1.4;
+    }
+    .mini-cal-nav button.today {
+      font-size: 11px;
+      color: var(--muted);
+    }
+    .mini-cal-month {
+      min-width: 110px;
+      text-align: center;
+      font-weight: 600;
     }
 
     .mini-calendar {
@@ -754,14 +791,16 @@
     function MiniCalendar({ selectedDate, daysWithData, onSelect }) {
       const todayKey = toDateKey(new Date());
       const selectedKey = toDateKey(selectedDate);
+      // The month shown is independent of the selected day, so you can page around without losing your place.
+      const [view, setView] = useState(() => new Date(selectedDate.getFullYear(), selectedDate.getMonth(), 1));
+      useEffect(() => {
+        setView(new Date(selectedDate.getFullYear(), selectedDate.getMonth(), 1));
+      }, [selectedKey]);
+      const shiftMonth = (n) => setView((v) => new Date(v.getFullYear(), v.getMonth() + n, 1));
 
-      const firstOfMonth = new Date(selectedDate.getFullYear(), selectedDate.getMonth(), 1);
+      const firstOfMonth = view;
       const firstDayIndex = firstOfMonth.getDay();
-      const daysInMonth = new Date(
-        selectedDate.getFullYear(),
-        selectedDate.getMonth() + 1,
-        0
-      ).getDate();
+      const daysInMonth = new Date(view.getFullYear(), view.getMonth() + 1, 0).getDate();
 
       const weeks = [];
       let currentDay = 1;
@@ -788,10 +827,14 @@
       return (
         <div className="mini-calendar">
           <div className="mini-cal-header">
-            <span>{selectedDate.toLocaleDateString(undefined, { month: "long", year: "numeric" })}</span>
-            <span style={{ color: "var(--muted)", fontSize: "11px" }}>
-              • days with a blue dot have entries
-            </span>
+            <div className="mini-cal-nav">
+              <button type="button" onClick={() => shiftMonth(-1)} aria-label="Previous month">‹</button>
+              <span className="mini-cal-month">{view.toLocaleDateString(undefined, { month: "long", year: "numeric" })}</span>
+              <button type="button" onClick={() => shiftMonth(1)} aria-label="Next month">›</button>
+            </div>
+            <div className="mini-cal-nav">
+              <button type="button" className="today" onClick={() => onSelect(new Date())}>Today</button>
+            </div>
           </div>
           <div className="mini-cal-grid">
             {dayNames.map((d) => (
@@ -802,11 +845,7 @@
                 if (!d) {
                   return <div key={`${ri}-${di}`} className="mini-cal-cell disabled"></div>;
                 }
-                const dateObj = new Date(
-                  selectedDate.getFullYear(),
-                  selectedDate.getMonth(),
-                  d
-                );
+                const dateObj = new Date(view.getFullYear(), view.getMonth(), d);
                 const key = toDateKey(dateObj);
                 const hasData = daysWithData.includes(key);
                 const isSelected = key === selectedKey;
@@ -1953,7 +1992,19 @@
               <button className="day-nav-btn" type="button" onClick={() => goToOffsetDay(-1)}>
                 <span>←</span> <span>Prev</span>
               </button>
-              <div className="day-nav-date">{formatPrettyDate(selectedDate)}</div>
+              <label className="day-nav-date" title="Pick a date">
+                {formatPrettyDate(selectedDate)}
+                <input
+                  type="date"
+                  value={dateKey}
+                  max={toDateKey(new Date(Date.now() + 365 * 86400000))}
+                  onChange={(e) => {
+                    if (!e.target.value) return;
+                    const [y, m, d] = e.target.value.split("-").map(Number);
+                    handleCalendarSelect(new Date(y, m - 1, d));
+                  }}
+                />
+              </label>
               <button className="day-nav-btn" type="button" onClick={() => goToOffsetDay(1)}>
                 <span>Next</span> <span>→</span>
               </button>
