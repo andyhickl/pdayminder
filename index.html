@@ -2249,30 +2249,37 @@
     const DDK_SECONDS = 10;
     function analyzeDdk(pcm, sampleRate) {
       // Syllable nuclei = peaks of the loudness envelope with a dip on both sides (de Jong & Wempe style). No ASR.
-      const hop = Math.round(sampleRate * 0.005), win = Math.round(sampleRate * 0.02);
+      // 10 ms RMS windows at 5 ms hop, 15 ms smoothing: short enough to keep the 20–60 ms consonant dips.
+      const hop = Math.round(sampleRate * 0.005), win = Math.round(sampleRate * 0.01);
       const env = [];
       for (let st = 0; st + win <= pcm.length; st += hop) { let e = 0; for (let i = 0; i < win; i++) e += pcm[st + i] * pcm[st + i]; env.push(Math.sqrt(e / win)); }
       if (env.length < 100) return null;
-      // ~30 ms smoothing
-      const sm = env.map((_, i) => { let a = 0, n = 0; for (let k = -3; k <= 3; k++) { const v = env[i + k]; if (v != null) { a += v; n++; } } return a / n; });
-      const maxE = Math.max(...sm); const floor = Math.max(0.003, maxE * 0.08);
-      const minDist = Math.round(0.09 / 0.005); // 90 ms -> up to ~11 syll/s
-      const half = Math.round(0.045 / 0.005);
+      const sm = env.map((_, i) => { let a = 0, n = 0; for (let k = -1; k <= 1; k++) { const v = env[i + k]; if (v != null) { a += v; n++; } } return a / n; });
+      // speech floor relative to the loud part of the recording (90th percentile), not the single loudest frame
+      const sorted = [...sm].sort((a, b) => a - b); const p90 = sorted[Math.floor(0.9 * (sorted.length - 1))];
+      const floor = Math.max(0.002, p90 * 0.12);
+      const minDist = Math.round(0.08 / 0.005); // 80 ms -> up to ~12 syll/s
+      const half = Math.round(0.04 / 0.005);
       const cand = [];
       for (let i = half; i < sm.length - half; i++) {
         if (sm[i] < floor) continue;
         let isMax = true; for (let k = -half; k <= half; k++) if (sm[i + k] > sm[i]) { isMax = false; break; }
-        if (isMax && (!cand.length || i - cand[cand.length - 1] >= minDist)) cand.push(i); else if (isMax && sm[i] > sm[cand[cand.length - 1]]) cand[cand.length - 1] = i;
+        if (!isMax) continue;
+        if (!cand.length || i - cand[cand.length - 1] >= minDist) cand.push(i); else if (sm[i] > sm[cand[cand.length - 1]]) cand[cand.length - 1] = i;
       }
-      // keep peaks with a real dip to the previous kept peak (valley <= 70% of the lower of the two)
+      // keep a peak if the valley to the previous kept peak drops to <= 80% of the lower of the two
       const peaks = [];
       for (const i of cand) {
         if (!peaks.length) { peaks.push(i); continue; }
         const j = peaks[peaks.length - 1]; let valley = Infinity; for (let k = j; k <= i; k++) if (sm[k] < valley) valley = sm[k];
-        if (valley <= 0.7 * Math.min(sm[i], sm[j])) peaks.push(i);
+        if (valley <= 0.8 * Math.min(sm[i], sm[j])) peaks.push(i);
         else if (sm[i] > sm[j]) peaks[peaks.length - 1] = i;
       }
-      if (peaks.length < 6) return { count: peaks.length, tooFew: true, env: sm, onsets: peaks };
+      // speech span: first to last frame above floor; coverage = share of that span inside the detected run
+      let first = sm.findIndex((v) => v >= floor), last = sm.length - 1; while (last > 0 && sm[last] < floor) last--;
+      const speechSeconds = Math.max(0.01, (last - first) * 0.005);
+      const coverage = peaks.length > 1 ? ((peaks[peaks.length - 1] - peaks[0]) * 0.005) / speechSeconds : 0;
+      if (peaks.length < 6) return { count: peaks.length, tooFew: true, env: sm, onsets: peaks, speechSeconds, coverage };
       const t = peaks.map((i) => i * 0.005);
       const ioi = []; for (let i = 1; i < t.length; i++) ioi.push(t[i] - t[i - 1]);
       const mean = ioi.reduce((a, b) => a + b, 0) / ioi.length;
@@ -2282,7 +2289,7 @@
       const r1 = h / ioi.slice(0, h).reduce((a, b) => a + b, 0), r2 = (ioi.length - h) / ioi.slice(h).reduce((a, b) => a + b, 0);
       const amps = peaks.map((i) => sm[i]); const pm = amps.reduce((a, b) => a + b, 0) / amps.length;
       const pcv = Math.sqrt(amps.reduce((a, b) => a + (b - pm) ** 2, 0) / amps.length) / pm;
-      return { count: peaks.length, rate: (peaks.length - 1) / span, ioiMs: mean * 1000, cv: sd / mean, decrement: (r1 - r2) / r1, loudnessCv: pcv, seconds: span, env: sm, onsets: peaks };
+      return { count: peaks.length, rate: (peaks.length - 1) / span, ioiMs: mean * 1000, cv: sd / mean, decrement: (r1 - r2) / r1, loudnessCv: pcv, seconds: span, speechSeconds, coverage, env: sm, onsets: peaks };
     }
 
     function DdkTestCard() {
@@ -2328,7 +2335,7 @@
       };
       const save = async () => {
         const ts = new Date().toISOString();
-        const raw = { note: note || null, count: result.count, seconds: Number(result.seconds.toFixed(2)) };
+        const raw = { note: note || null, count: result.count, seconds: Number(result.seconds.toFixed(2)), coverage: Number(result.coverage.toFixed(2)) };
         const items = [["ddk_rate", Number(result.rate.toFixed(3))], ["ddk_ioi_ms", Number(result.ioiMs.toFixed(1))], ["ddk_cv", Number(result.cv.toFixed(4))], ["ddk_decrement", Number(result.decrement.toFixed(4))],
           ["ddk_loudness_cv", Number(result.loudnessCv.toFixed(4))], ["ddk_score", base && base.score != null ? 5 - base.score : null]].filter(([, v]) => v != null)
           .map(([metric, value]) => ({ ts, source: "motor", metric, value, raw }));
@@ -2355,7 +2362,7 @@
           {phase === "done" && result && (
             <>
               <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8, marginTop: 6 }}>
-                {[["Syllables / s", result.rate.toFixed(2)], ["Syllables", String(result.count)], ["Rhythm (CV)", Math.round(result.cv * 100) + "%"],
+                {[["Syllables / s", result.rate.toFixed(2)], ["Syllables counted", `${result.count} in ${result.seconds.toFixed(1)} s`], ["Rhythm (CV)", Math.round(result.cv * 100) + "%"],
                   ["Slowdown", Math.round(result.decrement * 100) + "%"], ["Loudness CV", Math.round(result.loudnessCv * 100) + "%"], ["Interval", Math.round(result.ioiMs) + " ms"]].map(([k, v]) => (
                   <div key={k} style={{ background: "#0f172a", borderRadius: 8, padding: "8px 10px" }}>
                     <div style={{ fontSize: 11, color: "#94a3b8" }}>{k}</div>
@@ -2369,6 +2376,9 @@
                   ? <div style={{ fontSize: 13 }}>Building baseline: {base.n} of 5 tests saved. No score until then.</div>
                   : <div style={{ fontSize: 16, fontWeight: 600 }}>{5 - base.score} <span style={{ fontSize: 11, fontWeight: 400, color: "#94a3b8" }}>· {base.score} of rate, rhythm, slowdown, loudness consistency worse than your mean by over 1 SD ({base.n} prior tests)</span></div>}
               </div>
+              {result.coverage < 0.6 && (
+                <div style={{ fontSize: 12, color: "#fbbf24", marginTop: 6 }}>Only {Math.round(result.coverage * 100)}% of your {result.speechSeconds.toFixed(0)} s of speech was counted; the detector lost the syllables partway. Check the envelope below and consider discarding this run.</div>
+              )}
               <svg viewBox="0 0 600 70" style={{ width: "100%", height: 70, display: "block", marginTop: 8 }}>
                 {(() => { const e = result.env; const hi = Math.max(...e) || 1; const x = (i) => 10 + (580 * i) / (e.length - 1); const y = (v) => 62 - (50 * v) / hi;
                   return <><text x="10" y="10" fontSize="10" fill="#64748b">loudness envelope with detected syllable peaks</text>

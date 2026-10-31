@@ -89,8 +89,9 @@ Scoring: `voice_score` (0–4) counts how many of jitter, shimmer, HNR, PPE are 
 overlap (AUC ~0.75), so single values can't say anything about diagnosis; the card shows only a muted percentile.
 
 ## Pa-ta-ka / DDK test (motor/ddk_*)
-10 s of repeated /pa-ta-ka/. Syllable nuclei = peaks of a 30 ms-smoothed loudness envelope, >=90 ms apart, with a
-valley <=70% of the lower neighbour between them (no ASR). Validated 2.5–8 syll/s on connected synthetic speech. Metrics: `ddk_rate` (syll/s), `ddk_ioi_ms`, `ddk_cv` (rhythm), `ddk_decrement`,
+10 s of repeated /pa-ta-ka/. Syllable nuclei = peaks of a 10 ms RMS envelope (15 ms smoothing), >=80 ms apart, with a
+valley <=80% of the lower neighbour (no ASR). `coverage` = share of the speech span inside the detected run; the card
+warns below 60%. Validated 3–8 syll/s with consonant dips as shallow as 30% and closures down to 20 ms. Metrics: `ddk_rate` (syll/s), `ddk_ioi_ms`, `ddk_cv` (rhythm), `ddk_decrement`,
 `ddk_loudness_cv`, `ddk_score` (1–5 vs own baseline: rate, rhythm, slowdown, loudness consistency).
 
 ## Spiral test (motor/spiral_*)
