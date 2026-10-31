@@ -3,19 +3,14 @@
 Ordered roughly by value. Dates are when the item was added.
 
 ## UI
-- **Reorganize the app** (2026-10-31). Group cards into sections (Log / Vitals / Tests / Trends / Settings), and add a
-  single "Run tests" flow that walks tremor → tapping → spiral (→ voice weekly) with one note at the end. Target is a
-  twice-daily session under two minutes.
+- ~~Reorganize the app~~ Done 2026-10-31: five tabs (QoL / Tests / Trends / Stats / Settings), Motor and Voice sections.
 - Calendar "has data" dots for days with synced wearable data, not just QoL entries.
 
 ## Tests and features
 - **Gait test** (2026-10-31). Phone in pocket, walk 30 s. Cadence, step regularity, asymmetry from the accelerometer.
   Reuses the tremor-test capture code. On demand, so pre/post-dose comparison is possible (Watch gait is daily only).
-- **DDK / pa-ta-ka test** (2026-10-31). Repeat /pa-ta-ka/ for 10 s. Syllable rate, rhythm irregularity (DDKI), voice
-  onset time. The speech task most sensitive to levodopa state (Cologne 2025, Bern 2025); sustained-vowel measures are
-  a slow baseline only.
-- **Reading-passage sdF0** (2026-10-31). Monopitch in read speech improves OFF→ON (Bern 2025). Needs a fixed passage
-  and pitch tracking over connected speech.
+- ~~DDK / pa-ta-ka test~~ Done 2026-10-31.
+- ~~Reading-passage sdF0~~ Done 2026-10-31 (six passages, per-passage baselines).
 - **Balance / sway test**. Phone against chest, 30 s eyes open then closed; sway area. Only domain nothing else covers.
 - **SASPAP baseline card** (2026-10-31, Andy). As written; confirm which instrument this refers to before building.
 - **Pre/post-dose delta metrics**. Per day: (pre-dose score − post-dose score) for tremor, tapping, spiral, as its own

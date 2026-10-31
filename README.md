@@ -56,6 +56,11 @@ Steps, distance, energy, stand time etc. are keyed to local midnight and the lar
 HAE automation windows send partial sums for the same day. Sleep is one row per night keyed on the end date; windows
 over 14 h are dropped as merged nights. `repairCumulative()` runs at boot to clean up older rows.
 
+## UI
+Five tabs (bottom bar on phones, top bar on desktop), remembered per device: QoL (day view, ring, day vitals, 7-day grid),
+Tests (Motor and Voice sections, collapsible), Trends, Stats (`/api/stats`: last, 7/14/30-day means, min/max/SD, 30-day
+sparkline per metric), Settings. Checkpoint before the tabbed layout: branch `checkpoint/0.1-qolAndTests`.
+
 ## Backlog
 See `docs/BACKLOG.md`.
 
