@@ -1509,6 +1509,9 @@
       ["motor/tremor_amp_cm", "Tremor amplitude (cm)", "#fb7185", 2],
       ["motor/tap_rate", "Tapping (taps/s)", "#38bdf8", 2],
       ["motor/tap_updrs", "Tapping, est. score (0–4)", "#0ea5e9", 1],
+      ["motor/voice_hnr", "Voice HNR (dB)", "#c084fc", 1],
+      ["motor/voice_jitter_pct", "Voice jitter (%)", "#a78bfa", 2],
+      ["motor/spiral_error_pct", "Spiral deviation (%)", "#fbbf24", 1],
     ];
     function rolling(rows, key, n = 7) {
       return rows.map((r, i) => {
@@ -1951,6 +1954,306 @@
                     <path d={"M" + hist.map((h, i) => `${x(i).toFixed(1)} ${y(h.value).toFixed(1)}`).join(" L")} fill="none" stroke="#38bdf8" strokeWidth="1.5" />
                     {hist.map((h, i) => <circle key={i} cx={x(i)} cy={y(h.value)} r="2.5" fill={h.raw && h.raw.hand === "left" ? "#60a5fa" : "#38bdf8"}><title>{new Date(h.ts).toLocaleString()} · {h.raw && h.raw.hand} · {h.value.toFixed(2)} taps/s{h.raw && h.raw.note ? " · " + h.raw.note : ""}</title></circle>)}
                   </>; })()}
+              </svg>
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    // ---------- Voice test: 5 s sustained "ahh", frame-based jitter / shimmer / HNR ----------
+    const VOICE_SECONDS = 5;
+    function analyzeVoice(pcm, sampleRate) {
+      // 1) Frame pass (40 ms / 20 ms hop): energy, voicing, coarse F0 by normalized autocorrelation (70–400 Hz).
+      // 2) Period pass over the longest voiced run: peak-to-peak periods and peak amplitudes -> local jitter, shimmer
+      //    (Praat-style definitions), and HNR from a period-averaged harmonic template vs residual.
+      const frame = Math.round(sampleRate * 0.04), hop = Math.round(sampleRate * 0.02);
+      const minLag = Math.round(sampleRate / 400), maxLag = Math.round(sampleRate / 70);
+      const frames = [];
+      for (let start = 0; start + frame <= pcm.length; start += hop) {
+        let e = 0; for (let i = 0; i < frame; i++) e += pcm[start + i] * pcm[start + i];
+        frames.push({ start, rms: Math.sqrt(e / frame) });
+      }
+      if (!frames.length) return null;
+      const maxRms = Math.max(...frames.map((f) => f.rms));
+      const voicedThresh = Math.max(0.01, maxRms * 0.2);
+      for (const f of frames) {
+        if (f.rms < voicedThresh) { f.voiced = false; continue; }
+        let mean = 0; for (let i = 0; i < frame; i++) mean += pcm[f.start + i]; mean /= frame;
+        let best = 0, bestLag = 0, e0 = 0;
+        for (let i = 0; i < frame; i++) { const v = pcm[f.start + i] - mean; e0 += v * v; }
+        for (let lag = minLag; lag <= maxLag; lag++) {
+          let num = 0, e1 = 0;
+          for (let i = 0; i + lag < frame; i++) { const a = pcm[f.start + i] - mean, b = pcm[f.start + i + lag] - mean; num += a * b; e1 += b * b; }
+          const r = num / Math.sqrt((e0 || 1e-12) * (e1 || 1e-12));
+          if (r > best) { best = r; bestLag = lag; }
+        }
+        f.voiced = best > 0.5; if (f.voiced) f.f0 = sampleRate / bestLag;
+      }
+      // longest voiced run
+      let run = [], longest = [];
+      frames.forEach((f) => { if (f.voiced) { run.push(f); if (run.length > longest.length) longest = run; } else run = []; });
+      const voicedSeconds = frames.filter((f) => f.voiced).length * 0.02;
+      if (longest.length < 10) return { voicedSeconds, tooShort: true };
+      const f0s = longest.map((f) => f.f0);
+      const medF0 = [...f0s].sort((a, b) => a - b)[Math.floor(f0s.length / 2)];
+      const T = sampleRate / medF0;
+      const from = longest[0].start, to = longest[longest.length - 1].start + frame;
+      // period pass: successive positive peaks about one period apart (search window ±35%)
+      const peaks = [];
+      let i = from;
+      // first peak: max in first 1.5 periods
+      { let m = -Infinity, mi = i; for (let j = i; j < Math.min(to, i + Math.round(1.5 * T)); j++) if (pcm[j] > m) { m = pcm[j]; mi = j; } peaks.push(mi); i = mi; }
+      while (i + Math.round(1.35 * T) < to) {
+        const lo = i + Math.round(0.65 * T), hi = i + Math.round(1.35 * T);
+        let m = -Infinity, mi = lo; for (let j = lo; j <= hi; j++) if (pcm[j] > m) { m = pcm[j]; mi = j; }
+        peaks.push(mi); i = mi;
+      }
+      if (peaks.length < 10) return { voicedSeconds, tooShort: true };
+      const periods = [], amps = [];
+      for (let k = 1; k < peaks.length; k++) {
+        periods.push(peaks[k] - peaks[k - 1]);
+        let mn = Infinity, mx = -Infinity; for (let j = peaks[k - 1]; j < peaks[k]; j++) { if (pcm[j] < mn) mn = pcm[j]; if (pcm[j] > mx) mx = pcm[j]; }
+        amps.push(mx - mn);
+      }
+      const meanT = periods.reduce((a, b) => a + b, 0) / periods.length, meanA = amps.reduce((a, b) => a + b, 0) / amps.length;
+      let dj = 0, ds = 0; for (let k = 1; k < periods.length; k++) { dj += Math.abs(periods[k] - periods[k - 1]); ds += Math.abs(amps[k] - amps[k - 1]); }
+      const jitter = dj / (periods.length - 1) / meanT, shimmer = ds / (amps.length - 1) / meanA;
+      // HNR: average all periods (resampled to meanT samples) -> harmonic template; residual = noise
+      const L = Math.round(meanT); const tmpl = new Float64Array(L); let cnt = 0;
+      const resample = (a, b) => { const out = new Float64Array(L); const n = b - a; for (let q = 0; q < L; q++) { const pos = a + (q / L) * n; const i0 = Math.floor(pos), w = pos - i0; out[q] = pcm[i0] * (1 - w) + (pcm[Math.min(i0 + 1, pcm.length - 1)] || 0) * w; } return out; };
+      const segs = [];
+      for (let k = 1; k < peaks.length; k++) { const r = resample(peaks[k - 1], peaks[k]); segs.push(r); for (let q = 0; q < L; q++) tmpl[q] += r[q]; cnt++; }
+      for (let q = 0; q < L; q++) tmpl[q] /= cnt;
+      let eh = 0, en = 0; for (let q = 0; q < L; q++) eh += tmpl[q] * tmpl[q];
+      segs.forEach((r) => { for (let q = 0; q < L; q++) { const d = r[q] - tmpl[q]; en += d * d; } }); en /= segs.length;
+      const hnr = 10 * Math.log10((eh || 1e-12) / (en || 1e-12));
+      const meanF0 = sampleRate / meanT;
+      const f0sd = Math.sqrt(periods.reduce((a, p) => a + (sampleRate / p - meanF0) ** 2, 0) / periods.length);
+      const loudnessDb = 20 * Math.log10(longest.reduce((a, f) => a + f.rms, 0) / longest.length || 1e-9);
+      return { voicedSeconds, maxPhonation: longest.length * 0.02, meanF0, f0sd, jitter, shimmer, hnr, loudnessDb, periods: periods.length,
+        f0s: periods.map((p) => sampleRate / p), amps };
+    }
+
+    function VoiceTestCard() {
+      const [phase, setPhase] = useState("idle");
+      const [left, setLeft] = useState(VOICE_SECONDS);
+      const [level, setLevel] = useState(0);
+      const [result, setResult] = useState(null);
+      const [note, setNote] = useState("");
+      const [msg, setMsg] = useState("");
+      const [history] = useJson("/api/observations?source=motor&metric=voice_hnr&limit=60", [phase]);
+      const start = async () => {
+        setMsg("");
+        let stream;
+        try { stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false } }); }
+        catch (e) { setMsg("Microphone access denied or unavailable (" + e.message + ")."); return; }
+        const ctx = new (window.AudioContext || window.webkitAudioContext)();
+        await ctx.resume();
+        const src = ctx.createMediaStreamSource(stream);
+        const proc = ctx.createScriptProcessor(2048, 1, 1);
+        const chunks = [];
+        proc.onaudioprocess = (e) => { const d = e.inputBuffer.getChannelData(0); chunks.push(new Float32Array(d)); let s2 = 0; for (let i = 0; i < d.length; i++) s2 += d[i] * d[i]; setLevel(Math.sqrt(s2 / d.length)); };
+        src.connect(proc); proc.connect(ctx.destination);
+        setPhase("recording"); setLeft(VOICE_SECONDS);
+        const t0 = performance.now();
+        const tick = setInterval(() => setLeft(Math.max(0, Math.ceil(VOICE_SECONDS - (performance.now() - t0) / 1000))), 200);
+        setTimeout(() => {
+          clearInterval(tick); proc.disconnect(); src.disconnect(); stream.getTracks().forEach((t) => t.stop()); ctx.close();
+          const total = chunks.reduce((a, c) => a + c.length, 0); const pcm = new Float32Array(total); let o = 0; chunks.forEach((c) => { pcm.set(c, o); o += c.length; });
+          const res = analyzeVoice(pcm, ctx.sampleRate);
+          if (!res || res.tooShort) { setPhase("idle"); setMsg(`Not enough voiced sound (${res ? res.voicedSeconds.toFixed(1) : 0} s). Hold a steady "ahh" close to the phone.`); return; }
+          setResult(res); setPhase("done");
+        }, VOICE_SECONDS * 1000 + 200);
+      };
+      const save = async () => {
+        const ts = new Date().toISOString();
+        const raw = { note: note || null, voicedSeconds: Number(result.voicedSeconds.toFixed(2)), maxPhonation: Number(result.maxPhonation.toFixed(2)) };
+        const items = [["voice_f0", Number(result.meanF0.toFixed(1))], ["voice_f0_sd", Number(result.f0sd.toFixed(2))], ["voice_jitter_pct", Number((result.jitter * 100).toFixed(3))],
+          ["voice_shimmer_pct", Number((result.shimmer * 100).toFixed(3))], ["voice_hnr", Number(result.hnr.toFixed(2))], ["voice_loudness_db", Number(result.loudnessDb.toFixed(1))]]
+          .map(([metric, value]) => ({ ts, source: "motor", metric, value, raw }));
+        const r = await apiFetch("/api/observations", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(items) });
+        if (r.ok) { setPhase("idle"); setResult(null); setNote(""); setMsg("Saved."); } else setMsg("Save failed.");
+      };
+      const flag = (ok) => <span style={{ color: ok ? "#a3e635" : "#fbbf24", fontSize: 10 }}>{ok ? "typical" : "high"}</span>;
+      const hist = history ? [...history].reverse() : [];
+      return (
+        <div className="card">
+          <div className="card-header">
+            <div>
+              <div className="card-title">Voice test</div>
+              <div className="card-subtitle">Hold a steady "ahh" at a comfortable pitch and volume for 5 s, phone about 15 cm from your mouth, same quiet room each time.</div>
+            </div>
+          </div>
+          {phase === "idle" && <div className="controls-row"><button type="button" className="pill-btn primary" onClick={start}>Start 5-second recording</button></div>}
+          {phase === "recording" && (
+            <div style={{ textAlign: "center", padding: "14px 0" }}>
+              <div style={{ fontSize: 48, fontWeight: 700 }}>{left}</div>
+              <div style={{ height: 8, background: "#0f172a", borderRadius: 4, margin: "8px 40px" }}><div style={{ height: 8, borderRadius: 4, background: "#a3e635", width: `${Math.min(100, level * 400)}%` }} /></div>
+              <div className="card-subtitle">Say "ahhhh"…</div>
+            </div>
+          )}
+          {phase === "done" && result && (
+            <>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8, marginTop: 6 }}>
+                {[["Jitter", (result.jitter * 100).toFixed(2) + "%", flag(result.jitter < 0.0104)], ["Shimmer", (result.shimmer * 100).toFixed(2) + "%", flag(result.shimmer < 0.038)], ["HNR", result.hnr.toFixed(1) + " dB", flag(result.hnr > 15)],
+                  ["Pitch", Math.round(result.meanF0) + " Hz"], ["Pitch spread", result.f0sd.toFixed(1) + " Hz"], ["Loudness", result.loudnessDb.toFixed(0) + " dBFS"]].map(([k, v, f]) => (
+                  <div key={k} style={{ background: "#0f172a", borderRadius: 8, padding: "8px 10px" }}>
+                    <div style={{ fontSize: 11, color: "#94a3b8" }}>{k} {f}</div>
+                    <div style={{ fontSize: 16, fontWeight: 600 }}>{v}</div>
+                  </div>
+                ))}
+              </div>
+              <svg viewBox="0 0 600 60" style={{ width: "100%", height: 60, display: "block", marginTop: 8 }}>
+                {(() => { const lo = Math.min(...result.f0s) * 0.95, hi = Math.max(...result.f0s) * 1.05; const x = (i) => 10 + (580 * i) / Math.max(1, result.f0s.length - 1); const y = (v) => 56 - (46 * (v - lo)) / (hi - lo || 1);
+                  return <><text x="10" y="10" fontSize="10" fill="#64748b">pitch over time (Hz), voiced frames</text><path d={"M" + result.f0s.map((v, i) => `${x(i).toFixed(1)} ${y(v).toFixed(1)}`).join(" L")} fill="none" stroke="#c084fc" strokeWidth="1.5" /></>; })()}
+              </svg>
+              <div className="card-subtitle">{result.voicedSeconds.toFixed(1)} s voiced · longest run {result.maxPhonation.toFixed(1)} s · {result.periods} glottal periods</div>
+              <div style={{ fontSize: 10, color: "#64748b", marginTop: 2 }}>Period-based local jitter and shimmer (Praat-style) and HNR from a period-averaged template. Phone mic and room still matter, so your own history is the reference; "typical" marks use common thresholds (jitter 1.04%, shimmer 3.8%, HNR 15 dB) loosely.</div>
+              <div className="controls-row" style={{ gap: 8, marginTop: 6 }}>
+                <input value={note} onChange={(e) => setNote(e.target.value)} placeholder="Note (e.g. pre-dose)"
+                  style={{ flex: 1, background: "#0f172a", color: "#e2e8f0", border: "1px solid #334155", borderRadius: 8, padding: "8px 10px", fontSize: 14 }} />
+                <button type="button" className="pill-btn primary" onClick={save}>Save</button>
+                <button type="button" className="pill-btn" onClick={() => { setPhase("idle"); setResult(null); }}>Discard</button>
+              </div>
+            </>
+          )}
+          {msg && <div className="card-subtitle" style={{ marginTop: 6, color: msg === "Saved." ? "#a3e635" : "#f87171" }}>{msg}</div>}
+          {hist.length > 1 && (
+            <div style={{ marginTop: 10 }}>
+              <div style={{ fontSize: 11, color: "#94a3b8" }}>HNR (dB), last {hist.length} tests · higher = clearer voice</div>
+              <svg viewBox="0 0 600 60" style={{ width: "100%", height: 60, display: "block" }}>
+                {(() => { const vals = hist.map((h) => h.value); const lo = Math.min(0, ...vals), hi = Math.max(25, ...vals); const x = (i) => 10 + (580 * i) / Math.max(1, hist.length - 1); const y = (v) => 52 - (46 * (v - lo)) / (hi - lo || 1);
+                  return <><path d={"M" + hist.map((h, i) => `${x(i).toFixed(1)} ${y(h.value).toFixed(1)}`).join(" L")} fill="none" stroke="#c084fc" strokeWidth="1.5" />
+                    {hist.map((h, i) => <circle key={i} cx={x(i)} cy={y(h.value)} r="2.5" fill="#c084fc"><title>{new Date(h.ts).toLocaleString()} · {h.value.toFixed(1)} dB{h.raw && h.raw.note ? " · " + h.raw.note : ""}</title></circle>)}</>; })()}
+              </svg>
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    // ---------- Spiral test: trace a 3-turn Archimedean spiral with a finger ----------
+    const SPIRAL_TURNS = 3;
+    function analyzeSpiral(points, cx, cy, R) {
+      // Ideal spiral r = k·θ. The trace's absolute angle is unwrapped (ignoring the unstable centre), then the angular
+      // offset is fitted so the ideal and the trace line up; residual r - k·θ is the deviation.
+      if (points.length < 20) return null;
+      const k = R / (2 * Math.PI * SPIRAL_TURNS);
+      let prevA = null, theta = 0; const rows = [];
+      for (const p of points) {
+        const dx = p.x - cx, dy = p.y - cy; const r = Math.sqrt(dx * dx + dy * dy);
+        if (r < 8) { rows.push({ t: p.t, r, theta: null }); continue; }
+        const a = Math.atan2(dy, dx);
+        if (prevA != null) { let d = a - prevA; while (d > Math.PI) d -= 2 * Math.PI; while (d < -Math.PI) d += 2 * Math.PI; theta += d; }
+        prevA = a; rows.push({ t: p.t, r, theta });
+      }
+      const usable = rows.filter((q) => q.theta != null && q.r > 0.12 * R);
+      if (usable.length < 10) return null;
+      const offs = usable.map((q) => q.theta - q.r / k).sort((a, b) => a - b);
+      const off = offs[Math.floor(offs.length / 2)];
+      const scored = rows.filter((q) => q.theta != null).map((q) => ({ t: q.t, err: q.r - k * Math.max(0, q.theta - off), theta: q.theta - off }));
+      const seconds = (points[points.length - 1].t - points[0].t) / 1000;
+      const errAbs = scored.reduce((a, q) => a + Math.abs(q.err), 0) / scored.length;
+      const thetas = scored.map((q) => q.theta);
+      const coverage = (Math.max(...thetas) - Math.max(0, Math.min(...thetas))) / (2 * Math.PI * SPIRAL_TURNS);
+      let len = 0; for (let i = 1; i < points.length; i++) len += Math.hypot(points[i].x - points[i - 1].x, points[i].y - points[i - 1].y);
+      const fs = 50, n = Math.floor(seconds * fs); let bandShare = 0, peakHz = 0;
+      if (n > 50 && scored.length > 20) {
+        const u = new Float64Array(n); let j = 0; const t0 = scored[0].t;
+        for (let i = 0; i < n; i++) { const tt = t0 + (i / fs) * 1000; while (j < scored.length - 2 && scored[j + 1].t < tt) j++; const a = scored[j], b = scored[j + 1]; const w = b.t === a.t ? 0 : (tt - a.t) / (b.t - a.t); u[i] = a.err + (b.err - a.err) * w; }
+        const mean = u.reduce((a, b) => a + b, 0) / n; for (let i = 0; i < n; i++) u[i] = (u[i] - mean) * (0.5 - 0.5 * Math.cos((2 * Math.PI * i) / (n - 1)));
+        let total = 0, band = 0, pk = 0;
+        for (let f = 1; f <= 15.001; f += 0.25) { let re = 0, im = 0; const kk = (2 * Math.PI * f) / fs; for (let i = 0; i < n; i++) { re += u[i] * Math.cos(kk * i); im -= u[i] * Math.sin(kk * i); } const pw = re * re + im * im; total += pw; if (f >= 3.5 && f <= 7.5) band += pw; if (pw > pk) { pk = pw; peakHz = f; } }
+        bandShare = total ? band / total : 0;
+      }
+      return { seconds, errorPct: (errAbs / R) * 100, coverage: Math.min(1, coverage), speed: len / seconds / R, bandShare, peakHz, points: points.length };
+    }
+
+    function SpiralTestCard() {
+      const [phase, setPhase] = useState("idle"); // idle | drawing | done
+      const [hand, setHand] = useState(() => { try { return localStorage.getItem("pdm-spiral-hand") || "right"; } catch { return "right"; } });
+      const [result, setResult] = useState(null);
+      const [note, setNote] = useState("");
+      const [msg, setMsg] = useState("");
+      const canvasRef = useRef(null); const pts = useRef([]); const drawing = useRef(false);
+      const [history] = useJson("/api/observations?source=motor&metric=spiral_error_pct&limit=60", [phase]);
+      useEffect(() => { try { localStorage.setItem("pdm-spiral-hand", hand); } catch {} }, [hand]);
+      const SIZE = 300, CX = 150, CY = 150, R = 130;
+      const drawGuide = (ctx) => {
+        ctx.clearRect(0, 0, SIZE, SIZE); ctx.fillStyle = "#0f172a"; ctx.fillRect(0, 0, SIZE, SIZE);
+        ctx.strokeStyle = "#334155"; ctx.lineWidth = 2; ctx.beginPath();
+        const k = R / (2 * Math.PI * SPIRAL_TURNS);
+        for (let th = 0; th <= 2 * Math.PI * SPIRAL_TURNS; th += 0.05) { const r = k * th; const x = CX + r * Math.cos(th), y = CY + r * Math.sin(th); th === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y); }
+        ctx.stroke(); ctx.fillStyle = "#38bdf8"; ctx.beginPath(); ctx.arc(CX, CY, 5, 0, 2 * Math.PI); ctx.fill();
+      };
+      useEffect(() => { if (phase === "drawing" && canvasRef.current) drawGuide(canvasRef.current.getContext("2d")); }, [phase]);
+      const pos = (e) => { const rect = canvasRef.current.getBoundingClientRect(); const sx = SIZE / rect.width; return { x: (e.clientX - rect.left) * sx, y: (e.clientY - rect.top) * sx, t: performance.now() }; };
+      const onDown = (e) => { e.preventDefault(); if (phase !== "drawing") return; drawing.current = true; pts.current = [pos(e)]; };
+      const onMove = (e) => { e.preventDefault(); if (!drawing.current) return; const p = pos(e); const prev = pts.current[pts.current.length - 1]; pts.current.push(p);
+        const ctx = canvasRef.current.getContext("2d"); ctx.strokeStyle = "#a3e635"; ctx.lineWidth = 2.5; ctx.beginPath(); ctx.moveTo(prev.x, prev.y); ctx.lineTo(p.x, p.y); ctx.stroke(); };
+      const onUp = (e) => { e.preventDefault(); if (!drawing.current) return; drawing.current = false;
+        const res = analyzeSpiral(pts.current, CX, CY, R);
+        if (!res || res.coverage < 0.5) { setMsg("Trace didn't get far enough around the spiral. Start at the blue dot and follow it out to the end in one stroke."); return; }
+        setResult(res); setPhase("done"); setMsg(""); };
+      const save = async () => {
+        const ts = new Date().toISOString();
+        const step = Math.max(1, Math.floor(pts.current.length / 200));
+        const raw = { hand, note: note || null, coverage: Number(result.coverage.toFixed(2)), points: result.points, trace: pts.current.filter((_, i) => i % step === 0).map((p) => [Math.round(p.x), Math.round(p.y), Math.round(p.t - pts.current[0].t)]) };
+        const items = [["spiral_error_pct", Number(result.errorPct.toFixed(2))], ["spiral_tremor_share", Number(result.bandShare.toFixed(4))], ["spiral_seconds", Number(result.seconds.toFixed(2))], ["spiral_speed", Number(result.speed.toFixed(4))]]
+          .map(([metric, value]) => ({ ts, source: "motor", metric, value, raw }));
+        const r = await apiFetch("/api/observations", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(items) });
+        if (r.ok) { setPhase("idle"); setResult(null); setNote(""); setMsg("Saved."); } else setMsg("Save failed.");
+      };
+      const hist = history ? [...history].reverse() : [];
+      return (
+        <div className="card">
+          <div className="card-header">
+            <div>
+              <div className="card-title">Spiral test</div>
+              <div className="card-subtitle">Start at the blue dot and trace the spiral outward in one continuous stroke with your index finger. Lift to finish.</div>
+            </div>
+          </div>
+          {phase === "idle" && (
+            <div className="controls-row" style={{ gap: 8 }}>
+              {["left", "right"].map((h) => <button key={h} type="button" className={"pill-btn" + (hand === h ? " primary" : "")} onClick={() => setHand(h)}>{h} hand</button>)}
+              <button type="button" className="pill-btn primary" onClick={() => { setMsg(""); setPhase("drawing"); }}>Start</button>
+            </div>
+          )}
+          {phase === "drawing" && (
+            <div style={{ display: "flex", justifyContent: "center", marginTop: 6 }}>
+              <canvas ref={canvasRef} width={SIZE} height={SIZE} style={{ width: "min(300px, 90vw)", height: "auto", borderRadius: 12, touchAction: "none" }}
+                onPointerDown={onDown} onPointerMove={onMove} onPointerUp={onUp} onPointerCancel={onUp} onPointerLeave={onUp} />
+            </div>
+          )}
+          {phase === "done" && result && (
+            <>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8, marginTop: 6 }}>
+                {[["Deviation (% radius)", result.errorPct.toFixed(1) + "%"], ["Tremor share", Math.round(result.bandShare * 100) + "%"], ["Time", result.seconds.toFixed(1) + " s"],
+                  ["Peak", result.peakHz.toFixed(1) + " Hz"], ["Coverage", Math.round(result.coverage * 100) + "%"], ["Speed", result.speed.toFixed(2) + " R/s"]].map(([k, v]) => (
+                  <div key={k} style={{ background: "#0f172a", borderRadius: 8, padding: "8px 10px" }}>
+                    <div style={{ fontSize: 11, color: "#94a3b8" }}>{k}</div>
+                    <div style={{ fontSize: 16, fontWeight: 600 }}>{v}</div>
+                  </div>
+                ))}
+              </div>
+              <div style={{ fontSize: 10, color: "#64748b", marginTop: 6 }}>Deviation = mean distance from the ideal spiral. Tremor share = fraction of the wobble around the ideal path in the 3.5–7.5 Hz band. Finger-on-glass is noisier than pen-on-tablet; compare against your own history.</div>
+              <div className="controls-row" style={{ gap: 8, marginTop: 6 }}>
+                <input value={note} onChange={(e) => setNote(e.target.value)} placeholder="Note (e.g. pre-dose)"
+                  style={{ flex: 1, background: "#0f172a", color: "#e2e8f0", border: "1px solid #334155", borderRadius: 8, padding: "8px 10px", fontSize: 14 }} />
+                <button type="button" className="pill-btn primary" onClick={save}>Save</button>
+                <button type="button" className="pill-btn" onClick={() => { setPhase("idle"); setResult(null); }}>Discard</button>
+              </div>
+            </>
+          )}
+          {msg && <div className="card-subtitle" style={{ marginTop: 6, color: msg === "Saved." ? "#a3e635" : "#f87171" }}>{msg}</div>}
+          {hist.length > 1 && (
+            <div style={{ marginTop: 10 }}>
+              <div style={{ fontSize: 11, color: "#94a3b8" }}>Deviation (% of radius), last {hist.length} tests · lower is better</div>
+              <svg viewBox="0 0 600 60" style={{ width: "100%", height: 60, display: "block" }}>
+                {(() => { const vals = hist.map((h) => h.value); const hi = Math.max(10, ...vals); const x = (i) => 10 + (580 * i) / Math.max(1, hist.length - 1); const y = (v) => 52 - (46 * v) / hi;
+                  return <><path d={"M" + hist.map((h, i) => `${x(i).toFixed(1)} ${y(h.value).toFixed(1)}`).join(" L")} fill="none" stroke="#fbbf24" strokeWidth="1.5" />
+                    {hist.map((h, i) => <circle key={i} cx={x(i)} cy={y(h.value)} r="2.5" fill={h.raw && h.raw.hand === "left" ? "#60a5fa" : "#fbbf24"}><title>{new Date(h.ts).toLocaleString()} · {h.raw && h.raw.hand} · {h.value.toFixed(1)}%{h.raw && h.raw.note ? " · " + h.raw.note : ""}</title></circle>)}</>; })()}
               </svg>
             </div>
           )}
@@ -2546,6 +2849,8 @@
           <DayVitalsCard dateKey={dateKey} days={days} />
           <TremorTestCard />
           <TapTestCard />
+          <VoiceTestCard />
+          <SpiralTestCard />
           <TrendsCard />
           <VitalsTrendsCard />
           <QoLSummaryCard days={days} onCellClick={handleSummaryCellClick} selectedKey={dateKey} />

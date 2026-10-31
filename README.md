@@ -70,3 +70,14 @@ posture, note. Phone only; laptops don't expose motion sensors to the browser.
 Alternate taps between two targets for 20 s. Metrics: `tap_rate` (taps/s), `tap_iti_ms`, `tap_cv` (rhythm),
 `tap_decrement` (first-half vs second-half rate), `tap_accuracy` (alternation), `tap_updrs` (heuristic 0–4 in the spirit
 of MDS-UPDRS 3.4; not calibrated to clinic ratings). `raw` carries hand and note.
+
+## Voice test (motor/voice_*)
+5 s sustained /a/ via the phone mic (Web Audio, no audio stored). Frame pass for voicing and coarse F0; period pass
+(peak-to-peak) on the longest voiced run gives Praat-style local jitter/shimmer; HNR from a period-averaged template vs
+residual. Metrics: `voice_f0`, `voice_f0_sd`, `voice_jitter_pct`, `voice_shimmer_pct`, `voice_hnr`, `voice_loudness_db`.
+
+## Spiral test (motor/spiral_*)
+Trace a 3-turn Archimedean spiral on a canvas. Angular offset is fitted (median of θ − r/k) so the start angle doesn't
+matter; residual r − kθ scores deviation. Metrics: `spiral_error_pct` (mean |residual| / R), `spiral_tremor_share`
+(3.5–7.5 Hz share of the residual), `spiral_seconds`, `spiral_speed` (path length / s / R). `raw.trace` keeps a
+downsampled stroke (≤200 points) for review.
