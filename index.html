@@ -1581,13 +1581,59 @@
       );
     }
 
+    // Spearman rank correlation on paired, non-null values. Returns {r, n} or null when too few pairs.
+    function spearman(pairs) {
+      const n = pairs.length;
+      if (n < 7) return null;
+      const rank = (arr) => {
+        const idx = arr.map((v, i) => [v, i]).sort((a, b) => a[0] - b[0]);
+        const ranks = new Array(n);
+        for (let i = 0; i < n;) {
+          let j = i; while (j + 1 < n && idx[j + 1][0] === idx[i][0]) j++;
+          const avg = (i + j) / 2 + 1;
+          for (let k = i; k <= j; k++) ranks[idx[k][1]] = avg;
+          i = j + 1;
+        }
+        return ranks;
+      };
+      const rx = rank(pairs.map((p) => p[0])), ry = rank(pairs.map((p) => p[1]));
+      const mx = rx.reduce((a, b) => a + b, 0) / n, my = ry.reduce((a, b) => a + b, 0) / n;
+      let num = 0, dx = 0, dy = 0;
+      for (let i = 0; i < n; i++) { num += (rx[i] - mx) * (ry[i] - my); dx += (rx[i] - mx) ** 2; dy += (ry[i] - my) ** 2; }
+      if (!dx || !dy) return { r: 0, n };
+      return { r: num / Math.sqrt(dx * dy), n };
+    }
+    function describeCorrelation(c) {
+      if (!c) return "Need at least 7 days with both values to estimate a correlation.";
+      const a = Math.abs(c.r);
+      const strength = a < 0.2 ? "no real" : a < 0.4 ? "a weak" : a < 0.6 ? "a moderate" : "a strong";
+      const dir = c.r > 0 ? "positive" : "negative";
+      const t = a * Math.sqrt((c.n - 2) / (1 - a * a || 1e-9));
+      const conf = c.n < 14 ? "very few days, treat as a hint" : t < 2 ? "could easily be chance" : "unlikely to be chance";
+      return `${strength}${a < 0.2 ? "" : " " + dir} relationship (r = ${c.r.toFixed(2)}, ${c.n} days; ${conf}).`;
+    }
+
     function TrendsCard() {
       const [span, setSpan] = useState(30);
       const [pick, setPick] = useState("");
+      const [lag, setLag] = useState(0); // -1: metric from the day before lines up with today's QoL
       const [metrics] = useJson("/api/metrics", []);
       const [src, met] = pick ? pick.split("|") : ["", ""];
-      const url = `/api/daily?days=${span}` + (pick ? `&source=${encodeURIComponent(src)}&metric=${encodeURIComponent(met)}` : "");
-      const [rows, err] = useJson(url, [span, pick]);
+      // fetch a couple of extra days so a lag has something to shift in from
+      const url = `/api/daily?days=${span + 2}` + (pick ? `&source=${encodeURIComponent(src)}&metric=${encodeURIComponent(met)}` : "");
+      const [raw, err] = useJson(url, [span, pick]);
+      const rows = useMemo(() => {
+        if (!raw) return null;
+        const shifted = raw.map((r, i) => {
+          const srcRow = raw[i + lag]; // lag -1 -> yesterday's metric on today's row
+          return { ...r, metric_value: srcRow ? srcRow.metric_value : null };
+        });
+        return shifted.slice(2);
+      }, [raw, lag]);
+      const corr = useMemo(() => {
+        if (!rows || !pick) return null;
+        return spearman(rows.filter((r) => r.qol != null && r.metric_value != null).map((r) => [Number(r.metric_value), Number(r.qol)]));
+      }, [rows, pick]);
       const rated = rows ? rows.filter((r) => r.qol != null) : [];
       const meanQol = rated.length ? (rated.reduce((a, r) => a + Number(r.qol), 0) / rated.length).toFixed(2) : "–";
       const doses = rows ? rows.reduce((a, r) => a + Number(r.doses), 0) : 0;
@@ -1610,6 +1656,14 @@
                 <option key={m.source + "|" + m.metric} value={m.source + "|" + m.metric}>{m.source} · {m.metric} ({m.rows})</option>
               ))}
             </select>
+            {pick && (
+              <select value={lag} onChange={(e) => setLag(Number(e.target.value))} title="Align the metric with QoL on the same day, or the day after"
+                style={{ background: "#0f172a", color: "#e2e8f0", border: "1px solid #334155", borderRadius: 8, padding: "6px 8px", fontSize: 13 }}>
+                <option value={0}>same day</option>
+                <option value={-1}>metric from day before (e.g. last night's sleep → today's QoL)</option>
+                <option value={1}>metric from day after (today's QoL → tonight's sleep)</option>
+              </select>
+            )}
           </div>
           {err && <div className="card-subtitle">Couldn't load trends ({err}).</div>}
           {rows && (
@@ -1620,7 +1674,7 @@
               <ChartLegend items={[
                 { label: "Mean QoL (1–5, left)", color: "#38bdf8" },
                 { label: "Doses / day", color: "#334155", bar: true },
-                pick && { label: `${met} (daily mean, right)`, color: "#a3e635", dashed: true },
+                pick && { label: `${met}${lag === -1 ? " (day before)" : lag === 1 ? " (day after)" : ""} (right)`, color: "#a3e635", dashed: true },
               ]} />
               <DualAxisChart
                 rows={rows}
@@ -1628,6 +1682,12 @@
                 right={pick ? { key: "metric_value", color: "#a3e635" } : null}
                 bars={{ key: "doses" }}
               />
+              {pick && (
+                <div style={{ fontSize: 12, color: "#cbd5e1", marginTop: 8, padding: "8px 10px", background: "#0f172a", borderRadius: 8 }}>
+                  <strong style={{ color: "#a3e635" }}>{met}</strong>{lag === -1 ? " (day before)" : lag === 1 ? " (day after)" : ""} vs QoL: {describeCorrelation(corr)}
+                  <div style={{ color: "#64748b", marginTop: 2 }}>Spearman rank correlation over days with both values. Correlation isn't cause; use it to pick what to test deliberately.</div>
+                </div>
+              )}
             </>
           )}
         </div>
