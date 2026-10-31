@@ -510,6 +510,17 @@
     .matrix-cell.selected-day { box-shadow: 0 0 0 1px rgba(56, 189, 248, 0.55); }
     .matrix-cell.future { cursor: default; opacity: 0.5; }
     .matrix-cell.future:hover { box-shadow: 0 0 0 1px rgba(15, 23, 42, 0.7); }
+    .qol-bars {
+      display: grid;
+      grid-template-columns: repeat(5, 1fr);
+      gap: 6px;
+      align-items: end;
+      max-width: 220px;
+    }
+    .qol-bar-col { display: flex; flex-direction: column; align-items: center; gap: 2px; }
+    .qol-bar { width: 100%; border-radius: 3px 3px 0 0; min-height: 2px; }
+    .qol-bar-count { font-size: 10px; color: var(--muted); height: 12px; }
+    .qol-bar-label { font-size: 10px; color: var(--muted); }
     .matrix-vnav {
       display: flex;
       flex-direction: column;
@@ -1706,26 +1717,6 @@
     }
 
     function QoLSummaryCard({ days, onCellClick, selectedKey }) {
-      const counts = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 };
-      let ratedSegments = 0;
-      let totalSegments = 0;
-
-      Object.values(days).forEach((day) => {
-        day.segments.forEach((seg) => {
-          totalSegments++;
-          if (seg.type === "rating") {
-            const r = seg.rating ?? 3;
-            counts[r] = (counts[r] || 0) + 1;
-            ratedSegments++;
-          }
-        });
-      });
-
-      const goodOrBetter = (counts[4] || 0) + (counts[5] || 0);
-      const avgQoL = ratedSegments
-        ? (Object.entries(counts).reduce((sum, [r, c]) => sum + Number(r) * c, 0) / ratedSegments)
-        : null;
-
       const now = new Date();
       const nowMinutes = now.getHours() * 60 + now.getMinutes();
       const todayKey = toDateKey(now);
@@ -1752,6 +1743,8 @@
       const rangeLabel = `${base.toLocaleDateString(undefined, { month: "short", day: "numeric" })} – ${endDate.toLocaleDateString(undefined, { month: "short", day: "numeric" })}`;
 
       const cells = [];
+      const counts = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 };
+      let sleepBlocks = 0;
       last7Dates.forEach((dateObj, rowIndex) => {
         const key = toDateKey(dateObj);
         const dayData = days[key];
@@ -1764,8 +1757,8 @@
           let color = "#000000";
 
           if (seg) {
-            if (seg.type === "sleep") color = "#4b5563";
-            else if (seg.type === "rating") color = ratingColor(seg.rating ?? 3);
+            if (seg.type === "sleep") { color = "#4b5563"; sleepBlocks++; }
+            else if (seg.type === "rating") { color = ratingColor(seg.rating ?? 3); counts[seg.rating ?? 3]++; }
             else if (seg.type === "noData" || seg.type === "empty") color = "#000000";
           }
 
@@ -1784,6 +1777,9 @@
           });
         }
       });
+      const ratedSegments = Object.values(counts).reduce((a, b) => a + b, 0);
+      const avgQoL = ratedSegments ? Object.entries(counts).reduce((sum, [r, c]) => sum + Number(r) * c, 0) / ratedSegments : null;
+      const maxCount = Math.max(1, ...Object.values(counts));
       const rowLabels = last7Dates.map((d) => d.toLocaleDateString(undefined, { weekday: "short" }).slice(0, 2) + " " + d.getDate());
 
       return (
@@ -1791,16 +1787,11 @@
           <div className="card-header">
             <div>
               <div className="card-title">QoL summary · {rangeLabel}</div>
-              <div className="card-subtitle">
-                7 days × 12 two-hour blocks. Rows = days (oldest at top). Columns = hours. Use ^ / v to page a day at a time.
-              </div>
+              <div className="card-subtitle">Tap any cell to rate that block. ^ / v page a day at a time.</div>
             </div>
           </div>
           <div style={{ fontSize: "11px", color: "var(--muted)", marginTop: 4 }}>
             Each cell is a 2-hour block: red → lower QoL, green/blue → better QoL, gray = sleep, black = no data / not yet logged.
-          </div>
-          <div style={{ fontSize: "11px", color: "var(--muted)", marginTop: 2 }}>
-            Tap any cell to rate that block.
           </div>
           <div className="summary-chart" style={{ display: "grid", gridTemplateColumns: "34px 1fr 28px", gap: 4, alignItems: "stretch" }}>
             <div style={{ display: "grid", gridTemplateRows: "repeat(7, 1fr)", fontSize: 10, color: "var(--muted)", gap: 3 }}>
@@ -1825,18 +1816,19 @@
               <button type="button" onClick={() => shiftWindow(1)} disabled={atToday} aria-label="Later" title="One day later">v</button>
             </div>
           </div>
-          <div className="summary-legend">
-            <div>
-              Segments with QoL ≥ 4:&nbsp;
-              <strong>{goodOrBetter}</strong> / {totalSegments}
+          <div className="summary-legend" style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: 12, alignItems: "end", marginTop: 10 }}>
+            <div className="qol-bars">
+              {[1, 2, 3, 4, 5].map((r) => (
+                <div key={r} className="qol-bar-col">
+                  <div className="qol-bar-count">{counts[r] || ""}</div>
+                  <div className="qol-bar" style={{ height: `${(counts[r] / maxCount) * 44}px`, background: ratingColor(r) }} />
+                  <div className="qol-bar-label">{r}</div>
+                </div>
+              ))}
             </div>
-            <div>
-              Average QoL (rated segments only):&nbsp;
-              <strong>{avgQoL ? avgQoL.toFixed(2) : "—"}</strong>
-            </div>
-            <div>
-              Total days recorded:&nbsp;
-              <strong>{Object.keys(days).length}</strong>
+            <div style={{ fontSize: 12, textAlign: "right", lineHeight: 1.6 }}>
+              <div>Mean QoL <strong>{avgQoL ? avgQoL.toFixed(2) : "—"}</strong></div>
+              <div style={{ color: "var(--muted)" }}>{ratedSegments} rated · {sleepBlocks} sleep</div>
             </div>
           </div>
         </div>
