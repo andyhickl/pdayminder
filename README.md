@@ -58,3 +58,10 @@ over 14 h are dropped as merged nights. `repairCumulative()` runs at boot to cle
 
 ## Legal
 `docs/privacy.md` and `docs/terms.md` are served publicly (no login) at `/privacy` and `/terms`.
+
+## Tremor test (motor/*)
+20 s phone accelerometer test in the app. Per-axis spectra (1–15 Hz) are summed; the 3.5–7.5 Hz band is scored.
+Metrics per test: `tremor_rms` (m/s², band), `tremor_band_ratio`, `tremor_peak_hz`, `tremor_amp_cm` (peak-to-peak
+hand excursion from x = a/(2πf)² at the band peak), `tremor_updrs` (MDS-UPDRS 3.17 amplitude bins: 0 <0.1 cm,
+1 <1 cm, 2 1–3 cm, 3 3–10 cm, 4 >10 cm — an estimate of the clinical score, not a rating). `raw` carries hand,
+posture, note. Phone only; laptops don't expose motion sensors to the browser.

@@ -1409,6 +1409,12 @@
           {avg.length > 0 && <path d={line(avg, y)} fill="none" stroke="#38bdf8" strokeWidth="2" />}
           {hrv.length > 0 && <path d={line(hrv, yh)} fill="none" stroke="#a3e635" strokeWidth="1.5" strokeDasharray="4 3" />}
           {hrv.map((p, i) => <circle key={i} cx={x(hourOf(p.ts) + 0.5)} cy={yh(p.value)} r="3" fill="#a3e635" />)}
+          {(data.motor || []).map((m, i) => (
+            <g key={"m" + i}>
+              <circle cx={x(hourOf(m.ts))} cy={H - padB - 8} r="5" fill="#f472b6" stroke="#0f172a" strokeWidth="1" />
+              <text x={x(hourOf(m.ts))} y={H - padB - 5} fontSize="8" fill="#0f172a" textAnchor="middle" fontWeight="700">{m.updrs}</text>
+            </g>
+          ))}
           {data.doses.map((d, i) => {
             const [hh, mm] = d.t.split(":").map(Number);
             return (
@@ -1454,7 +1460,7 @@
           <div className="card-header">
             <div>
               <div className="card-title">Day vitals</div>
-              <div className="card-subtitle">Hourly heart rate (band = min–max) and HRV (dashed), over your QoL ratings, with doses marked.</div>
+              <div className="card-subtitle">Hourly heart rate (band = min–max) and HRV (dashed), over your QoL ratings. Doses as dashed lines; tremor tests as pink dots with the estimated UPDRS score.</div>
             </div>
           </div>
           {err && <div className="card-subtitle">Couldn't load ({err}).</div>}
@@ -1496,6 +1502,8 @@
       ["hae/walking_double_support_percentage", "Double support %", "#f87171", 1],
       ["hae/walking_asymmetry_percentage", "Asymmetry %", "#fb923c", 1],
       ["oura/stress_high_min", "Stress (min/day, Oura)", "#f97316", 0],
+      ["motor/tremor_updrs", "Tremor, est. UPDRS (0–4)", "#f472b6", 1],
+      ["motor/tremor_amp_cm", "Tremor amplitude (cm)", "#fb7185", 2],
     ];
     function rolling(rows, key, n = 7) {
       return rows.map((r, i) => {
@@ -1647,12 +1655,22 @@
       let band = 0, peakI = 0;
       freqs.forEach((f, i) => { if (f >= 3.5 && f <= 7.5) band += power[i]; if (power[i] > power[peakI]) peakI = i; });
       const hannGain = 2.67; // 1 / mean(hann^2)
-      const rmsBand = Math.sqrt((band / n) * 2 * hannGain);
+      // 1.25: empirical calibration of the 0.1 Hz-spaced DFT band sum against known sinusoids (recovers amplitude within ~2%)
+      const rmsBand = Math.sqrt((band / n) * 2 * hannGain) * 1.25;
       const rmsAll = Math.sqrt((sumSq / n) * hannGain);
       const pmax = Math.max(...power) || 1;
+      // Peak frequency inside the tremor band (falls back to 5 Hz when the band is empty)
+      let bandPeakI = -1;
+      freqs.forEach((f, i) => { if (f >= 3.5 && f <= 7.5 && (bandPeakI < 0 || power[i] > power[bandPeakI])) bandPeakI = i; });
+      const bandHz = bandPeakI >= 0 ? freqs[bandPeakI] : 5;
+      // Displacement from acceleration for a sinusoid: x = a / (2*pi*f)^2. Peak-to-peak, in cm.
+      const aPeak = rmsBand * Math.SQRT2;
+      const ampCm = (2 * aPeak) / Math.pow(2 * Math.PI * bandHz, 2) * 100;
+      // MDS-UPDRS 3.17 amplitude bins: 0 none, 1 <1 cm, 2 1–3 cm, 3 3–10 cm, 4 >10 cm. Floor at 0.1 cm for "none".
+      const updrs = ampCm < 0.1 ? 0 : ampCm < 1 ? 1 : ampCm < 3 ? 2 : ampCm < 10 ? 3 : 4;
       return {
         seconds: Number(dur.toFixed(1)), samples: samples.length, sampleRate: Number((samples.length / dur).toFixed(1)),
-        bandRatio: band / total, peakHz: freqs[peakI], rmsBand, rmsAll,
+        bandRatio: band / total, peakHz: freqs[peakI], bandHz, rmsBand, rmsAll, ampCm, updrs,
         spectrum: freqs.map((f, i) => [f, power[i] / pmax]),
       };
     }
@@ -1666,7 +1684,7 @@
       const [note, setNote] = useState("");
       const [msg, setMsg] = useState("");
       const samples = useRef([]);
-      const [history] = useJson("/api/observations?source=motor&metric=tremor_rms&limit=60", [phase]);
+      const [history] = useJson("/api/observations?source=motor&metric=tremor_amp_cm&limit=60", [phase]);
       // Laptops and desktops don't expose motion sensors to the browser; only offer the test on a phone/tablet.
       const isHandheld = useMemo(() => {
         try { return window.matchMedia("(pointer: coarse)").matches || /iPhone|iPad|Android/i.test(navigator.userAgent); } catch { return false; }
@@ -1708,12 +1726,14 @@
           { ts, source: "motor", metric: "tremor_rms", value: Number(result.rmsBand.toFixed(4)), raw },
           { ts, source: "motor", metric: "tremor_band_ratio", value: Number(result.bandRatio.toFixed(4)), raw },
           { ts, source: "motor", metric: "tremor_peak_hz", value: result.peakHz, raw },
+          { ts, source: "motor", metric: "tremor_amp_cm", value: Number(result.ampCm.toFixed(4)), raw },
+          { ts, source: "motor", metric: "tremor_updrs", value: result.updrs, raw },
         ];
         const r = await apiFetch("/api/observations", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(items) });
         if (r.ok) { setPhase("idle"); setResult(null); setNote(""); setMsg("Saved."); onSaved && onSaved(); } else setMsg("Save failed.");
       };
 
-      const verdict = (r) => r.bandRatio < 0.25 ? "little tremor-band energy" : r.bandRatio < 0.5 ? "some tremor-band energy" : "tremor-band dominated";
+      const verdict = (r) => ["no measurable rest tremor", "slight tremor (under 1 cm)", "mild tremor (1–3 cm)", "moderate tremor (3–10 cm)", "severe tremor (over 10 cm)"][r.updrs] + (r.bandRatio < 0.25 ? "; movement mostly outside the tremor band" : "");
       const hist = history ? [...history].reverse() : [];
       return (
         <div className="card">
@@ -1747,7 +1767,7 @@
           {phase === "done" && result && (
             <>
               <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8, marginTop: 6 }}>
-                {[["Tremor RMS", result.rmsBand.toFixed(3) + " m/s²"], ["Band share", Math.round(result.bandRatio * 100) + "%"], ["Peak", result.peakHz.toFixed(1) + " Hz"]].map(([k, v]) => (
+                {[["Est. UPDRS 3.17", String(result.updrs) + " / 4"], ["Amplitude", result.ampCm < 0.1 ? "<0.1 cm" : result.ampCm.toFixed(2) + " cm"], ["Tremor RMS", result.rmsBand.toFixed(3) + " m/s²"], ["Band share", Math.round(result.bandRatio * 100) + "%"], ["Peak", result.peakHz.toFixed(1) + " Hz"], ["Band peak", result.bandHz.toFixed(1) + " Hz"]].map(([k, v]) => (
                   <div key={k} style={{ background: "#0f172a", borderRadius: 8, padding: "8px 10px" }}>
                     <div style={{ fontSize: 11, color: "#94a3b8" }}>{k}</div>
                     <div style={{ fontSize: 16, fontWeight: 600 }}>{v}</div>
@@ -1760,6 +1780,7 @@
                 {[1, 4, 7, 10, 13].map((f) => <text key={f} x={(f - 1) / 14 * 600} y="78" fontSize="10" fill="#64748b" textAnchor="middle">{f} Hz</text>)}
               </svg>
               <div className="card-subtitle">{verdict(result)} · {result.samples} samples at {result.sampleRate} Hz over {result.seconds} s · {hand} hand, {posture}</div>
+              <div style={{ fontSize: 10, color: "#64748b", marginTop: 2 }}>UPDRS estimate converts tremor-band acceleration to hand excursion (x = a / (2πf)²) and bins it on the MDS-UPDRS 3.17 amplitude scale. An estimate of the clinical score, not a clinical rating.</div>
               <div className="controls-row" style={{ gap: 8, marginTop: 6 }}>
                 <input value={note} onChange={(e) => setNote(e.target.value)} placeholder="Note (e.g. 40 min after dose)"
                   style={{ flex: 1, background: "#0f172a", color: "#e2e8f0", border: "1px solid #334155", borderRadius: 8, padding: "8px 10px", fontSize: 14 }} />
@@ -1771,12 +1792,13 @@
           {msg && <div className="card-subtitle" style={{ marginTop: 6, color: msg === "Saved." ? "#a3e635" : "#f87171" }}>{msg}</div>}
           {hist.length > 1 && (
             <div style={{ marginTop: 10 }}>
-              <div style={{ fontSize: 11, color: "#94a3b8" }}>Tremor RMS, last {hist.length} tests</div>
+              <div style={{ fontSize: 11, color: "#94a3b8" }}>Tremor amplitude (cm), last {hist.length} tests · UPDRS bands at 1 and 3 cm</div>
               <svg viewBox="0 0 600 60" style={{ width: "100%", height: 60, display: "block" }}>
-                {(() => { const vals = hist.map((h) => h.value); const hi = Math.max(...vals) || 1; const x = (i) => 10 + (580 * i) / Math.max(1, hist.length - 1); const y = (v) => 52 - (46 * v) / hi;
+                {(() => { const vals = hist.map((h) => h.value); const hi = Math.max(1.2, ...vals); const x = (i) => 10 + (580 * i) / Math.max(1, hist.length - 1); const y = (v) => 52 - (46 * v) / hi;
                   return <>
+                    {[1, 3].filter((v) => v < hi).map((v) => <line key={v} x1="10" x2="590" y1={y(v)} y2={y(v)} stroke="#334155" strokeDasharray="3 3" />)}
                     <path d={"M" + hist.map((h, i) => `${x(i).toFixed(1)} ${y(h.value).toFixed(1)}`).join(" L")} fill="none" stroke="#f472b6" strokeWidth="1.5" />
-                    {hist.map((h, i) => <circle key={i} cx={x(i)} cy={y(h.value)} r="2.5" fill={h.raw && h.raw.hand === "left" ? "#60a5fa" : "#f472b6"}><title>{new Date(h.ts).toLocaleString()} · {h.raw && h.raw.hand} {h.raw && h.raw.posture} · {h.value.toFixed(3)}{h.raw && h.raw.note ? " · " + h.raw.note : ""}</title></circle>)}
+                    {hist.map((h, i) => <circle key={i} cx={x(i)} cy={y(h.value)} r="2.5" fill={h.raw && h.raw.hand === "left" ? "#60a5fa" : "#f472b6"}><title>{new Date(h.ts).toLocaleString()} · {h.raw && h.raw.hand} {h.raw && h.raw.posture} · {h.value.toFixed(2)} cm{h.raw && h.raw.note ? " · " + h.raw.note : ""}</title></circle>)}
                   </>; })()}
               </svg>
               <div style={{ fontSize: 10, color: "#64748b" }}>pink = right hand, blue = left. Compare like with like (same hand and posture).</div>

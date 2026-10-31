@@ -558,7 +558,7 @@ app.get("/api/day", requireAuth, async (req, res) => {
   const day = String(req.query.day || "");
   if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) return res.status(400).json({ error: "day=YYYY-MM-DD" });
   const uid = req.user.id;
-  const [obs, qol, meds, oura] = await Promise.all([
+  const [obs, qol, meds, oura, motor] = await Promise.all([
     pool.query(
       `select ts, metric, value, raw from observations
        where user_id = $1 and source = 'hae' and (ts at time zone $2)::date = $3::date order by ts`,
@@ -570,6 +570,12 @@ app.get("/api/day", requireAuth, async (req, res) => {
       `select metric, value from observations where user_id = $1 and source = 'oura' and (ts at time zone $2)::date = $3::date`,
       [uid, TZ, day]
     ),
+    pool.query(
+      `select ts, max(value) filter (where metric = 'tremor_updrs') as updrs, max(value) filter (where metric = 'tremor_amp_cm') as amp,
+              max(raw->>'hand') as hand, max(raw->>'note') as note
+       from observations where user_id = $1 and source = 'motor' and (ts at time zone $2)::date = $3::date group by ts order by ts`,
+      [uid, TZ, day]
+    ),
   ]);
   const hourly = {}, daily = {}, workouts = [];
   const counts = {};
@@ -579,7 +585,7 @@ app.get("/api/day", requireAuth, async (req, res) => {
     if (counts[r.metric] > 1) (hourly[r.metric] = hourly[r.metric] || []).push({ ts: r.ts, value: r.value });
     else daily[r.metric] = r.value;
   });
-  res.json({ day, hourly, daily, oura: Object.fromEntries(oura.rows.map((r) => [r.metric, r.value])), qol: qol.rows, doses: meds.rows, workouts });
+  res.json({ day, hourly, daily, oura: Object.fromEntries(oura.rows.map((r) => [r.metric, r.value])), motor: motor.rows, qol: qol.rows, doses: meds.rows, workouts });
 });
 
 // Several daily metrics at once, pivoted: [{day, "hae/heart_rate_variability": 48.2, ...}]
