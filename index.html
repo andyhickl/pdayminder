@@ -624,11 +624,6 @@
     }
 
     @media (max-width: 400px) {
-      .app-header {
-        flex-direction: column;
-        align-items: flex-start;
-        gap: 4px;
-      }
       .settings-row {
         flex-direction: column;
       }
@@ -3428,19 +3423,24 @@
           <div className="controls-row" style={{ gap: 8 }}>
             <button type="button" className="pill-btn" onClick={() => onUpdate({ ...settings, trendMetrics: DEFAULT_TREND_METRICS })}>Reset to recommended</button>
           </div>
-          {Object.entries(groups).map(([src, list]) => (
-            <div key={src} style={{ marginTop: 8 }}>
-              <div style={{ fontSize: 11, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.04em", marginBottom: 4 }}>{src}</div>
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 4 }}>
-                {list.map(([k, rows]) => (
-                  <label key={k} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, padding: "4px 6px", background: enabled.has(k) ? "rgba(56,189,248,0.1)" : "transparent", borderRadius: 6, cursor: "pointer" }}>
-                    <input type="checkbox" checked={enabled.has(k)} onChange={() => toggle(k)} />
-                    <span style={{ flex: 1 }}>{metricLabel(k)}</span>
-                  </label>
-                ))}
-              </div>
-            </div>
-          ))}
+          {Object.entries(groups).map(([src, list]) => {
+            const on = list.filter(([k]) => enabled.has(k)).length;
+            return (
+              <details key={src} style={{ marginTop: 8 }}>
+                <summary style={{ cursor: "pointer", fontSize: 12, color: "var(--text)", padding: "6px 8px", background: "rgba(15,23,42,0.6)", borderRadius: 8, listStyle: "none", display: "flex", justifyContent: "space-between" }}>
+                  <span style={{ textTransform: "uppercase", letterSpacing: "0.04em" }}>{src}</span><span style={{ color: "var(--muted)" }}>{on} of {list.length} on ▾</span>
+                </summary>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: 3, marginTop: 6 }}>
+                  {list.map(([k]) => (
+                    <label key={k} style={{ display: "grid", gridTemplateColumns: "auto minmax(0, 1fr)", alignItems: "center", gap: 8, fontSize: 13, padding: "5px 8px", background: enabled.has(k) ? "rgba(56,189,248,0.1)" : "transparent", borderRadius: 6, cursor: "pointer" }}>
+                      <input type="checkbox" checked={enabled.has(k)} onChange={() => toggle(k)} />
+                      <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{metricLabel(k)}</span>
+                    </label>
+                  ))}
+                </div>
+              </details>
+            );
+          })}
         </div>
       );
     }
@@ -3458,7 +3458,7 @@
       );
     }
     function StatusCard() {
-      const keys = [...new Set(Object.values(ROLLUPS).flat())];
+      const keys = [...new Set(Object.values(ROLLUPS).flat().map((x) => x[0]))];
       const [raw, err] = useJson(`/api/stats?metrics=${encodeURIComponent(keys.join(","))}`, []);
       const data = useMemo(() => withRollups(raw), [raw]);
       const fmt = (v) => (v == null ? "–" : Number(v).toFixed(1));
@@ -3493,7 +3493,7 @@
               </React.Fragment>
             ))}
           </div>
-          <div style={{ fontSize: 10, color: "#64748b", marginTop: 8 }}>Motor = tremor, tapping, gait. Voice = pa-ta-ka, sustained vowel, reading. Overall = mean of the two. Healthy references assume straight-line walking and lab-style recordings; a low number there with a high one on the right means "stable, but below the reference". The dashed line is 3.</div>
+          <div style={{ fontSize: 10, color: "#64748b", marginTop: 8 }}>Weighted means, renormalised over the tests run that day. Motor: gait 45 %, tapping 35 %, tremor 20 %. Voice: pa-ta-ka 50 %, reading 30 %, sustained vowel 20 %. Overall: motor 75 %, voice 25 %. Weights follow the mPower digital PD score (gait and tapping carry most of the signal, voice least) and MDS-UPDRS item shares. Healthy references assume straight-line walking and lab-style recordings; low on the left with high on the right means "stable, but below the reference". Dashed line = 3.</div>
         </div>
       );
     }
@@ -3538,19 +3538,23 @@
       const z = ((r.last - r.baseline.mean) / (r.baseline.sd || 1e-9)) * dir;
       return z < -1.5 ? 1 : z < -0.5 ? 2 : z <= 0.5 ? 3 : z <= 1.5 ? 4 : 5;
     }
-    // Composites. "norm" = vs healthy reference (tremor and tapping scores are already absolute scales); "base" = vs own baseline.
+    // Composites as weighted means of the component 1–5 scores present that day (weights renormalised over what's present).
+    // Weights follow the mPower digital score (Zhan et al., JAMA Neurol 2018; relative weights gait 33.4 %, balance 23.2 %,
+    // tapping 23.0 %, voice 17.0 %) renormalised over the tasks we have, with tremor added at the share tremor items carry in
+    // MDS-UPDRS III. Within voice, pa-ta-ka leads because it is the levodopa-sensitive task (Rusz 2011; Bern/Cologne 2025).
+    // "norm" = vs healthy reference (tremor and tapping scores are already absolute scales); "base" = vs own baseline.
     const ROLLUPS = {
-      "rollup:motor_norm": ["motor/tremor_score", "motor/tap_score", "motor/gait_norm"],
-      "rollup:motor_base": ["motor/tremor_score", "motor/tap_score", "motor/gait_score"],
-      "rollup:voice_norm": ["motor/ddk_norm", "motor/voice_norm", "motor/read_norm"],
-      "rollup:voice_base": ["motor/ddk_score", "motor/voice_score", "motor/read_score"],
+      "rollup:motor_norm": [["motor/gait_norm", 0.45], ["motor/tap_score", 0.35], ["motor/tremor_score", 0.20]],
+      "rollup:motor_base": [["motor/gait_score", 0.45], ["motor/tap_score", 0.35], ["motor/tremor_score", 0.20]],
+      "rollup:voice_norm": [["motor/ddk_norm", 0.5], ["motor/read_norm", 0.3], ["motor/voice_norm", 0.2]],
+      "rollup:voice_base": [["motor/ddk_score", 0.5], ["motor/read_score", 0.3], ["motor/voice_score", 0.2]],
     };
-    const OVERALL = { "rollup:overall_norm": ["rollup:motor_norm", "rollup:voice_norm"], "rollup:overall_base": ["rollup:motor_base", "rollup:voice_base"] };
+    const OVERALL = { "rollup:overall_norm": [["rollup:motor_norm", 0.75], ["rollup:voice_norm", 0.25]], "rollup:overall_base": [["rollup:motor_base", 0.75], ["rollup:voice_base", 0.25]] };
     // Daily mean of whichever component scores exist that day, then summarised like any metric.
     function buildRollup(data, parts) {
       const byDay = {};
-      parts.forEach((k) => { const r = data[k]; if (r && r.series) r.series.forEach(([d, v]) => { (byDay[d] = byDay[d] || []).push(v); }); });
-      const series = Object.keys(byDay).sort().map((d) => [d, byDay[d].reduce((a, b) => a + b, 0) / byDay[d].length]);
+      parts.forEach(([k, w]) => { const r = data[k]; if (r && r.series) r.series.forEach(([d, v]) => { (byDay[d] = byDay[d] || []).push([v, w]); }); });
+      const series = Object.keys(byDay).sort().map((d) => { const tw = byDay[d].reduce((a, [, w]) => a + w, 0); return [d, byDay[d].reduce((a, [v, w]) => a + v * w, 0) / tw]; });
       if (!series.length) return { n30: 0 };
       const vals = series.map((p) => p[1]); const today = new Date(); const dd = (d) => Math.round((today - new Date(d)) / 86400000);
       const win = (n) => { const v = series.filter((p) => dd(p[0]) < n).map((p) => p[1]); return v.length ? v.reduce((a, b) => a + b, 0) / v.length : null; };
@@ -3732,11 +3736,9 @@
 
       return (
         <div className="app-shell">
-          <header className="app-header">
-            <div>
-              <div className="app-title">PDayMinder</div>
-              <div className="tagline">{TAB_TAGLINES[tab]}</div>
-            </div>
+          <header className="app-header" style={{ gap: 10, justifyContent: "flex-start", alignItems: "center", flexDirection: "row" }}>
+            <img src="/static/icon.svg" alt="" width="30" height="30" style={{ borderRadius: 8, display: "block" }} />
+            <div className="app-title">PDayMinder</div>
           </header>
 
           {tab === "qol" && (

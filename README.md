@@ -129,8 +129,11 @@ vs 7.16±0.73 syll/s and reading F0 SD vs 2.48±0.56 st (Rusz et al. 2011, 23 HC
 and PPE vs 0.12±0.05 (UCI healthy recordings), gait as above. z (direction-adjusted) → 5 at z ≥ −0.5, 4 ≥ −1, 3 ≥ −1.5,
 2 ≥ −2, else 1. Shimmer and HNR are excluded as microphone-dependent. Composites (client-side, daily means of components):
 `rollup:motor_norm` (tremor_score, tap_score, gait_norm), `rollup:motor_base` (tremor_score, tap_score, gait_score),
-`rollup:voice_norm` (ddk/voice/read _norm), `rollup:voice_base` (ddk/voice/read _score), `rollup:overall_*` (mean of
-motor and voice). The Status card at the top of Trends shows all three vs healthy and vs baseline with sparklines.
+`rollup:voice_norm` (ddk/voice/read _norm), `rollup:voice_base` (ddk/voice/read _score), `rollup:overall_*`.
+Composites are weighted means renormalised over the tests present that day: motor gait 0.45 / tapping 0.35 / tremor
+0.20; voice pa-ta-ka 0.5 / reading 0.3 / vowel 0.2; overall motor 0.75 / voice 0.25. Weights follow the mPower digital
+PD score (Zhan et al. 2018: gait 33.4 %, balance 23.2 %, tapping 23.0 %, voice 17.0 %, reaction 3.4 %) renormalised over
+our tasks, with tremor at roughly its MDS-UPDRS III item share. The Status card at the top of Trends shows all three vs healthy and vs baseline with sparklines.
 
 ## Score scales
 Every consolidated score is 1–5 with 5 = best, matching QoL: `tremor_score` (= 5 − estimated UPDRS 3.17),

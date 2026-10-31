@@ -16,6 +16,14 @@ Ordered roughly by value. Dates are when the item was added.
   daily metric for the Trends correlation. Needs tests tagged pre/post (note field now; a toggle later).
 - Max phonation time mode for the voice test (hold "ahh" as long as possible; currently capped at 5 s).
 
+## Scoring
+- **z-level composites**. Today's composites average the binned 1–5 scores; averaging the underlying z-scores and binning
+  once at the end loses less. Needs per-test z saved (`*_z_norm`, `*_z_base`).
+- **Learned personal weights** (mPower-style weak supervision). Once there are ~30 pre-dose/post-dose test pairs, fit
+  weights so the composite ranks pre-dose worse than post-dose as often as possible (Zhan et al. 2018). Replaces the
+  literature weights with ones tuned to Andy's own dose response.
+- **Balance / sway test** carries 23 % of the mPower score and we don't have it yet.
+
 ## Data
 - Whoop, Strava, TrainingPeaks, Concept2 syncs (same OAuth/token pattern as Oura).
 - Apple Movement Disorder API: a small native iOS app to pull StrivePD-equivalent tremor/dyskinesia (needs Apple
