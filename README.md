@@ -56,6 +56,9 @@ Steps, distance, energy, stand time etc. are keyed to local midnight and the lar
 HAE automation windows send partial sums for the same day. Sleep is one row per night keyed on the end date; windows
 over 14 h are dropped as merged nights. `repairCumulative()` runs at boot to clean up older rows.
 
+## Backlog
+See `docs/BACKLOG.md`.
+
 ## Legal
 `docs/privacy.md` and `docs/terms.md` are served publicly (no login) at `/privacy` and `/terms`.
 
@@ -78,7 +81,8 @@ residual. Period marks are refined to sub-sample precision by cross-correlating 
 Validated against Praat (parselmouth) on synthetic phonations: F0 exact, jitter within ~0.02 pp on steady/jittery
 voices (reads high under heavy breath noise), HNR within ~1 dB when noise is present (caps ~34 dB on pure tones),
 shimmer ~30% lower than Praat on step-change test tones. Metrics: `voice_f0`, `voice_f0_sd`, `voice_jitter_pct`,
-`voice_shimmer_pct`, `voice_hnr`, `voice_loudness_db`.
+`voice_shimmer_pct`, `voice_hnr`, `voice_loudness_db`, `voice_int_slope` (dB/s over the phonation; improves OFF→ON per
+Bern 2025), `voice_ppe` (pitch period entropy, Little 2009: normalized entropy of the AR(2) residual of semitone pitch).
 
 ## Spiral test (motor/spiral_*)
 Trace a 3-turn Archimedean spiral on a canvas. Angular offset is fitted (median of θ − r/k) so the start angle doesn't

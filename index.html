@@ -1511,6 +1511,8 @@
       ["motor/tap_updrs", "Tapping, est. score (0–4)", "#0ea5e9", 1],
       ["motor/voice_hnr", "Voice HNR (dB)", "#c084fc", 1],
       ["motor/voice_jitter_pct", "Voice jitter (%)", "#a78bfa", 2],
+      ["motor/voice_ppe", "Voice PPE", "#d8b4fe", 3],
+      ["motor/voice_int_slope", "Voice loudness slope (dB/s)", "#e9d5ff", 2],
       ["motor/spiral_error_pct", "Spiral deviation (%)", "#fbbf24", 1],
     ];
     function rolling(rows, key, n = 7) {
@@ -2051,8 +2053,34 @@
       const meanF0 = sampleRate / meanT;
       const f0sd = Math.sqrt(periods.reduce((a, p) => a + (sampleRate / p - meanF0) ** 2, 0) / periods.length);
       const loudnessDb = 20 * Math.log10(longest.reduce((a, f) => a + f.rms, 0) / longest.length || 1e-9);
-      return { voicedSeconds, maxPhonation: longest.length * 0.02, meanF0, f0sd, jitter, shimmer, hnr, loudnessDb, periods: periods.length,
-        f0s: periods.map((p) => sampleRate / p), amps };
+      // Intensity slope (dB/s) over the voiced run: how loudness decays across the phonation. Improves OFF->ON (Bern 2025).
+      const xs = longest.map((f, i) => i * 0.02), ys = longest.map((f) => 20 * Math.log10(f.rms || 1e-9));
+      const mx = xs.reduce((a, b) => a + b, 0) / xs.length, my = ys.reduce((a, b) => a + b, 0) / ys.length;
+      let sxy = 0, sxx = 0; xs.forEach((x, i) => { sxy += (x - mx) * (ys[i] - my); sxx += (x - mx) ** 2; });
+      const intSlope = sxx ? sxy / sxx : 0;
+      // PPE (pitch period entropy, Little 2009): pitch on a semitone scale, 2nd-order linear prediction removes the
+      // natural smooth drift, and the normalized entropy of the residual's histogram scores the remaining irregularity.
+      const f0seq = periods.map((p) => sampleRate / p);
+      const semis = f0seq.map((f) => 12 * Math.log2(f / meanF0));
+      let ppe = null;
+      if (semis.length > 20) {
+        // least-squares AR(2) with intercept
+        const X = [], Y = []; for (let i = 2; i < semis.length; i++) { X.push([1, semis[i - 1], semis[i - 2]]); Y.push(semis[i]); }
+        const XtX = [[0,0,0],[0,0,0],[0,0,0]], XtY = [0,0,0];
+        X.forEach((row, i) => { for (let a = 0; a < 3; a++) { XtY[a] += row[a] * Y[i]; for (let b = 0; b < 3; b++) XtX[a][b] += row[a] * row[b]; } });
+        // solve 3x3 by Gaussian elimination
+        const M = XtX.map((r, i) => [...r, XtY[i]]);
+        for (let c = 0; c < 3; c++) { let piv = c; for (let r = c + 1; r < 3; r++) if (Math.abs(M[r][c]) > Math.abs(M[piv][c])) piv = r; [M[c], M[piv]] = [M[piv], M[c]];
+          if (Math.abs(M[c][c]) < 1e-12) { M[c][c] = 1e-12; } for (let r = 0; r < 3; r++) { if (r === c) continue; const f = M[r][c] / M[c][c]; for (let k = c; k < 4; k++) M[r][k] -= f * M[c][k]; } }
+        const coef = [M[0][3] / M[0][0], M[1][3] / M[1][1], M[2][3] / M[2][2]];
+        const resid = X.map((row, i) => Y[i] - (coef[0] + coef[1] * row[1] + coef[2] * row[2]));
+        const bins = 50, range = 2.5, hist = new Array(bins).fill(0);
+        resid.forEach((e) => { const b = Math.max(0, Math.min(bins - 1, Math.floor(((e + range) / (2 * range)) * bins))); hist[b]++; });
+        let H = 0; hist.forEach((c) => { if (c) { const q = c / resid.length; H -= q * Math.log(q); } });
+        ppe = H / Math.log(bins);
+      }
+      return { voicedSeconds, maxPhonation: longest.length * 0.02, meanF0, f0sd, jitter, shimmer, hnr, loudnessDb, intSlope, ppe, periods: periods.length,
+        f0s: f0seq, amps };
     }
 
     function VoiceTestCard() {
@@ -2101,13 +2129,14 @@
         const ts = new Date().toISOString();
         const raw = { note: note || null, voicedSeconds: Number(result.voicedSeconds.toFixed(2)), maxPhonation: Number(result.maxPhonation.toFixed(2)) };
         const items = [["voice_f0", Number(result.meanF0.toFixed(1))], ["voice_f0_sd", Number(result.f0sd.toFixed(2))], ["voice_jitter_pct", Number((result.jitter * 100).toFixed(3))],
-          ["voice_shimmer_pct", Number((result.shimmer * 100).toFixed(3))], ["voice_hnr", Number(result.hnr.toFixed(2))], ["voice_loudness_db", Number(result.loudnessDb.toFixed(1))]]
+          ["voice_shimmer_pct", Number((result.shimmer * 100).toFixed(3))], ["voice_hnr", Number(result.hnr.toFixed(2))], ["voice_loudness_db", Number(result.loudnessDb.toFixed(1))],
+          ["voice_int_slope", Number(result.intSlope.toFixed(3))], ["voice_ppe", result.ppe == null ? null : Number(result.ppe.toFixed(4))]].filter(([, v]) => v != null)
           .map(([metric, value]) => ({ ts, source: "motor", metric, value, raw }));
         const r = await apiFetch("/api/observations", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(items) });
         if (r.ok) { setPhase("idle"); setResult(null); setNote(""); setMsg("Saved."); } else setMsg("Save failed.");
       };
       // Reference medians from the UCI Parkinsons dataset (Little et al. 2008; 48 healthy / 147 PD sustained-vowel recordings).
-      const REF = { jitter: { h: 0.0033, pd: 0.0049 }, shimmer: { h: 0.0170, pd: 0.0280 }, hnr: { h: 25.0, pd: 21.4 } };
+      const REF = { jitter: { h: 0.0033, pd: 0.0049 }, shimmer: { h: 0.0170, pd: 0.0280 }, hnr: { h: 25.0, pd: 21.4 }, ppe: { h: 0.15, pd: 0.22 } };
       const ref = (v, key, higherIsWorse) => {
         const { h, pd } = REF[key]; const mid = (h + pd) / 2;
         const side = higherIsWorse ? (v <= h ? "healthy range" : v <= mid ? "between" : "PD range") : (v >= h ? "healthy range" : v >= mid ? "between" : "PD range");
@@ -2135,7 +2164,8 @@
             <>
               <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8, marginTop: 6 }}>
                 {[["Jitter", (result.jitter * 100).toFixed(2) + "%", ref(result.jitter, "jitter", true)], ["Shimmer", (result.shimmer * 100).toFixed(2) + "%", ref(result.shimmer, "shimmer", true)], ["HNR", result.hnr.toFixed(1) + " dB", ref(result.hnr, "hnr", false)],
-                  ["Pitch", Math.round(result.meanF0) + " Hz"], ["Pitch spread", result.f0sd.toFixed(1) + " Hz"], ["Loudness", result.loudnessDb.toFixed(0) + " dBFS"]].map(([k, v, f]) => (
+                  ["PPE", result.ppe == null ? "–" : result.ppe.toFixed(3), result.ppe == null ? null : ref(result.ppe, "ppe", true)], ["Loudness slope", result.intSlope.toFixed(2) + " dB/s"], ["Pitch", Math.round(result.meanF0) + " Hz"],
+                  ["Pitch spread", result.f0sd.toFixed(1) + " Hz"], ["Loudness", result.loudnessDb.toFixed(0) + " dBFS"]].map(([k, v, f]) => (
                   <div key={k} style={{ background: "#0f172a", borderRadius: 8, padding: "8px 10px" }}>
                     <div style={{ fontSize: 11, color: "#94a3b8" }}>{k} {f}</div>
                     <div style={{ fontSize: 16, fontWeight: 600 }}>{v}</div>
@@ -2147,7 +2177,7 @@
                   return <><text x="10" y="10" fontSize="10" fill="#64748b">pitch over time (Hz), voiced frames</text><path d={"M" + result.f0s.map((v, i) => `${x(i).toFixed(1)} ${y(v).toFixed(1)}`).join(" L")} fill="none" stroke="#c084fc" strokeWidth="1.5" /></>; })()}
               </svg>
               <div className="card-subtitle">{result.voicedSeconds.toFixed(1)} s voiced · longest run {result.maxPhonation.toFixed(1)} s · {result.periods} glottal periods</div>
-              <div style={{ fontSize: 10, color: "#64748b", marginTop: 2 }}>Praat-like: jitter and HNR agree with Praat within a few hundredths of a percent and ~1 dB on test signals; shimmer reads somewhat lower than Praat. Range tags compare to medians in the UCI Parkinsons dataset (healthy vs PD: jitter 0.33% vs 0.49%, shimmer 1.7% vs 2.8%, HNR 25.0 vs 21.4 dB), which used studio mics; phone mic and room shift these, so your own history is the real reference.</div>
+              <div style={{ fontSize: 10, color: "#64748b", marginTop: 2 }}>Praat-like: jitter and HNR agree with Praat within a few hundredths of a percent and ~1 dB on test signals; shimmer reads somewhat lower than Praat. Range tags compare to medians in the UCI Parkinsons dataset (healthy vs PD: jitter 0.33% vs 0.49%, shimmer 1.7% vs 2.8%, HNR 25.0 vs 21.4 dB, PPE 0.15 vs 0.22), which used studio mics; phone mic and room shift these, so your own history is the real reference. Loudness slope (how the "ahh" fades) is the sustained-vowel measure shown to improve after levodopa.</div>
               <div className="controls-row" style={{ gap: 8, marginTop: 6 }}>
                 <input value={note} onChange={(e) => setNote(e.target.value)} placeholder="Note (e.g. pre-dose)"
                   style={{ flex: 1, background: "#0f172a", color: "#e2e8f0", border: "1px solid #334155", borderRadius: 8, padding: "8px 10px", fontSize: 14 }} />
