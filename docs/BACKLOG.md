@@ -22,11 +22,20 @@ Ordered by value. Dates are when the item was added.
 
 ## Tests
 - **SASPAP baseline card** (2026-10-31, Andy). As written; confirm which instrument before building.
-- Max phonation time mode for the voice test (hold "ahh" as long as possible; now capped at 5 s). Cheap.
 - Reaction time task (3 % of mPower). Skippable.
 - Validate the voice analyzer on a public phone-recorded PD/HC corpus (MDVR-KCL on Zenodo).
 
 ## Data sources
+- **Nutrition vs symptoms** (2026-10-31, Andy). Why it matters in PD: dietary protein competes with levodopa for
+  gut and blood-brain transport (large neutral amino acids), so protein near a dose can blunt or delay it; caffeine,
+  meal timing and total energy also plausibly move QoL. Plan: (1) log food in an app that writes to Apple Health
+  (Cronometer writes macros and micronutrients; MacroFactor, MyFitnessPal, Lose It and Foodnoms write macros);
+  (2) add the HealthKit dietary metrics (energy, protein, carbohydrates, fat, fiber, water, caffeine) to the HAE
+  daily automation at an hourly interval so meal timing survives; (3) ingest as `hae` daily/hourly metrics like
+  everything else; (4) new rollups per day: total protein, protein within ±90 min of each levodopa dose, caffeine,
+  first/last meal time, and surface them in QoL correlations and in the pre/post-dose delta analysis once that
+  exists. No new OAuth needed; the whole thing rides on HAE. Open question: does HAE relay per-sample dietary
+  entries with their timestamps or only interval sums (hourly sums are enough).
 - Whoop, Strava, TrainingPeaks, Concept2 syncs (Oura's OAuth/token pattern; Strava is already connected to the agent side).
 - Apple Movement Disorder API: small native iOS app for StrivePD-equivalent tremor/dyskinesia (needs Apple
   entitlement). Draft the entitlement request. Only passive source of the real signal.
