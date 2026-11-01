@@ -644,6 +644,44 @@
       return res;
     }
 
+    // ---------- Medications ----------
+    // settings.medications: [{id, name, dose, dopaminergic, times: ["HH:MM", ...]}]. Older settings had medTimes (3 slots).
+    function normalizeMedications(settings) {
+      if (settings && Array.isArray(settings.medications) && settings.medications.length) {
+        return settings.medications.map((m) => ({ id: m.id || slug(m.name), name: m.name || m.id, dose: m.dose || "", dopaminergic: Boolean(m.dopaminergic), times: Array.isArray(m.times) ? m.times.filter(Boolean) : [] }));
+      }
+      const times = settings && Array.isArray(settings.medTimes) ? settings.medTimes.filter(Boolean) : ["08:00", "12:00", "16:00"];
+      return [{ id: "sinemet", name: "Sinemet", dose: "25/100", dopaminergic: true, times }, { id: "rasagiline", name: "Rasagiline", dose: "1 mg", dopaminergic: false, times: ["08:00"] }];
+    }
+    const slug = (name) => String(name || "med").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "med";
+    // A logged dose is {t: "HH:MM", drug: id}. Older data stored plain "HH:MM" strings (always Sinemet).
+    const medT = (m) => (typeof m === "string" ? m : m.t);
+    const medDrug = (m) => (typeof m === "string" ? "sinemet" : m.drug || "sinemet");
+    const normalizeMeds = (arr) => { const seen = new Set(); return (arr || []).map((m) => ({ t: medT(m), drug: medDrug(m) })).filter((m) => m.t && !seen.has(m.t + "|" + m.drug) && seen.add(m.t + "|" + m.drug)).sort((a, b) => a.t.localeCompare(b.t)); };
+    const isDopa = (settings, drug) => { const m = (settings.medications || []).find((x) => x.id === drug); return m ? m.dopaminergic : drug === "sinemet"; };
+    const medName = (settings, drug) => { const m = (settings.medications || []).find((x) => x.id === drug); return m ? m.name : drug; };
+    // Dose state for a moment on a day: post-dose = 30 min–3.5 h after the latest dopaminergic dose; ramp = under 30 min; pre = otherwise.
+    const DOSE_POST_MIN = 30, DOSE_POST_MAX = 210;
+    function doseState(day, settings, minuteOfDay) {
+      const dopa = normalizeMeds(day && day.meds).filter((m) => isDopa(settings, m.drug)).map((m) => { const [h, mm] = m.t.split(":").map(Number); return h * 60 + mm; }).filter((t) => t <= minuteOfDay);
+      if (!dopa.length) return { state: "pre", minutesSinceDose: null };
+      const since = minuteOfDay - Math.max(...dopa);
+      return { state: since < DOSE_POST_MIN ? "ramp" : since <= DOSE_POST_MAX ? "post" : "pre", minutesSinceDose: since };
+    }
+    function DoseStateLine() {
+      const c = doseContextNow(); if (!c) return null;
+      const label = c.dose_state === "post" ? `post-dose (${Math.round(c.minutes_since_dose)} min after the last levodopa dose)` : c.dose_state === "ramp" ? `ramping (${Math.round(c.minutes_since_dose)} min after dose; counts as neither)` : c.minutes_since_dose == null ? "pre-dose (no levodopa logged yet today)" : `pre-dose (${Math.round(c.minutes_since_dose)} min since last levodopa dose)`;
+      return <div style={{ fontSize: 11, color: c.dose_state === "post" ? "#a3e635" : "#fbbf24", marginTop: 6 }}>Will be tagged {label}. Log doses first if that's wrong.</div>;
+    }
+    // Tests call this at save time; App keeps the ref current.
+    const doseCtxRef = { current: null };
+    function doseContextNow() {
+      const c = doseCtxRef.current; if (!c) return null;
+      const now = new Date(); const key = toDateKey(now);
+      const r = doseState(c.days[key], c.settings, now.getHours() * 60 + now.getMinutes());
+      return { dose_state: r.state, minutes_since_dose: r.minutesSinceDose };
+    }
+
     // ---------- Utilities ----------
     function toDateKey(date) {
       const y = date.getFullYear();
@@ -734,7 +772,10 @@
     const DEFAULT_SETTINGS = {
       sleepStart: "23:00",
       sleepEnd: "06:00",
-      medTimes: ["08:00", "12:00", "16:00"],
+      medications: [
+        { id: "sinemet", name: "Sinemet", dose: "25/100", dopaminergic: true, times: ["08:00", "12:00", "16:00"] },
+        { id: "rasagiline", name: "Rasagiline", dose: "1 mg", dopaminergic: false, times: ["08:00"] },
+      ],
     };
 
     // ---------- Local storage ----------
@@ -746,9 +787,7 @@
         return {
           sleepStart: parsed.sleepStart || DEFAULT_SETTINGS.sleepStart,
           sleepEnd: parsed.sleepEnd || DEFAULT_SETTINGS.sleepEnd,
-          medTimes: Array.isArray(parsed.medTimes) && parsed.medTimes.length === 3
-            ? parsed.medTimes
-            : DEFAULT_SETTINGS.medTimes,
+          medications: normalizeMedications(parsed),
         };
       } catch {
         return DEFAULT_SETTINGS;
@@ -763,8 +802,9 @@
       try {
         const raw = localStorage.getItem("pdayminder-days");
         if (!raw) return {};
-        const parsed = JSON.parse(raw);
-        return parsed || {};
+        const parsed = JSON.parse(raw) || {};
+        Object.values(parsed).forEach((d) => { if (d) d.meds = normalizeMeds(d.meds); });
+        return parsed;
       } catch {
         return {};
       }
@@ -776,7 +816,7 @@
 
     // ---------- CSV export/import ----------
     function exportDaysToCSV(days) {
-      const header = "date,recordType,segmentIndex,segmentType,rating,medTime";
+      const header = "date,recordType,segmentIndex,segmentType,rating,medTime,drug";
       const rows = [header];
       const keys = Object.keys(days).sort();
 
@@ -795,15 +835,8 @@
             ""
           ].join(","));
         });
-        (day.meds || []).forEach((time) => {
-          rows.push([
-            dateKey,
-            "med",
-            "",
-            "",
-            "",
-            time
-          ].join(","));
+        normalizeMeds(day.meds).forEach((m) => {
+          rows.push([dateKey, "med", "", "", "", m.t, m.drug].join(","));
         });
       }
       return rows.join("\n");
@@ -818,7 +851,7 @@
       for (const line of rows) {
         if (!line.trim()) continue;
         const cols = line.split(",").map(c => c.trim());
-        const [dateKey, recordType, segmentIndexStr, segmentType, ratingStr, medTime] = cols;
+        const [dateKey, recordType, segmentIndexStr, segmentType, ratingStr, medTime, drug] = cols;
         if (!dateKey || !recordType) continue;
 
         if (!imported[dateKey]) {
@@ -834,12 +867,12 @@
           seg.rating = ratingStr ? parseInt(ratingStr, 10) : 3;
           day.segments[idx] = seg;
         } else if (recordType === "med" && medTime) {
-          day.meds.push(medTime);
+          day.meds.push({ t: medTime, drug: drug || "sinemet" });
         }
       }
 
       for (const key in imported) {
-        imported[key].meds.sort();
+        imported[key].meds = normalizeMeds(imported[key].meds);
       }
       return imported;
     }
@@ -945,7 +978,7 @@
       );
     }
 
-    function DayRing({ day, onSegmentClick }) {
+    function DayRing({ day, onSegmentClick, settings: ringSettings }) {
       const width = 260;
       const height = 260;
       const cx = width / 2;
@@ -1038,7 +1071,8 @@
               tap a segment to rate QoL
             </text>
 
-            {day.meds.map((t, i) => {
+            {normalizeMeds(day.meds).map((m, i) => {
+              const t = m.t; const dopa = isDopa(ringSettings, m.drug);
               const angle = angleForTimeStr(t);
               const innerR = rInner * 0.4;
               const outerR = rOuter * 1.05;
@@ -1055,27 +1089,14 @@
               const lx = cx + labelRadius * Math.cos(labelAngle);
               const ly = cy + labelRadius * Math.sin(labelAngle) + 3;
 
+              if (!dopa) {
+                const rx = cx + (rOuter + 6) * Math.cos(angle), ry = cy + (rOuter + 6) * Math.sin(angle);
+                return <g key={`med-${i}-${t}`}><circle cx={rx} cy={ry} r="3" fill="#94a3b8" opacity="0.9"><title>{medName(ringSettings, m.drug)} {t}</title></circle></g>;
+              }
               return (
                 <g key={`med-${i}-${t}`}>
-                  <line
-                    x1={x1}
-                    y1={y1}
-                    x2={x2}
-                    y2={y2}
-                    stroke="#38bdf8"
-                    strokeWidth="2"
-                    strokeLinecap="round"
-                    opacity="0.9"
-                  />
-                  <text
-                    x={lx}
-                    y={ly}
-                    fontSize="9"
-                    textAnchor="middle"
-                    fill="#38bdf8"
-                  >
-                    {t}
-                  </text>
+                  <line x1={x1} y1={y1} x2={x2} y2={y2} stroke="#38bdf8" strokeWidth="2" strokeLinecap="round" opacity="0.9" />
+                  <text x={lx} y={ly} fontSize="9" textAnchor="middle" fill="#38bdf8">{t}</text>
                 </g>
               );
             })}
@@ -1175,59 +1196,44 @@
     }
 
     function MedModal({ open, settings, onClose, onSave }) {
+      const meds = settings.medications || [];
       const now = new Date();
       const defaultTime = minutesToTimeString(now.getHours() * 60 + now.getMinutes());
       const [time, setTime] = useState(defaultTime);
-
-      useEffect(() => {
-        if (open) {
-          const n = new Date();
-          setTime(minutesToTimeString(n.getHours() * 60 + n.getMinutes()));
-        }
-      }, [open]);
-
+      const [drug, setDrug] = useState(() => (meds.find((m) => m.dopaminergic) || meds[0] || { id: "sinemet" }).id);
+      useEffect(() => { if (open) { const n = new Date(); setTime(minutesToTimeString(n.getHours() * 60 + n.getMinutes())); } }, [open]);
       if (!open) return null;
-
-      const handleSave = () => onSave(time);
-
+      const med = meds.find((m) => m.id === drug) || meds[0];
       return (
         <div className="modal-backdrop" onClick={onClose}>
           <div className="modal" onClick={(e) => e.stopPropagation()}>
-            <div className="modal-header">
-              <div className="modal-title">Log medication</div>
-            </div>
+            <div className="modal-header"><div className="modal-title">Log medication</div></div>
             <div className="modal-body">
-              <div style={{ fontSize: "11px", color: "var(--muted)" }}>
-                Choose the time you took your PD medication. It defaults to right now, but you can adjust.
-              </div>
-              <label style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
-                <span style={{ fontSize: "11px", color: "var(--muted)" }}>Time</span>
-                <input
-                  type="time"
-                  className="settings-input"
-                  value={time}
-                  onChange={(e) => setTime(e.target.value)}
-                />
-              </label>
-              <div style={{ marginTop: "4px", fontSize: "11px", color: "var(--muted)" }}>
-                Quick fill (prescribed times):
-              </div>
-              <div className="quick-times">
-                {settings.medTimes.map((t, idx) => (
-                  <button
-                    key={idx}
-                    type="button"
-                    className="quick-time-pill"
-                    onClick={() => setTime(t)}
-                  >
-                    {t}
+              <div style={{ fontSize: "11px", color: "var(--muted)" }}>Which medication, and when. Defaults to now.</div>
+              <div className="quick-times" style={{ marginTop: 6 }}>
+                {meds.map((m) => (
+                  <button key={m.id} type="button" className={"quick-time-pill" + (drug === m.id ? " active" : "")} style={drug === m.id ? { background: "#1d4ed8", color: "#fff" } : {}} onClick={() => setDrug(m.id)}>
+                    {m.name}{m.dose ? ` ${m.dose}` : ""}{m.dopaminergic ? " ·L" : ""}
                   </button>
                 ))}
               </div>
+              <label style={{ display: "flex", flexDirection: "column", gap: "4px", marginTop: 8 }}>
+                <span style={{ fontSize: "11px", color: "var(--muted)" }}>Time</span>
+                <input type="time" className="settings-input" value={time} onChange={(e) => setTime(e.target.value)} />
+              </label>
+              {med && med.times && med.times.length > 0 && (
+                <>
+                  <div style={{ marginTop: "4px", fontSize: "11px", color: "var(--muted)" }}>Quick fill (scheduled times for {med.name}):</div>
+                  <div className="quick-times">
+                    {med.times.map((t, idx) => <button key={idx} type="button" className="quick-time-pill" onClick={() => setTime(t)}>{t}</button>)}
+                  </div>
+                </>
+              )}
+              <div style={{ fontSize: 10, color: "var(--muted)", marginTop: 6 }}>·L marks dopaminergic (levodopa-class) medications; those drive the dose rays, dose lines and pre/post-dose tagging.</div>
             </div>
             <div className="modal-footer">
               <button className="btn-secondary" onClick={onClose}>Cancel</button>
-              <button className="btn-primary" onClick={handleSave}>Save</button>
+              <button className="btn-primary" onClick={() => onSave({ t: time, drug })}>Save</button>
             </div>
           </div>
         </div>
@@ -1247,11 +1253,8 @@
         onUpdate(next);
       };
 
-      const handleMedTimeChange = (index, value) => {
-        const arr = [...local.medTimes];
-        arr[index] = value;
-        handleChange("medTimes", arr);
-      };
+      const updateMed = (i, patch) => { const meds = (local.medications || []).map((m, k) => (k === i ? { ...m, ...patch } : m)); handleChange("medications", meds); };
+      const removeMed = (i) => { if (!window.confirm("Remove this medication from settings? Logged doses stay.")) return; handleChange("medications", (local.medications || []).filter((_, k) => k !== i)); };
 
       return (
         <div className="card settings-card">
@@ -1259,7 +1262,7 @@
             <div>
               <div className="card-title">Settings</div>
               <div className="card-subtitle">
-                Defaults for sleep and medication times. New days use these to pre-fill the ring.
+                Sleep window (pre-fills the ring on new days) and your medication list.
               </div>
             </div>
           </div>
@@ -1283,36 +1286,30 @@
               />
             </label>
           </div>
-          <div className="settings-row">
-            <label>
-              Med time 1
-              <input
-                type="time"
-                className="settings-input"
-                value={local.medTimes[0]}
-                onChange={(e) => handleMedTimeChange(0, e.target.value)}
-              />
-            </label>
-            <label>
-              Med time 2
-              <input
-                type="time"
-                className="settings-input"
-                value={local.medTimes[1]}
-                onChange={(e) => handleMedTimeChange(1, e.target.value)}
-              />
-            </label>
-          </div>
-          <div className="settings-row">
-            <label>
-              Med time 3
-              <input
-                type="time"
-                className="settings-input"
-                value={local.medTimes[2]}
-                onChange={(e) => handleMedTimeChange(2, e.target.value)}
-              />
-            </label>
+          <div style={{ marginTop: 10, fontSize: 13, fontWeight: 600 }}>Medications</div>
+          <div className="card-subtitle">Each medication with its scheduled times (quick-fill in the log dialog). Tick "dopaminergic" for levodopa-class drugs; those get the dose rays and lines, and define pre/post-dose for the tests.</div>
+          {(local.medications || []).map((m, i) => (
+            <div key={m.id + i} style={{ background: "#0f172a", borderRadius: 10, padding: "8px 10px", marginTop: 8 }}>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 90px auto", gap: 6, alignItems: "end" }}>
+                <label style={{ fontSize: 11, color: "var(--muted)" }}>Name<input className="settings-input" value={m.name} onChange={(e) => updateMed(i, { name: e.target.value, id: m.id || slug(e.target.value) })} /></label>
+                <label style={{ fontSize: 11, color: "var(--muted)" }}>Dose<input className="settings-input" value={m.dose || ""} placeholder="25/100" onChange={(e) => updateMed(i, { dose: e.target.value })} /></label>
+                <button type="button" className="pill-btn" onClick={() => removeMed(i)} title="Remove">✕</button>
+              </div>
+              <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, marginTop: 6 }}>
+                <input type="checkbox" checked={Boolean(m.dopaminergic)} onChange={(e) => updateMed(i, { dopaminergic: e.target.checked })} /> dopaminergic (levodopa-class)
+              </label>
+              <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 6, flexWrap: "wrap" }}>
+                <span style={{ fontSize: 11, color: "var(--muted)" }}>{m.times.length}× daily</span>
+                <button type="button" className="pill-btn" onClick={() => updateMed(i, { times: m.times.slice(0, -1) })} disabled={!m.times.length}>−</button>
+                <button type="button" className="pill-btn" onClick={() => updateMed(i, { times: [...m.times, m.times.length ? m.times[m.times.length - 1] : "08:00"] })}>+</button>
+                {m.times.map((t, k) => (
+                  <input key={k} type="time" className="settings-input" style={{ width: "auto" }} value={t} onChange={(e) => { const times = [...m.times]; times[k] = e.target.value; updateMed(i, { times }); }} />
+                ))}
+              </div>
+            </div>
+          ))}
+          <div className="controls-row" style={{ marginTop: 8 }}>
+            <button type="button" className="pill-btn primary" onClick={() => handleChange("medications", [...(local.medications || []), { id: "med-" + Date.now().toString(36), name: "New medication", dose: "", dopaminergic: false, times: ["08:00"] }])}>+ Add medication</button>
           </div>
           <div className="settings-help">
             Sleep can cross midnight (e.g., 23:00 → 06:00). Any 2-hour segment whose midpoint falls in that window
@@ -1452,11 +1449,12 @@
             );
           })}
           {data.doses.map((d, i) => {
-            const [hh, mm] = d.t.split(":").map(Number);
+            const [hh, mm] = d.t.split(":").map(Number); const dopa = d.dopaminergic !== false;
             return (
               <g key={i}>
-                <line x1={x(hh + mm / 60)} x2={x(hh + mm / 60)} y1={padT} y2={H - padB} stroke="#f8fafc" strokeWidth="1.5" strokeDasharray="2 2" />
-                <text x={x(hh + mm / 60)} y={padT + 9} fontSize="9" fill="#f8fafc" textAnchor="middle">💊</text>
+                <line x1={x(hh + mm / 60)} x2={x(hh + mm / 60)} y1={padT} y2={H - padB} stroke={dopa ? "#f8fafc" : "#64748b"} strokeWidth={dopa ? 1.5 : 1} strokeDasharray={dopa ? "2 2" : "1 3"} />
+                {dopa && <text x={x(hh + mm / 60)} y={padT + 9} fontSize="9" fill="#f8fafc" textAnchor="middle">💊</text>}
+                <title>{d.drug} {d.t}</title>
               </g>
             );
           })}
@@ -1496,7 +1494,7 @@
           <div className="card-header">
             <div>
               <div className="card-title">Day vitals</div>
-              <div className="card-subtitle">Hourly heart rate (band = min–max) and HRV (dashed), over your QoL ratings. Doses as dashed lines; tremor tests (pink) and tapping tests (blue) as dots with their 1–5 score.</div>
+              <div className="card-subtitle">Hourly heart rate (band = min–max) and HRV (dashed), over your QoL ratings. Levodopa doses as white dashed lines, other medications as faint grey; tremor tests (pink) and tapping tests (blue) as dots with their 1–5 score.</div>
             </div>
           </div>
           {err && <div className="card-subtitle">Couldn't load ({err}).</div>}
@@ -1775,7 +1773,7 @@
 
       const save = async () => {
         const ts = new Date().toISOString();
-        const raw = { hand, posture, seconds: result.seconds, samples: result.samples, sampleRate: result.sampleRate, note: note || null, peakHz: result.peakHz, rmsAll: result.rmsAll };
+        const raw = { hand, posture, seconds: result.seconds, samples: result.samples, sampleRate: result.sampleRate, note: note || null, peakHz: result.peakHz, rmsAll: result.rmsAll, ...doseContextNow() };
         const items = [
           { ts, source: "motor", metric: "tremor_rms", value: Number(result.rmsBand.toFixed(4)), raw },
           { ts, source: "motor", metric: "tremor_band_ratio", value: Number(result.bandRatio.toFixed(4)), raw },
@@ -1837,6 +1835,7 @@
               </svg>
               <div className="card-subtitle">{verdict(result)} · {result.samples} samples at {result.sampleRate} Hz over {result.seconds} s · {hand} hand, {posture}</div>
               <div style={{ fontSize: 10, color: "#64748b", marginTop: 2 }}>UPDRS estimate converts tremor-band acceleration to hand excursion (x = a / (2πf)²) and bins it on the MDS-UPDRS 3.17 amplitude scale. An estimate of the clinical score, not a clinical rating.</div>
+              <DoseStateLine />
               <div className="controls-row" style={{ gap: 8, marginTop: 6 }}>
                 <input value={note} onChange={(e) => setNote(e.target.value)} placeholder="Note (e.g. 40 min after dose)"
                   style={{ flex: 1, background: "#0f172a", color: "#e2e8f0", border: "1px solid #334155", borderRadius: 8, padding: "8px 10px", fontSize: 14 }} />
@@ -1925,7 +1924,7 @@
       };
       const save = async () => {
         const ts = new Date().toISOString();
-        const raw = { hand, note: note || null, taps: result.taps, seconds: result.seconds, hesitations: result.hesitations };
+        const raw = { hand, note: note || null, taps: result.taps, seconds: result.seconds, hesitations: result.hesitations, ...doseContextNow() };
         const items = [
           ["tap_rate", Number(result.rate.toFixed(3))], ["tap_iti_ms", Number(result.itiMs.toFixed(1))], ["tap_cv", Number(result.cv.toFixed(4))],
           ["tap_decrement", Number(result.decrement.toFixed(4))], ["tap_accuracy", Number(result.accuracy.toFixed(4))], ["tap_updrs", result.score], ["tap_score", 5 - result.score],
@@ -1986,6 +1985,7 @@
                   </>; })()}
               </svg>
               <div style={{ fontSize: 10, color: "#64748b", marginTop: 2 }}>Score is a heuristic in the spirit of MDS-UPDRS 3.4 (rate, rhythm, slowdown, hesitations). Your own baseline matters more than the absolute number.</div>
+              <DoseStateLine />
               <div className="controls-row" style={{ gap: 8, marginTop: 6 }}>
                 <input value={note} onChange={(e) => setNote(e.target.value)} placeholder="Note (e.g. pre-dose)"
                   style={{ flex: 1, background: "#0f172a", color: "#e2e8f0", border: "1px solid #334155", borderRadius: 8, padding: "8px 10px", fontSize: 14 }} />
@@ -2234,7 +2234,7 @@
       };
       const save = async () => {
         const ts = new Date().toISOString();
-        const raw = { note: note || null, voicedSeconds: Number(result.voicedSeconds.toFixed(2)), maxPhonation: Number(result.maxPhonation.toFixed(2)) };
+        const raw = { note: note || null, voicedSeconds: Number(result.voicedSeconds.toFixed(2)), maxPhonation: Number(result.maxPhonation.toFixed(2)), ...doseContextNow() };
         const items = [["voice_f0", Number(result.meanF0.toFixed(1))], ["voice_f0_sd", Number(result.f0sd.toFixed(2))], ["voice_jitter_pct", Number((result.jitter * 100).toFixed(3))],
           ["voice_shimmer_pct", Number((result.shimmer * 100).toFixed(3))], ["voice_hnr", Number(result.hnr.toFixed(2))], ["voice_loudness_db", Number(result.loudnessDb.toFixed(1))],
           ["voice_int_slope", Number(result.intSlope.toFixed(3))], ["voice_ppe", result.ppe == null ? null : Number(result.ppe.toFixed(4))],
@@ -2296,6 +2296,7 @@
               </svg>
               <div className="card-subtitle">{result.voicedSeconds.toFixed(1)} s voiced · longest run {result.maxPhonation.toFixed(1)} s · {result.periods} glottal periods</div>
               <div style={{ fontSize: 10, color: "#64748b", marginTop: 2 }}>Praat-like: jitter and HNR agree with Praat within a few hundredths of a percent and ~1 dB on test signals; shimmer reads somewhat lower than Praat. The grey reference lines place a value among healthy recordings in the UCI Parkinsons dataset, which used a studio mic and Praat; phone recordings read noisier, so they are context, not a verdict, and say nothing about whether anyone has PD. The score that matters is against your own baseline. Loudness slope (how the "ahh" fades) is the sustained-vowel measure shown to improve after levodopa.</div>
+              <DoseStateLine />
               <div className="controls-row" style={{ gap: 8, marginTop: 6 }}>
                 <input value={note} onChange={(e) => setNote(e.target.value)} placeholder="Note (e.g. pre-dose)"
                   style={{ flex: 1, background: "#0f172a", color: "#e2e8f0", border: "1px solid #334155", borderRadius: 8, padding: "8px 10px", fontSize: 14 }} />
@@ -2411,7 +2412,7 @@
       };
       const save = async () => {
         const ts = new Date().toISOString();
-        const raw = { note: note || null, count: result.count, seconds: Number(result.seconds.toFixed(2)), coverage: Number(result.coverage.toFixed(2)) };
+        const raw = { note: note || null, count: result.count, seconds: Number(result.seconds.toFixed(2)), coverage: Number(result.coverage.toFixed(2)), ...doseContextNow() };
         const nrm = normScore([{ value: result.rate, ...NORMS.ddk_rate }]);
         const items = [["ddk_rate", Number(result.rate.toFixed(3))], ["ddk_ioi_ms", Number(result.ioiMs.toFixed(1))], ["ddk_cv", Number(result.cv.toFixed(4))], ["ddk_decrement", Number(result.decrement.toFixed(4))],
           ["ddk_loudness_cv", Number(result.loudnessCv.toFixed(4))], ["ddk_score", base && base.score != null ? 5 - base.score : null], ["ddk_norm", nrm ? nrm.score : null]].filter(([, v]) => v != null)
@@ -2465,6 +2466,7 @@
                     {result.onsets.map((i, k) => <line key={k} x1={x(i)} x2={x(i)} y1="14" y2="64" stroke="#a3e635" strokeWidth="1" opacity="0.7" />)}</>; })()}
               </svg>
               <div style={{ fontSize: 10, color: "#64748b", marginTop: 2 }}>Healthy adults typically manage about 6–7 syllables/s; PD slows and becomes irregular and improves on levodopa (Cologne and Bern 2025). Syllables are counted as loudness peaks with a dip between them (no speech recognition).</div>
+              <DoseStateLine />
               <div className="controls-row" style={{ gap: 8, marginTop: 6 }}>
                 <input value={note} onChange={(e) => setNote(e.target.value)} placeholder="Note (e.g. pre-dose)"
                   style={{ flex: 1, background: "#0f172a", color: "#e2e8f0", border: "1px solid #334155", borderRadius: 8, padding: "8px 10px", fontSize: 14 }} />
@@ -2591,7 +2593,7 @@
       };
       const save = async () => {
         const ts = new Date().toISOString();
-        const raw = { passage: passage.id, note: note || null, seconds: Number(result.seconds.toFixed(1)), voicedSeconds: Number(result.voicedSeconds.toFixed(1)) };
+        const raw = { passage: passage.id, note: note || null, seconds: Number(result.seconds.toFixed(1)), voicedSeconds: Number(result.voicedSeconds.toFixed(1)), ...doseContextNow() };
         const items = [["read_f0_sd_st", Number(result.sdSt.toFixed(3))], ["read_range_st", Number(result.rangeSt.toFixed(2))], ["read_f0", Number(result.meanF0.toFixed(1))], ["read_rate", Number(result.rate.toFixed(3))],
           ["read_pause_pct", Number(result.pausePct.toFixed(4))], ["read_seconds", Number(result.seconds.toFixed(1))], ["read_score", base && base.score != null ? 5 - base.score : null],
           ["read_norm", (() => { const n = normScore([{ value: result.sdSt, ...NORMS.read_f0_sd_st }]); return n ? n.score : null; })()]].filter(([, v]) => v != null)
@@ -2651,6 +2653,7 @@
                     {v.map((s, i) => <circle key={i} cx={x(i)} cy={Math.max(12, Math.min(58, y(s)))} r="1.2" fill="#c084fc" />)}</>; })()}
               </svg>
               <div style={{ fontSize: 10, color: "#64748b", marginTop: 2 }}>Pitch variability in read speech (monopitch) improved after levodopa in the Bern 2025 study; the text matters, so scores are kept per passage.</div>
+              <DoseStateLine />
               <div className="controls-row" style={{ gap: 8, marginTop: 6 }}>
                 <input value={note} onChange={(e) => setNote(e.target.value)} placeholder="Note (e.g. pre-dose)"
                   style={{ flex: 1, background: "#0f172a", color: "#e2e8f0", border: "1px solid #334155", borderRadius: 8, padding: "8px 10px", fontSize: 14 }} />
@@ -2795,7 +2798,7 @@
       const save = async () => {
         const ts = new Date().toISOString();
         const nrm = normScore([{ value: result.cadence, ...NORMS.gait_cadence }, { value: result.stepCv * 100, ...NORMS.gait_step_cv, higherIsWorse: true }]);
-        const raw = { note: note || null, placement, cued, bpm: cued ? BEAT_BPM : null, seconds: Number(result.seconds.toFixed(1)), steps: result.steps };
+        const raw = { note: note || null, placement, cued, bpm: cued ? BEAT_BPM : null, seconds: Number(result.seconds.toFixed(1)), steps: result.steps, ...doseContextNow() };
         const beatLock = cued ? Math.abs(result.cadence - BEAT_BPM) / BEAT_BPM : null;
         const items = [["gait_cadence", Number(result.cadence.toFixed(1))], ["gait_step_cv", Number((result.stepCv * 100).toFixed(2))], ["gait_step_regularity", Number(result.stepRegularity.toFixed(3))],
           ["gait_stride_regularity", Number(result.strideRegularity.toFixed(3))], ["gait_asymmetry", Number(result.asymmetry.toFixed(3))], ["gait_rms", Number(result.rms.toFixed(3))],
@@ -2856,6 +2859,7 @@
                     {result.peaks.filter((p) => p < 250).map((p, k) => <line key={k} x1={10 + (580 * p) / 249} x2={10 + (580 * p) / 249} y1="14" y2="64" stroke="#a3e635" strokeWidth="1" opacity="0.6" />)}</>; })()}
               </svg>
               <div style={{ fontSize: 10, color: "#64748b", marginTop: 2 }}>Regularity and asymmetry use autocorrelation at one-step and two-step lags (Moe-Nilssen & Helbostad). PD gait shows higher step variability and asymmetry before cadence changes. Baselines are kept per placement ({placement}); same placement, shoes and route when you can.</div>
+              <DoseStateLine />
               <div className="controls-row" style={{ gap: 8, marginTop: 6 }}>
                 <input value={note} onChange={(e) => setNote(e.target.value)} placeholder="Note (e.g. pre-dose, indoors)"
                   style={{ flex: 1, background: "#0f172a", color: "#e2e8f0", border: "1px solid #334155", borderRadius: 8, padding: "8px 10px", fontSize: 14 }} />
@@ -2945,7 +2949,7 @@
       const save = async () => {
         const ts = new Date().toISOString();
         const step = Math.max(1, Math.floor(pts.current.length / 200));
-        const raw = { hand, note: note || null, coverage: Number(result.coverage.toFixed(2)), points: result.points, trace: pts.current.filter((_, i) => i % step === 0).map((p) => [Math.round(p.x), Math.round(p.y), Math.round(p.t - pts.current[0].t)]) };
+        const raw = { hand, note: note || null, ...doseContextNow(), coverage: Number(result.coverage.toFixed(2)), points: result.points, trace: pts.current.filter((_, i) => i % step === 0).map((p) => [Math.round(p.x), Math.round(p.y), Math.round(p.t - pts.current[0].t)]) };
         const items = [["spiral_error_pct", Number(result.errorPct.toFixed(2))], ["spiral_tremor_share", Number(result.bandShare.toFixed(4))], ["spiral_seconds", Number(result.seconds.toFixed(2))], ["spiral_speed", Number(result.speed.toFixed(4))]]
           .map(([metric, value]) => ({ ts, source: "motor", metric, value, raw }));
         const r = await apiFetch("/api/observations", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(items) });
@@ -2985,6 +2989,7 @@
                 ))}
               </div>
               <div style={{ fontSize: 10, color: "#64748b", marginTop: 6 }}>Deviation = mean distance from the ideal spiral. Tremor share = fraction of the wobble around the ideal path in the 3.5–7.5 Hz band. Finger-on-glass is noisier than pen-on-tablet; compare against your own history.</div>
+              <DoseStateLine />
               <div className="controls-row" style={{ gap: 8, marginTop: 6 }}>
                 <input value={note} onChange={(e) => setNote(e.target.value)} placeholder="Note (e.g. pre-dose)"
                   style={{ flex: 1, background: "#0f172a", color: "#e2e8f0", border: "1px solid #334155", borderRadius: 8, padding: "8px 10px", fontSize: 14 }} />
@@ -3069,7 +3074,7 @@
               </div>
               <ChartLegend items={[
                 { label: "Mean QoL (1–5, left)", color: "#38bdf8" },
-                { label: "Doses / day", color: "#334155", bar: true },
+                { label: "Levodopa doses / day", color: "#334155", bar: true },
                 pick && { label: `${metricLabel(src + "/" + met)}${lag === -1 ? " (day before)" : lag === 1 ? " (day after)" : ""} (right)`, color: "#a3e635", dashed: true },
               ]} />
               <DualAxisChart
@@ -3521,7 +3526,7 @@
     // ---------- Stats tab ----------
     // [key, label, decimals, direction, kind]  direction: 1 = higher is better, -1 = lower is better, 0 = neutral (no colour)
     const STAT_GROUPS = [
-      ["QoL & doses", [["qol", "Mean QoL (1–5)", 2, 1, "score"], ["doses", "Doses / day", 1, 0], ["rated", "Rated blocks / day", 1, 0]]],
+      ["QoL & doses", [["qol", "Mean QoL (1–5)", 2, 1, "score"], ["doses", "Levodopa doses / day", 1, 0], ["rated", "Rated blocks / day", 1, 0]]],
       ["Test scores vs healthy reference (1–5)", [["rollup:overall_norm", "Overall", 1, 1, "score"], ["rollup:motor_norm", "Motor", 1, 1, "score"], ["motor/tremor_score", "Tremor (UPDRS-based)", 1, 1, "score"], ["motor/tap_score", "Tapping", 1, 1, "score"], ["motor/gait_norm", "Gait (cadence, variability)", 1, 1, "score"],
         ["rollup:voice_norm", "Voice", 1, 1, "score"], ["motor/ddk_norm", "Pa-ta-ka rate", 1, 1, "score"], ["motor/voice_norm", "Sustained vowel (jitter, PPE)", 1, 1, "score"], ["motor/read_norm", "Reading pitch variability", 1, 1, "score"]]],
       ["Test scores vs your baseline (1–5)", [["rollup:overall_base", "Overall", 1, 1, "score"], ["rollup:motor_base", "Motor", 1, 1, "score"], ["motor/gait_score", "Gait", 1, 1, "score"],
@@ -3663,6 +3668,7 @@
               setSettings((prev) => ({ ...prev, ...payload.settings }));
             }
             if (payload.days) {
+              Object.values(payload.days).forEach((d) => { if (d) d.meds = normalizeMeds(d.meds); });
               setDays((prev) => ({ ...prev, ...payload.days }));
             }
           } catch {
@@ -3714,15 +3720,19 @@
         setSegmentModalState((s) => ({ ...s, open: false }));
       };
 
-      const handleAddMed = (timeStr) => {
+      const handleAddMed = (entry) => {
         setDays((prev) => {
           const existing = prev[dateKey] || createEmptyDay(dateKey, settings);
           const dayCopy = { ...existing };
-          dayCopy.meds = [...dayCopy.meds, timeStr].sort();
+          dayCopy.meds = normalizeMeds([...(dayCopy.meds || []), entry]);
           return { ...prev, [dateKey]: dayCopy };
         });
         setMedModalOpen(false);
       };
+      const removeMed = (idx) => {
+        setDays((prev) => { const existing = prev[dateKey]; if (!existing) return prev; const dayCopy = { ...existing, meds: normalizeMeds(existing.meds).filter((_, i) => i !== idx) }; return { ...prev, [dateKey]: dayCopy }; });
+      };
+      doseCtxRef.current = { days, settings };
 
       const goToOffsetDay = (offset) => {
         const d = new Date(selectedDate);
@@ -3732,7 +3742,7 @@
 
       const handleCalendarSelect = (d) => setSelectedDate(d);
 
-      const medSummary = day.meds.length ? day.meds.join(", ") : "No meds logged yet";
+      const medList = normalizeMeds(day.meds);
 
       return (
         <div className="app-shell">
@@ -3798,7 +3808,7 @@
               </div>
             </div>
             <div className="ring-container">
-              <DayRing day={day} onSegmentClick={handleSegmentClick} />
+              <DayRing day={day} onSegmentClick={handleSegmentClick} settings={settings} />
               <div className="ring-caption">
                 Red = tougher hours. Green/blue = better QoL. Gray with 😴 = sleep, black = no data/not yet logged.
               </div>
@@ -3813,7 +3823,12 @@
               </button>
             </div>
             <div className="med-list">
-              <span>Today&apos;s doses:</span> {medSummary}
+              <span>Doses:</span> {medList.length ? medList.map((m, i) => (
+                <span key={i} style={{ display: "inline-flex", alignItems: "center", gap: 3, marginRight: 8 }}>
+                  <span style={{ color: isDopa(settings, m.drug) ? "#38bdf8" : "#94a3b8" }}>{m.t} {medName(settings, m.drug)}</span>
+                  <button type="button" onClick={() => removeMed(i)} title="Remove" style={{ background: "none", border: 0, color: "#64748b", cursor: "pointer", padding: 0, fontSize: 11 }}>✕</button>
+                </span>
+              )) : "none logged yet"}
             </div>
           </div>
 

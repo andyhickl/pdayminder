@@ -148,7 +148,7 @@ async function loadClientPayload(userId) {
       [userId]
     ),
     pool.query(
-      "select to_char(day,'YYYY-MM-DD') as day, to_char(taken_at,'HH24:MI') as t from med_doses where user_id = $1 and source = 'pdayminder' order by day, taken_at",
+      "select to_char(day,'YYYY-MM-DD') as day, to_char(taken_at,'HH24:MI') as t, drug from med_doses where user_id = $1 and source = 'pdayminder' order by day, taken_at",
       [userId]
     ),
   ]);
@@ -164,7 +164,7 @@ async function loadClientPayload(userId) {
     return days[d];
   };
   q.rows.forEach((r) => (dayFor(r.day).segments[r.seg] = { type: r.type, rating: r.rating }));
-  m.rows.forEach((r) => dayFor(r.day).meds.push(r.t));
+  m.rows.forEach((r) => dayFor(r.day).meds.push({ t: r.t, drug: r.drug || "sinemet" }));
   return { settings: s.rows[0] ? s.rows[0].data : null, days };
 }
 
@@ -204,12 +204,13 @@ async function saveClientPayload(userId, body) {
           "delete from med_doses where user_id = $1 and day = $2 and source = 'pdayminder'",
           [userId, day]
         );
-        for (const t of d.meds) {
-          if (!/^\d{2}:\d{2}$/.test(t)) continue;
+        for (const m of d.meds) {
+          const t = typeof m === "string" ? m : m && m.t; const drug = (typeof m === "object" && m && m.drug) || "sinemet";
+          if (!t || !/^\d{2}:\d{2}$/.test(t)) continue;
           await client.query(
-            `insert into med_doses (user_id, day, taken_at, source) values ($1,$2,$3,'pdayminder')
+            `insert into med_doses (user_id, day, taken_at, drug, source) values ($1,$2,$3,$4,'pdayminder')
              on conflict do nothing`,
-            [userId, day, t]
+            [userId, day, t, String(drug).slice(0, 60)]
           );
         }
       }
@@ -230,6 +231,15 @@ app.use((err, req, res, next) => {
   logIngest(null, `${req.method} ${req.path}`, status, 0, { error: err.type || err.message, length: req.get("content-length") });
   res.status(status).json({ error: err.type || "bad request", limit: "50mb" });
 });
+
+// Which drug ids count as levodopa-class for this user (from settings.medications; default: sinemet).
+async function dopaDrugs(userId) {
+  const r = await pool.query("select data from settings where user_id = $1", [userId]);
+  const meds = r.rows[0] && r.rows[0].data && Array.isArray(r.rows[0].data.medications) ? r.rows[0].data.medications : null;
+  if (!meds) return ["sinemet"];
+  const ids = meds.filter((m) => m.dopaminergic).map((m) => m.id);
+  return ids.length ? ids : ["sinemet"];
+}
 
 // ---------- public routes ----------
 app.get("/api/health", async (req, res) => {
@@ -361,6 +371,23 @@ app.get("/api/observations", requireAuth, async (req, res) => {
     `select ts, source, metric, value, raw from observations where ${where.join(" and ")} order by ts desc limit $${args.length}`,
     args
   );
+  if (req.query.annotate === "dose") {
+    // dose_state recomputed from logged levodopa doses: post = 30–210 min after the latest dose that day, ramp < 30, else pre
+    const dopa = await dopaDrugs(req.user.id);
+    const doses = await pool.query(
+      `select to_char(day,'YYYY-MM-DD') as day, extract(hour from taken_at)*60 + extract(minute from taken_at) as m
+       from med_doses where user_id = $1 and drug = any($2) order by day, taken_at`, [req.user.id, dopa]);
+    const byDay = {}; doses.rows.forEach((r) => (byDay[r.day] = byDay[r.day] || []).push(Number(r.m)));
+    for (const r of rows) {
+      const d = new Date(r.ts); const day = d.toLocaleDateString("en-CA", { timeZone: TZ });
+      const parts = new Intl.DateTimeFormat("en-US", { hour: "numeric", minute: "numeric", hour12: false, timeZone: TZ }).formatToParts(d);
+      const mod = (Number(parts.find((p) => p.type === "hour").value) % 24) * 60 + Number(parts.find((p) => p.type === "minute").value);
+      const prior = (byDay[day] || []).filter((m) => m <= mod);
+      if (!prior.length) { r.dose_state = "pre"; r.minutes_since_dose = null; continue; }
+      const since = mod - Math.max(...prior); r.minutes_since_dose = since;
+      r.dose_state = since < 30 ? "ramp" : since <= 210 ? "post" : "pre";
+    }
+  }
   res.json(rows);
 });
 
@@ -544,7 +571,7 @@ app.get("/api/daily", requireAuth, async (req, res) => {
        from qol_ratings where user_id = $1 and type = 'rating' group by day
      ),
      meds as (
-       select day, count(*)::int as doses from med_doses where user_id = $1 group by day
+       select day, count(*)::int as doses from med_doses where user_id = $1 and drug = any($6) group by day
      ),
      obs as (
        select (ts at time zone $2)::date as day, avg(value) as v, count(*)::int as n
@@ -555,7 +582,7 @@ app.get("/api/daily", requireAuth, async (req, res) => {
             coalesce(m.doses,0) as doses, o.v as metric_value, coalesce(o.n,0) as metric_n
      from span s left join qol q on q.day = s.day left join meds m on m.day = s.day left join obs o on o.day = s.day
      order by s.day`,
-    [req.user.id, TZ, days, source, metric]
+    [req.user.id, TZ, days, source, metric, await dopaDrugs(req.user.id)]
   );
   res.json(rows);
 });
@@ -565,7 +592,7 @@ app.get("/api/day", requireAuth, async (req, res) => {
   const day = String(req.query.day || "");
   if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) return res.status(400).json({ error: "day=YYYY-MM-DD" });
   const uid = req.user.id;
-  const [obs, qol, meds, oura, motor] = await Promise.all([
+  const [obs, qol, meds, dopa, oura, motor] = await Promise.all([
     pool.query(
       `select ts, metric, value, raw from observations
        where user_id = $1 and source = 'hae' and (ts at time zone $2)::date = $3::date order by ts`,
@@ -573,6 +600,7 @@ app.get("/api/day", requireAuth, async (req, res) => {
     ),
     pool.query("select seg, type, rating from qol_ratings where user_id = $1 and day = $2 order by seg", [uid, day]),
     pool.query("select to_char(taken_at,'HH24:MI') as t, drug from med_doses where user_id = $1 and day = $2 order by taken_at", [uid, day]),
+    dopaDrugs(uid),
     pool.query(
       `select metric, value from observations where user_id = $1 and source = 'oura' and (ts at time zone $2)::date = $3::date`,
       [uid, TZ, day]
@@ -593,7 +621,8 @@ app.get("/api/day", requireAuth, async (req, res) => {
     if (counts[r.metric] > 1) (hourly[r.metric] = hourly[r.metric] || []).push({ ts: r.ts, value: r.value });
     else daily[r.metric] = r.value;
   });
-  res.json({ day, hourly, daily, oura: Object.fromEntries(oura.rows.map((r) => [r.metric, r.value])), motor: motor.rows, qol: qol.rows, doses: meds.rows, workouts });
+  res.json({ day, hourly, daily, oura: Object.fromEntries(oura.rows.map((r) => [r.metric, r.value])), motor: motor.rows, qol: qol.rows,
+    doses: meds.rows.map((r) => ({ ...r, dopaminergic: dopa.includes(r.drug || "sinemet") })), workouts });
 });
 
 // Several daily metrics at once, pivoted: [{day, "hae/heart_rate_variability": 48.2, ...}]
@@ -770,7 +799,7 @@ app.get("/api/stats", requireAuth, async (req, res) => {
     `select to_char(day,'YYYY-MM-DD') as day, avg(rating) filter (where type = 'rating') as qol, count(*) filter (where type = 'rating')::int as rated
      from qol_ratings where user_id = $1 and day >= (current_date at time zone $2)::date - 89 group by day order by day`, [uid, TZ]);
   const m = await pool.query(
-    `select to_char(day,'YYYY-MM-DD') as day, count(*)::int as doses from med_doses where user_id = $1 and day >= (current_date at time zone $2)::date - 89 group by day order by day`, [uid, TZ]);
+    `select to_char(day,'YYYY-MM-DD') as day, count(*)::int as doses from med_doses where user_id = $1 and drug = any($3) and day >= (current_date at time zone $2)::date - 89 group by day order by day`, [uid, TZ, await dopaDrugs(uid)]);
   for (const k of keys) {
     if (k === "qol") out[k] = summarize(q.rows.filter((r) => r.qol != null).map((r) => [r.day, Number(r.qol)]));
     else if (k === "rated") out[k] = summarize(q.rows.map((r) => [r.day, r.rated]), { fromFirstNonZero: true });

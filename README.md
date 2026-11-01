@@ -66,6 +66,15 @@ baseline, scores on their own 1–5 scale), Settings (incl. Trend metrics picker
 ## Backlog
 See `docs/BACKLOG.md`.
 
+## Medications and dose state
+`settings.medications` = `[{id, name, dose, dopaminergic, times: ["HH:MM", ...]}]` (replaces the old 3-slot `medTimes`;
+migrated on load). Logged doses are `{t, drug}` (old plain "HH:MM" strings = sinemet) and are stored in `med_doses.drug`.
+Dopaminergic drugs get the ring rays and the white dose lines in Day vitals; other drugs show as grey dots/lines.
+"Doses / day" counts dopaminergic doses only. Every saved test carries `raw.dose_state` (`pre` | `post` | `ramp`) and
+`raw.minutes_since_dose` computed at save time; `GET /api/observations?annotate=dose` recomputes the same from logged
+doses for any analysis. Rule: post = 30–210 min after the latest dopaminergic dose that day, ramp = under 30 min, pre
+otherwise (no dose yet counts as pre).
+
 ## Legal
 `docs/privacy.md` and `docs/terms.md` are served publicly (no login) at `/privacy` and `/terms`.
 
