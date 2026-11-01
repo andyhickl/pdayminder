@@ -667,20 +667,24 @@ function mdToHtml(md) {
   const inline = (t) => esc(t)
     .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
     .replace(/_(.+?)_/g, "<em>$1</em>")
-    .replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, '<a href="$2">$1</a>')
+    .replace(/!\[([^\]]*)\]\((\/static\/[^)\s]+)\)/g, '<img src="$2" alt="$1">')
+    .replace(/\[([^\]]+)\]\(((?:https?:\/\/|\/)[^)\s]+)\)/g, '<a href="$2">$1</a>')
     .replace(/(^|[^"(>\w])((?:https?:\/\/)[\w./?=&%#-]+)/g, (m, pre, url) => `${pre}<a href="${url}">${url}</a>`)
     .replace(/\b((?:github\.com|cloud\.ouraring\.com)\/[\w./-]+)/g, (m) => `<a href="https://${m}">${m}</a>`)
     .replace(/([\w.+-]+@[\w-]+\.[\w.]+)/g, '<a href="mailto:$1">$1</a>');
   const out = [];
   let list = false;
   for (const line of md.split("\n")) {
-    if (/^- /.test(line)) { if (!list) { out.push("<ul>"); list = true; } out.push(`<li>${inline(line.slice(2))}</li>`); continue; }
-    if (list) { out.push("</ul>"); list = false; }
+    if (/^- /.test(line)) { if (list !== "ul") { if (list) out.push(`</${list}>`); out.push("<ul>"); list = "ul"; } out.push(`<li>${inline(line.slice(2))}</li>`); continue; }
+    if (/^\d+\. /.test(line)) { if (list !== "ol") { if (list) out.push(`</${list}>`); out.push("<ol>"); list = "ol"; } out.push(`<li>${inline(line.replace(/^\d+\. /, ""))}</li>`); continue; }
+    if (list) { out.push(`</${list}>`); list = false; }
+    if (/^> /.test(line)) { out.push(`<blockquote>${inline(line.slice(2))}</blockquote>`); continue; }
+    if (line.startsWith("<!-- shots")) { const names = line.match(/shots:(.*?)-->/)[1].trim().split(/\s+/); out.push('<div class="shots">' + names.map((n) => `<figure><img src="/static/shots/${n}.png" alt="${n}"><figcaption>${n}</figcaption></figure>`).join("") + "</div>"); continue; }
     const h = line.match(/^(#{1,3}) (.*)/);
     if (h) out.push(`<h${h[1].length}>${inline(h[2])}</h${h[1].length}>`);
     else if (line.trim()) out.push(`<p>${inline(line)}</p>`);
   }
-  if (list) out.push("</ul>");
+  if (list) out.push(`</${list}>`);
   return out.join("\n");
 }
 function legalPage(file, title) {
@@ -689,13 +693,17 @@ function legalPage(file, title) {
     try { md = fs.readFileSync(path.join(__dirname, "docs", file), "utf8"); } catch { return res.status(404).send("not found"); }
     res.type("html").send(`<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>${title}</title><style>body{font-family:system-ui,-apple-system,sans-serif;max-width:720px;margin:40px auto;padding:0 20px;line-height:1.55;color:#1e293b}
-h1{font-size:26px}h2{font-size:18px;margin-top:28px}a{color:#0369a1}nav{font-size:14px;margin-bottom:24px}nav a{margin-right:14px}</style></head>
-<body><nav><a href="/">App</a><a href="/bibliography">Bibliography</a><a href="/privacy">Privacy Policy</a><a href="/terms">Terms of Service</a><a href="https://github.com/andyhickl/pdayminder">Source</a></nav>${mdToHtml(md)}</body></html>`);
+h1{font-size:26px}h2{font-size:18px;margin-top:28px}a{color:#0369a1}nav{font-size:14px;margin-bottom:24px}nav a{margin-right:14px}
+blockquote{border-left:3px solid #cbd5e1;margin:12px 0;padding:6px 14px;background:#f8fafc;font-size:14px}img{max-width:100%}
+.shots{display:flex;gap:12px;overflow-x:auto;padding:8px 0 16px}.shots figure{margin:0;flex:0 0 180px}.shots img{width:180px;border-radius:14px;border:1px solid #cbd5e1}.shots figcaption{font-size:12px;color:#64748b;text-align:center;margin-top:4px}</style></head>
+<body><nav><a href="/">App</a><a href="/research">Why</a><a href="/bibliography">Bibliography</a><a href="/privacy">Privacy Policy</a><a href="/terms">Terms of Service</a><a href="https://github.com/andyhickl/pdayminder">Source</a></nav>${mdToHtml(md)}</body></html>`);
   };
 }
 app.get("/privacy", legalPage("privacy.md", "PDayMinder Privacy Policy"));
 app.get("/bibliography", legalPage("bibliography.md", "PDayMinder: Annotated Bibliography"));
 app.get("/terms", legalPage("terms.md", "PDayMinder Terms of Service"));
+app.get("/research", legalPage("research.md", "PDayMinder: why I'm tracking my Parkinson's"));
+app.get("/apple-movement-disorder", legalPage("apple-movement-disorder.md", "PDayMinder: Apple Movement Disorder API request"));
 
 // ---------- Oura OAuth2 ----------
 const OURA = {
