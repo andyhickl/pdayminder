@@ -433,7 +433,7 @@ async function logIngest(userId, route, status, rows, body) {
     const bytes = Buffer.byteLength(JSON.stringify(body || {}));
     await pool.query(
       "insert into ingest_log (user_id, route, status, rows, bytes, summary) values ($1,$2,$3,$4,$5,$6)",
-      [userId, route, status, rows, bytes, describe(body)]
+      [userId, route, status, rows, bytes, body && Array.isArray(body.metrics) && typeof body.metrics[0] === "string" ? body : describe(body)]
     );
   } catch (e) {
     console.error("ingest log failed", e.message);
@@ -441,7 +441,7 @@ async function logIngest(userId, route, status, rows, body) {
 }
 
 // Nutrition and other intake metrics arrive from HAE as hourly sums; their daily value is the sum, not the mean.
-const SUMMED_RE = /^(dietary_|protein|carbohydrates|total_fat|saturated_fat|monounsaturated_fat|polyunsaturated_fat|fiber|sugar|caffeine|water|sodium|potassium|calcium|iron|magnesium|zinc|phosphorus|selenium|copper|manganese|chromium|molybdenum|iodine|chloride|vitamin_|thiamin|riboflavin|niacin|folate|biotin|pantothenic)/;
+const SUMMED_RE = /^(dietary_|protein|carbohydrates|total_fat|saturated_fat|monounsaturated_fat|polyunsaturated_fat|fiber|sugar|caffeine|water|cholesterol|sodium|potassium|calcium|iron|magnesium|zinc|phosphorus|selenium|copper|manganese|chromium|molybdenum|iodine|chloride|vitamin_|thiamin|riboflavin|niacin|folate|biotin|pantothenic)/;
 function isSummed(metric) { return SUMMED_RE.test(metric); }
 
 // Daily series for one metric key: [[day, value], ...] over the last `days` days (local dates).
@@ -563,7 +563,8 @@ app.post("/api/ingest/hae", requireAuth, async (req, res) => {
   } finally {
     client.release();
   }
-  await logIngest(req.user.id, "hae", 200, rows, body);
+  // Log what arrived by name so empty automations are visible in Settings > Connections.
+  await logIngest(req.user.id, "hae", 200, rows, { metrics: metrics.map((m) => `${m.name || "?"}:${(m.data || []).length}`), workouts: workouts.length, skipped });
   res.json({ ok: true, rows, skipped, metrics: metrics.length, workouts: workouts.length });
 });
 
