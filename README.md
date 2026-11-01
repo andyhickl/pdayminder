@@ -51,6 +51,17 @@ Connect from Settings > Integrations in the app; tokens live in `oauth_tokens` a
 trigger a manual run once to backfill). A legacy `OURA_TOKEN` env var still works as a fallback. Writes `source='oura'` rows: sleep per night (keyed on the day it ended),
 readiness, activity, stress, SpO2. Naps/rest sessions are skipped. Each run logs to `ingest_log` as `oura-sync`.
 
+## Nutrition (hae/dietary_*, hae/protein, ...)
+Food logged in Cronometer reaches Apple Health (13 nutrient types) and HAE relays it hourly like any other metric.
+Intake metrics (regex `SUMMED_RE` in server.js: dietary_*, protein, carbohydrates, total_fat, fiber, caffeine,
+water, minerals, vitamins) are summed per day instead of averaged, everywhere a daily value is computed
+(`dailySeries()` backs `/api/daily`, `/api/daily-multi` and `/api/stats`; `/api/day` sums them into `daily`).
+Derived daily metrics, computed on read and listed by `/api/metrics` once the inputs exist:
+`derived/protein_near_dose` (grams of protein in hourly rows whose hour starts within ±90 min of a dopaminergic
+dose; protein competes with levodopa for transport), `derived/first_meal_hour`, `derived/last_meal_hour` (from
+non-zero hourly `dietary_energy`). Stats has a Nutrition group; Day vitals shows protein, fiber and caffeine.
+The full Cronometer profile (80+ nutrients, supplements, creatine) needs the Cronometer cron (backlog).
+
 ## Cumulative HAE metrics
 Steps, distance, energy, stand time etc. are keyed to local midnight and the largest value wins, because overlapping
 HAE automation windows send partial sums for the same day. Sleep is one row per night keyed on the end date; windows

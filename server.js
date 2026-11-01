@@ -440,6 +440,47 @@ async function logIngest(userId, route, status, rows, body) {
   }
 }
 
+// Nutrition and other intake metrics arrive from HAE as hourly sums; their daily value is the sum, not the mean.
+const SUMMED_RE = /^(dietary_|protein|carbohydrates|total_fat|saturated_fat|monounsaturated_fat|polyunsaturated_fat|fiber|sugar|caffeine|water|sodium|potassium|calcium|iron|magnesium|zinc|phosphorus|selenium|copper|manganese|chromium|molybdenum|iodine|chloride|vitamin_|thiamin|riboflavin|niacin|folate|biotin|pantothenic)/;
+function isSummed(metric) { return SUMMED_RE.test(metric); }
+
+// Daily series for one metric key: [[day, value], ...] over the last `days` days (local dates).
+// Handles summed vs averaged metrics and the derived metrics that need doses.
+async function dailySeries(uid, source, metric, days) {
+  if (source === "derived") {
+    if (metric === "protein_near_dose") {
+      // Protein logged within 90 minutes either side of a dopaminergic dose (hourly HAE rows whose hour start falls in the window).
+      const { rows } = await pool.query(
+        `select to_char((o.ts at time zone $2)::date,'YYYY-MM-DD') as day, sum(o.value) as v
+         from observations o
+         where o.user_id = $1 and o.source = 'hae' and o.metric = 'protein' and o.value is not null
+           and (o.ts at time zone $2)::date >= (now() at time zone $2)::date - ($3::int - 1)
+           and exists (select 1 from med_doses d where d.user_id = o.user_id and d.drug = any($4)
+                       and abs(extract(epoch from ((o.ts at time zone $2) - (d.day + d.taken_at)))) <= 5400)
+         group by 1 order by 1`, [uid, TZ, days, await dopaDrugs(uid)]);
+      return rows.map((r) => [r.day, Number(r.v)]);
+    }
+    if (metric === "first_meal_hour" || metric === "last_meal_hour") {
+      const fn = metric === "first_meal_hour" ? "min" : "max";
+      const { rows } = await pool.query(
+        `select to_char((ts at time zone $2)::date,'YYYY-MM-DD') as day,
+                ${fn}(extract(hour from (ts at time zone $2)) + extract(minute from (ts at time zone $2)) / 60) as v
+         from observations where user_id = $1 and source = 'hae' and metric = 'dietary_energy' and value > 0
+           and (ts at time zone $2)::date >= (now() at time zone $2)::date - ($3::int - 1)
+         group by 1 order by 1`, [uid, TZ, days]);
+      return rows.map((r) => [r.day, Number(r.v)]);
+    }
+    return [];
+  }
+  const agg = isSummed(metric) ? "sum(value)" : "avg(value)";
+  const { rows } = await pool.query(
+    `select to_char((ts at time zone $2)::date,'YYYY-MM-DD') as day, ${agg} as v
+     from observations where user_id = $1 and source = $4 and metric = $5 and value is not null
+       and (ts at time zone $2)::date >= (now() at time zone $2)::date - ($3::int - 1)
+     group by 1 order by 1`, [uid, TZ, days, source, metric]);
+  return rows.map((r) => [r.day, Number(r.v)]);
+}
+
 // Cumulative-per-day metrics. Overlapping HAE automation windows send partial sums for the
 // same local day, so these are keyed to local midnight and the largest value wins.
 const CUMULATIVE = new Set([
@@ -552,6 +593,10 @@ app.get("/api/metrics", requireAuth, async (req, res) => {
      from observations where user_id = $1 group by source, metric order by source, metric`,
     [req.user.id]
   );
+  // Derived nutrition metrics show up once protein / energy rows exist (computed on read, see dailySeries).
+  const have = new Set(rows.map((r) => r.source + "/" + r.metric));
+  if (have.has("hae/protein")) rows.push({ source: "derived", metric: "protein_near_dose", rows: rows.find((r) => r.source === "hae" && r.metric === "protein").rows, last_ts: null });
+  if (have.has("hae/dietary_energy")) ["first_meal_hour", "last_meal_hour"].forEach((m) => rows.push({ source: "derived", metric: m, rows: 0, last_ts: null }));
   res.json(rows);
 });
 
@@ -569,19 +614,15 @@ app.get("/api/daily", requireAuth, async (req, res) => {
        from qol_ratings where user_id = $1 and type = 'rating' group by day
      ),
      meds as (
-       select day, count(*)::int as doses from med_doses where user_id = $1 and drug = any($6) group by day
-     ),
-     obs as (
-       select (ts at time zone $2)::date as day, avg(value) as v, count(*)::int as n
-       from observations where user_id = $1 and $4::text is not null and source = $4 and metric = $5
-       group by 1
+       select day, count(*)::int as doses from med_doses where user_id = $1 and drug = any($4) group by day
      )
-     select to_char(s.day,'YYYY-MM-DD') as day, q.qol, coalesce(q.rated,0) as rated,
-            coalesce(m.doses,0) as doses, o.v as metric_value, coalesce(o.n,0) as metric_n
-     from span s left join qol q on q.day = s.day left join meds m on m.day = s.day left join obs o on o.day = s.day
+     select to_char(s.day,'YYYY-MM-DD') as day, q.qol, coalesce(q.rated,0) as rated, coalesce(m.doses,0) as doses
+     from span s left join qol q on q.day = s.day left join meds m on m.day = s.day
      order by s.day`,
-    [req.user.id, TZ, days, source, metric, await dopaDrugs(req.user.id)]
+    [req.user.id, TZ, days, await dopaDrugs(req.user.id)]
   );
+  const series = source && metric ? Object.fromEntries(await dailySeries(req.user.id, source, metric, days)) : {};
+  rows.forEach((r) => { r.metric_value = series[r.day] ?? null; r.metric_n = series[r.day] != null ? 1 : 0; });
   res.json(rows);
 });
 
@@ -617,7 +658,8 @@ app.get("/api/day", requireAuth, async (req, res) => {
   obs.rows.forEach((r) => (counts[r.metric] = (counts[r.metric] || 0) + 1));
   obs.rows.forEach((r) => {
     if (r.metric === "workout") return workouts.push({ ts: r.ts, minutes: r.value, ...r.raw });
-    if (counts[r.metric] > 1) (hourly[r.metric] = hourly[r.metric] || []).push({ ts: r.ts, value: r.value });
+    if (isSummed(r.metric)) { daily[r.metric] = (daily[r.metric] || 0) + (r.value || 0); if (counts[r.metric] > 1) (hourly[r.metric] = hourly[r.metric] || []).push({ ts: r.ts, value: r.value }); }
+    else if (counts[r.metric] > 1) (hourly[r.metric] = hourly[r.metric] || []).push({ ts: r.ts, value: r.value });
     else daily[r.metric] = r.value;
   });
   res.json({ day, hourly, daily, oura: Object.fromEntries(oura.rows.map((r) => [r.metric, r.value])), motor: motor.rows, qol: qol.rows,
@@ -629,15 +671,12 @@ app.get("/api/daily-multi", requireAuth, async (req, res) => {
   const days = Math.min(365, Number(req.query.days) || 30);
   const wanted = String(req.query.metrics || "").split(",").map((x) => x.trim()).filter(Boolean).slice(0, 80);
   if (!wanted.length) return res.json([]);
-  const pairs = wanted.map((w) => w.split("/"));
-  const { rows } = await pool.query(
-    `select to_char((ts at time zone $2)::date,'YYYY-MM-DD') as day, source || '/' || metric as key, avg(value) as v
-     from observations
-     where user_id = $1 and (ts at time zone $2)::date >= (now() at time zone $2)::date - ($3::int - 1)
-       and (source, metric) in (${pairs.map((_, i) => `($${4 + i * 2}, $${5 + i * 2})`).join(",")})
-     group by 1, 2 order by 1`,
-    [req.user.id, TZ, days, ...pairs.flat()]
-  );
+  const rows = [];
+  for (const w of wanted) {
+    const [source, metric] = w.split("/");
+    if (!source || !metric) continue;
+    (await dailySeries(req.user.id, source, metric, days)).forEach(([day, v]) => rows.push({ day, key: w, v }));
+  }
   const byDay = {};
   const start = new Date(); start.setDate(start.getDate() - (days - 1));
   for (let i = 0; i < days; i++) {
@@ -817,12 +856,7 @@ app.get("/api/stats", requireAuth, async (req, res) => {
     else {
       const [source, metric] = k.split("/");
       if (!source || !metric) continue;
-      const r = await pool.query(
-        `select to_char((ts at time zone $2)::date,'YYYY-MM-DD') as day, avg(value) as v
-         from observations where user_id = $1 and source = $3 and metric = $4 and value is not null
-           and (ts at time zone $2)::date >= (current_date at time zone $2)::date - 89
-         group by 1 order by 1`, [uid, TZ, source, metric]);
-      out[k] = summarize(r.rows.map((x) => [x.day, Number(x.v)]));
+      out[k] = summarize(await dailySeries(uid, source, metric, 90));
     }
   }
   res.json(out);
