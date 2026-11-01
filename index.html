@@ -3903,6 +3903,14 @@
       }, [days]);
 
 
+      // The server is the source of truth. Nothing is saved until it has been loaded, and then only the days
+      // the user actually changed in this session are sent, so a device with a stale local copy can't overwrite
+      // ratings and doses entered elsewhere.
+      const loadedRef = useRef(false);
+      const dirtyDaysRef = useRef(new Set());
+      const settingsDirtyRef = useRef(false);
+      const prevDaysRef = useRef(days);
+      const prevSettingsRef = useRef(settings);
       useEffect(() => {
         async function loadFromServer() {
           try {
@@ -3916,6 +3924,8 @@
               Object.values(payload.days).forEach((d) => { if (d) d.meds = normalizeMeds(d.meds); });
               setDays((prev) => ({ ...prev, ...payload.days }));
             }
+            // Mark the post-load state as clean on the next render.
+            setTimeout(() => { loadedRef.current = true; dirtyDaysRef.current = new Set(); settingsDirtyRef.current = false; }, 0);
           } catch {
             // ignore if no backend
           }
@@ -3924,19 +3934,25 @@
       }, []);
 
       useEffect(() => {
-        async function saveToServer() {
+        const prev = prevDaysRef.current; prevDaysRef.current = days;
+        if (!loadedRef.current) return;
+        Object.keys(days).forEach((k) => { if (days[k] !== prev[k]) dirtyDaysRef.current.add(k); });
+        if (!dirtyDaysRef.current.size) return;
+        const send = {}; dirtyDaysRef.current.forEach((k) => { if (days[k]) send[k] = days[k]; });
+        const keys = new Set(dirtyDaysRef.current);
+        (async () => {
           try {
-            await apiFetch("/api/pdayminder/data", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ settings, days }),
-            });
-          } catch {
-            // ignore if no backend
-          }
-        }
-        saveToServer();
-      }, [settings, days]);
+            const r = await apiFetch("/api/pdayminder/data", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ days: send }) });
+            if (r.ok) keys.forEach((k) => { if (days[k] === prevDaysRef.current[k]) dirtyDaysRef.current.delete(k); });
+          } catch {}
+        })();
+      }, [days]);
+
+      useEffect(() => {
+        const prev = prevSettingsRef.current; prevSettingsRef.current = settings;
+        if (!loadedRef.current || settings === prev) return;
+        (async () => { try { await apiFetch("/api/pdayminder/data", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ settings }) }); } catch {} })();
+      }, [settings]);
 
       const day = days[dateKey] || createEmptyDay(dateKey, settings);
       const daysWithData = useMemo(() => Object.keys(days), [days]);

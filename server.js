@@ -181,13 +181,11 @@ async function saveClientPayload(userId, body) {
     }
     for (const [day, d] of Object.entries(body.days || {})) {
       if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) continue;
-      // Browsing the calendar creates placeholder days (sleep/empty segments, no meds). Don't store those,
-      // but do allow clearing a day that previously had data.
+      // Browsing the calendar creates placeholder days (sleep/empty segments, no meds). A day with no ratings
+      // and no doses is never written and never clears anything: a stale client must not be able to wipe a day.
+      // Clearing individual segments still works because the other segments on that day remain ratings.
       const hasContent = (d.segments || []).some((x) => x && x.type === "rating") || (Array.isArray(d.meds) && d.meds.length > 0);
-      if (!hasContent) {
-        const ex = await client.query("select 1 from qol_ratings where user_id = $1 and day = $2 and type = 'rating' limit 1", [userId, day]);
-        if (!ex.rows.length) continue;
-      }
+      if (!hasContent) continue;
       for (let seg = 0; seg < Math.min(12, (d.segments || []).length); seg++) {
         const s = d.segments[seg];
         if (!s || !Number.isInteger(s.rating)) continue;
