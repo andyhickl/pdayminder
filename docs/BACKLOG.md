@@ -10,7 +10,7 @@ Ordered roughly by value. Dates are when the item was added.
 - ~~Gait test~~ Done 2026-10-31.
 - ~~DDK / pa-ta-ka test~~ Done 2026-10-31.
 - ~~Reading-passage sdF0~~ Done 2026-10-31 (six passages, per-passage baselines).
-- **Balance / sway test**. Phone against chest, 30 s eyes open then closed; sway area. Only domain nothing else covers.
+- ~~Balance / sway test~~ Done 2026-10-31 (eyes open/closed variants).
 - **SASPAP baseline card** (2026-10-31, Andy). As written; confirm which instrument this refers to before building.
 - **Pre/post-dose delta metrics**. Per day: (pre-dose score − post-dose score) for tremor, tapping, spiral, as its own
   daily metric for the Trends correlation. Needs tests tagged pre/post (note field now; a toggle later).
@@ -22,7 +22,6 @@ Ordered roughly by value. Dates are when the item was added.
 - **Learned personal weights** (mPower-style weak supervision). Once there are ~30 pre-dose/post-dose test pairs, fit
   weights so the composite ranks pre-dose worse than post-dose as often as possible (Zhan et al. 2018). Replaces the
   literature weights with ones tuned to Andy's own dose response.
-- **Balance / sway test** carries 23 % of the mPower score and we don't have it yet.
 
 ## Data
 - Whoop, Strava, TrainingPeaks, Concept2 syncs (same OAuth/token pattern as Oura).

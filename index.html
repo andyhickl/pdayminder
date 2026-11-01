@@ -1440,11 +1440,13 @@
           {hrv.length > 0 && <path d={line(hrv, yh)} fill="none" stroke="#a3e635" strokeWidth="1.5" strokeDasharray="4 3" />}
           {hrv.map((p, i) => <circle key={i} cx={x(hourOf(p.ts) + 0.5)} cy={yh(p.value)} r="3" fill="#a3e635" />)}
           {(data.motor || []).map((m, i) => {
-            const isTap = m.tap_score != null; const score = isTap ? m.tap_score : m.score;
+            const kind = m.tap_score != null ? "tap" : m.gait_score != null ? "gait" : m.balance_score != null ? "balance" : "tremor";
+            const score = kind === "tap" ? m.tap_score : kind === "gait" ? m.gait_score : kind === "balance" ? m.balance_score : m.score;
+            const row = { tremor: 8, tap: 20, gait: 32, balance: 44 }[kind]; const color = { tremor: "#f472b6", tap: "#38bdf8", gait: "#34d399", balance: "#f59e0b" }[kind];
             return (
               <g key={"m" + i}>
-                <circle cx={x(hourOf(m.ts))} cy={H - padB - (isTap ? 20 : 8)} r="5" fill={isTap ? "#38bdf8" : "#f472b6"} stroke="#0f172a" strokeWidth="1" />
-                <text x={x(hourOf(m.ts))} y={H - padB - (isTap ? 17 : 5)} fontSize="8" fill="#0f172a" textAnchor="middle" fontWeight="700">{score == null ? "·" : score}</text>
+                <circle cx={x(hourOf(m.ts))} cy={H - padB - row} r="5" fill={color} stroke="#0f172a" strokeWidth="1"><title>{kind} {score == null ? "" : score}</title></circle>
+                <text x={x(hourOf(m.ts))} y={H - padB - row + 3} fontSize="8" fill="#0f172a" textAnchor="middle" fontWeight="700">{score == null ? "·" : score}</text>
               </g>
             );
           })}
@@ -1494,7 +1496,7 @@
           <div className="card-header">
             <div>
               <div className="card-title">Day vitals</div>
-              <div className="card-subtitle">Hourly heart rate (band = min–max) and HRV (dashed), over your QoL ratings. Levodopa doses as white dashed lines, other medications as faint grey; tremor tests (pink) and tapping tests (blue) as dots with their 1–5 score.</div>
+              <div className="card-subtitle">Hourly heart rate (band = min–max) and HRV (dashed), over your QoL ratings. Levodopa doses as white dashed lines, other medications as faint grey; tests as dots with their 1–5 score: tremor pink, tapping blue, gait green, balance amber.</div>
             </div>
           </div>
           {err && <div className="card-subtitle">Couldn't load ({err}).</div>}
@@ -1543,6 +1545,8 @@
       ["motor/gait_score", "Gait score (1–5)", "#34d399", 1],
       ["motor/gait_cadence", "Cadence (steps/min)", "#6ee7b7", 0],
       ["motor/gait_step_cv", "Step variability (%)", "#5eead4", 1],
+      ["motor/balance_score", "Balance score (1–5)", "#f59e0b", 1],
+      ["motor/balance_sway_rms", "Sway RMS (m/s²)", "#fbbf24", 3],
       ["motor/voice_score", "Voice score (1–5)", "#c084fc", 1],
       ["motor/ddk_rate", "Pa-ta-ka (syll/s)", "#e879f9", 2],
       ["motor/ddk_score", "Pa-ta-ka score (1–5)", "#d946ef", 1],
@@ -2042,6 +2046,8 @@
       ddk_rate: { mean: 7.16, sd: 0.73 }, read_f0_sd_st: { mean: 2.48, sd: 0.56 },
       voice_jitter_pct: { mean: 0.37, sd: 0.20 }, voice_ppe: { mean: 0.12, sd: 0.05 },
       gait_cadence: { mean: 112, sd: 9 }, gait_step_cv: { mean: 2.5, sd: 1.5 },
+      // Quiet stance, eyes open, trunk accelerometer (Mancini et al. 2012, healthy controls): RMS sway ~0.08±0.03 m/s², jerk ~1.0±0.5 m/s³ — approximate for a chest-held phone.
+      balance_sway_rms: { mean: 0.08, sd: 0.03 }, balance_jerk: { mean: 1.0, sd: 0.5 },
     };
     function NormLine({ norm, what }) {
       if (!norm) return null;
@@ -2883,6 +2889,151 @@
       );
     }
 
+    // ---------- Balance test: 30 s quiet stance, phone held flat against the chest ----------
+    const BAL_SECONDS = 30, BAL_LEAD = 5;
+    function analyzeBalance(samples, useGravityFree) {
+      // samples [{t,x,y,z}] from devicemotion. Prefer gravity-free acceleration; otherwise remove a 2 s moving mean.
+      if (samples.length < 300) return null;
+      const t0 = samples[0].t, dur = (samples[samples.length - 1].t - t0) / 1000, fs = 50, n = Math.floor(dur * fs);
+      const axes = ["x", "y", "z"].map((ax) => { const u = new Float64Array(n); let j = 0; for (let i = 0; i < n; i++) { const tt = t0 + (i / fs) * 1000; while (j < samples.length - 2 && samples[j + 1].t < tt) j++; const a = samples[j], b = samples[j + 1]; const w = b.t === a.t ? 0 : (tt - a.t) / (b.t - a.t); u[i] = a[ax] + (b[ax] - a[ax]) * w; } return u; });
+      const hp = axes.map((u) => { const d = new Float64Array(n); for (let i = 0; i < n; i++) { let a = 0, c = 0; for (let k = -50; k <= 50; k++) { const v = u[i + k]; if (v != null) { a += v; c++; } } d[i] = u[i] - a / c; } return d; });
+      // light 100 ms smoothing to suppress sensor noise, keep sway (< 5 Hz)
+      const sm = hp.map((d) => { const o = new Float64Array(n); for (let i = 0; i < n; i++) { let a = 0, c = 0; for (let k = -2; k <= 2; k++) { const v = d[i + k]; if (v != null) { a += v; c++; } } o[i] = a / c; } return o; });
+      const [ml, vert, ap] = sm; // phone held upright against the chest: x = left/right, y = vertical, z = front/back
+      const rms = (u) => Math.sqrt(u.reduce((a, b) => a + b * b, 0) / n);
+      const rmsML = rms(ml), rmsAP = rms(ap), rmsTotal = Math.sqrt(rmsML * rmsML + rmsAP * rmsAP);
+      let path = 0, jerk = 0; for (let i = 1; i < n; i++) { const dx = ml[i] - ml[i - 1], dz = ap[i] - ap[i - 1]; path += Math.sqrt(dx * dx + dz * dz); jerk += (dx * dx + dz * dz) * fs * fs; }
+      const jerkRms = Math.sqrt(jerk / (n - 1));
+      const area = Math.PI * 2 * 2.4478 * rmsML * rmsAP; // 95 % ellipse proxy from the two SDs
+      // dominant sway frequency (0.1–5 Hz): summed power spectra of the two horizontal axes (not the rectified magnitude)
+      let peakF = 0, pk = 0, total = 0, low = 0;
+      for (let f = 0.1; f <= 5.001; f += 0.1) { let pw = 0; const k = (2 * Math.PI * f) / fs; for (const u of [ml, ap]) { let re = 0, im = 0; for (let i = 0; i < n; i++) { re += u[i] * Math.cos(k * i); im -= u[i] * Math.sin(k * i); } pw += re * re + im * im; } total += pw; if (f <= 1) low += pw; if (pw > pk) { pk = pw; peakF = f; } }
+      return { seconds: dur, rmsML, rmsAP, rmsTotal, path: path / dur, jerkRms, area, peakHz: Number(peakF.toFixed(1)), lowShare: total ? low / total : 0, trace: Array.from({ length: Math.min(n, 1500) }, (_, i) => [ml[i], ap[i]]) };
+    }
+
+    function BalanceTestCard() {
+      const [phase, setPhase] = useState("idle");
+      const [left, setLeft] = useState(0);
+      const [eyes, setEyes] = useState(() => { try { return localStorage.getItem("pdm-bal-eyes") || "open"; } catch { return "open"; } });
+      useEffect(() => { try { localStorage.setItem("pdm-bal-eyes", eyes); } catch {} }, [eyes]);
+      const [result, setResult] = useState(null);
+      const [base, setBase] = useState(null);
+      const [note, setNote] = useState("");
+      const [msg, setMsg] = useState("");
+      const samples = useRef([]); const wake = useRef(null); const cancelRef = useRef(null); const gravFree = useRef(false);
+      const cancel = () => { if (cancelRef.current) cancelRef.current(); cancelRef.current = null; setPhase("idle"); setMsg(""); };
+      const [historyAll] = useJson("/api/observations?source=motor&metric=balance_sway_rms&limit=100", [phase]);
+      const history = historyAll ? historyAll.filter((h) => (h.raw && h.raw.eyes) === eyes) : null;
+      const isHandheld = useMemo(() => { try { return window.matchMedia("(pointer: coarse)").matches || /iPhone|iPad|Android/i.test(navigator.userAgent); } catch { return false; } }, []);
+      const BAL_KEYS = [["balance_sway_rms", true], ["balance_path", true], ["balance_jerk", true], ["balance_area", true]];
+      const valueFor = (k, r) => k === "balance_sway_rms" ? r.rmsTotal : k === "balance_path" ? r.path : k === "balance_jerk" ? r.jerkRms : r.area;
+      useEffect(() => {
+        if (phase !== "done" || !result) return;
+        (async () => {
+          const out = {};
+          await Promise.all(BAL_KEYS.map(async ([k]) => { const r = await apiFetch(`/api/observations?source=motor&metric=${k}&limit=100`); out[k] = r.ok ? (await r.json()).filter((o) => (o.raw && o.raw.eyes) === eyes).map((o) => o.value) : []; }));
+          setBase(baselineScore(BAL_KEYS.map(([k, w]) => ({ key: k, value: valueFor(k, result), higherIsWorse: w })), out));
+        })();
+      }, [phase]);
+      const start = async () => {
+        setMsg("");
+        try { if (typeof DeviceMotionEvent !== "undefined" && typeof DeviceMotionEvent.requestPermission === "function") { const r = await DeviceMotionEvent.requestPermission(); if (r !== "granted") { setMsg("Motion access was denied."); return; } } } catch (e) { setMsg("Couldn't request motion access: " + e.message); return; }
+        if (typeof DeviceMotionEvent === "undefined") { setMsg("No motion sensors in this browser."); return; }
+        samples.current = []; gravFree.current = false;
+        try { if (navigator.wakeLock) wake.current = await navigator.wakeLock.request("screen"); } catch {}
+        setPhase("lead"); setLeft(BAL_LEAD);
+        const t0 = performance.now();
+        const handler = (e) => { let a = e.acceleration; if (a && a.x != null) gravFree.current = true; else a = e.accelerationIncludingGravity; if (!a) return; samples.current.push({ t: performance.now(), x: a.x || 0, y: a.y || 0, z: a.z || 0 }); };
+        const tick = setInterval(() => { const el = (performance.now() - t0) / 1000; if (el < BAL_LEAD) setLeft(Math.ceil(BAL_LEAD - el)); else { setPhase("recording"); setLeft(Math.max(0, Math.ceil(BAL_LEAD + BAL_SECONDS - el))); } }, 250);
+        const armT = setTimeout(() => window.addEventListener("devicemotion", handler), BAL_LEAD * 1000);
+        const teardown = () => { window.removeEventListener("devicemotion", handler); clearInterval(tick); clearTimeout(armT); try { if (wake.current) { wake.current.release(); wake.current = null; } } catch {} };
+        const done = setTimeout(() => {
+          cancelRef.current = null; teardown();
+          const res = analyzeBalance(samples.current, gravFree.current);
+          if (!res) { setPhase("idle"); setMsg(`Not enough motion data (${samples.current.length} samples). Keep the screen on and hold still for the full 30 s.`); return; }
+          setBase(null); setResult(res); setPhase("done");
+        }, (BAL_LEAD + BAL_SECONDS) * 1000 + 100);
+        cancelRef.current = () => { clearTimeout(done); teardown(); };
+      };
+      const save = async () => {
+        const ts = new Date().toISOString();
+        const nrm = eyes === "open" ? normScore([{ value: result.rmsTotal, ...NORMS.balance_sway_rms, higherIsWorse: true }, { value: result.jerkRms, ...NORMS.balance_jerk, higherIsWorse: true }]) : null;
+        const raw = { note: note || null, eyes, seconds: Number(result.seconds.toFixed(1)), gravityFree: gravFree.current, peakHz: result.peakHz, ...doseContextNow() };
+        const items = [["balance_sway_rms", Number(result.rmsTotal.toFixed(4))], ["balance_sway_ml", Number(result.rmsML.toFixed(4))], ["balance_sway_ap", Number(result.rmsAP.toFixed(4))], ["balance_path", Number(result.path.toFixed(4))],
+          ["balance_jerk", Number(result.jerkRms.toFixed(3))], ["balance_area", Number(result.area.toFixed(5))], ["balance_low_share", Number(result.lowShare.toFixed(3))],
+          ["balance_score", base && base.score != null ? 5 - base.score : null], ["balance_norm", nrm ? nrm.score : null]].filter(([, v]) => v != null)
+          .map(([metric, value]) => ({ ts, source: "motor", metric, value, raw }));
+        const r = await apiFetch("/api/observations", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(items) });
+        if (r.ok) { setPhase("idle"); setResult(null); setNote(""); setMsg("Saved."); } else setMsg("Save failed.");
+      };
+      const hist = history ? [...history].reverse() : [];
+      return (
+        <div className="card">
+          <div className="card-header">
+            <div>
+              <div className="card-title">Balance test</div>
+              <div className="card-subtitle">Stand with feet together, hold the phone flat against your chest with both hands, and stay as still as you can for 30 s. Eyes open is the scored standard; eyes closed is a harder variant tracked separately. Stand near something to hold if you need it.</div>
+            </div>
+          </div>
+          {!isHandheld && phase === "idle" && <div className="card-subtitle" style={{ marginTop: 6 }}>Run this on your phone.</div>}
+          {isHandheld && phase === "idle" && (
+            <>
+              <div className="controls-row" style={{ gap: 8, marginTop: 6 }}>
+                {[["open", "eyes open"], ["closed", "eyes closed"]].map(([k, l]) => <button key={k} type="button" className={"pill-btn" + (eyes === k ? " primary" : "")} onClick={() => setEyes(k)}>{l}</button>)}
+              </div>
+              <div className="controls-row" style={{ marginTop: 6 }}><button type="button" className="pill-btn primary" onClick={start}>Start (5 s to get set, then 30 s still)</button></div>
+            </>
+          )}
+          {phase === "lead" && <div style={{ textAlign: "center", padding: "18px 0" }}><div style={{ fontSize: 48, fontWeight: 700 }}>{left}</div><div className="card-subtitle">Feet together, phone against your chest{eyes === "closed" ? ", close your eyes when the count ends" : ""}…</div><button type="button" className="pill-btn" style={{ marginTop: 8 }} onClick={cancel}>Cancel</button></div>}
+          {phase === "recording" && <div style={{ textAlign: "center", padding: "18px 0" }}><div style={{ fontSize: 48, fontWeight: 700 }}>{left}</div><div className="card-subtitle">Hold still… {eyes === "closed" ? "eyes closed" : "eyes open"}</div><button type="button" className="pill-btn" style={{ marginTop: 8 }} onClick={cancel}>Cancel</button></div>}
+          {phase === "done" && result && (
+            <>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8, marginTop: 6 }}>
+                {[["Sway RMS", result.rmsTotal.toFixed(3) + " m/s²"], ["Side-to-side", result.rmsML.toFixed(3)], ["Front-back", result.rmsAP.toFixed(3)],
+                  ["Jerk", result.jerkRms.toFixed(2) + " m/s³"], ["Sway path", result.path.toFixed(2) + " /s"], ["Dominant", result.peakHz + " Hz"]].map(([k, v]) => (
+                  <div key={k} style={{ background: "#0f172a", borderRadius: 8, padding: "8px 10px" }}>
+                    <div style={{ fontSize: 11, color: "#94a3b8" }}>{k}</div>
+                    <div style={{ fontSize: 16, fontWeight: 600 }}>{v}</div>
+                  </div>
+                ))}
+              </div>
+              <div style={{ background: "#0f172a", borderRadius: 8, padding: "8px 10px", marginTop: 8 }}>
+                <div style={{ fontSize: 11, color: "#94a3b8" }}>Score vs your own baseline (1–5, 5 = at or better than baseline)</div>
+                {base == null ? <div style={{ fontSize: 13 }}>…</div> : base.score == null
+                  ? <div style={{ fontSize: 13 }}>Building baseline: {base.n} of 5 stands ({eyes}). No score until then.</div>
+                  : <div style={{ fontSize: 16, fontWeight: 600, color: ratingColor(5 - base.score) }}>{5 - base.score} <span style={{ fontSize: 11, fontWeight: 400, color: "#94a3b8" }}>· {base.score} of sway, path, jerk, area worse than your mean by over 1 SD ({base.n} prior stands)</span></div>}
+              </div>
+              {eyes === "open" && <NormLine norm={normScore([{ value: result.rmsTotal, ...NORMS.balance_sway_rms, higherIsWorse: true }, { value: result.jerkRms, ...NORMS.balance_jerk, higherIsWorse: true }])} what="sway RMS and jerk vs trunk-accelerometer norms for quiet stance, eyes open (Mancini 2012; approximate for a chest-held phone)" />}
+              <svg viewBox="0 0 200 120" style={{ width: "100%", maxWidth: 260, height: 120, display: "block", margin: "8px auto 0" }}>
+                {(() => { const sc = 40 / Math.max(0.05, Math.max(...result.trace.map(([a, b]) => Math.max(Math.abs(a), Math.abs(b))))); 
+                  return <><text x="4" y="10" fontSize="8" fill="#64748b">sway path (side-to-side vs front-back)</text><line x1="100" x2="100" y1="20" y2="118" stroke="#1f2937" /><line x1="30" x2="170" y1="69" y2="69" stroke="#1f2937" />
+                    <path d={"M" + result.trace.map(([a, b]) => `${(100 + a * sc).toFixed(1)} ${(69 - b * sc).toFixed(1)}`).join(" L")} fill="none" stroke="#f59e0b" strokeWidth="0.8" opacity="0.8" /></>; })()}
+              </svg>
+              <div style={{ fontSize: 10, color: "#64748b", marginTop: 2 }}>Trunk acceleration during quiet stance; jerk and sway amplitude rise in PD and with postural instability (Mancini et al. 2012). Baselines are per eyes condition. Same stance, shoes and floor each time.</div>
+              <DoseStateLine />
+              <div className="controls-row" style={{ gap: 8, marginTop: 6 }}>
+                <input value={note} onChange={(e) => setNote(e.target.value)} placeholder="Note (e.g. pre-dose)"
+                  style={{ flex: 1, background: "#0f172a", color: "#e2e8f0", border: "1px solid #334155", borderRadius: 8, padding: "8px 10px", fontSize: 14 }} />
+                <button type="button" className="pill-btn primary" onClick={save}>Save</button>
+                <button type="button" className="pill-btn" onClick={() => { setPhase("idle"); setResult(null); }}>Discard</button>
+              </div>
+            </>
+          )}
+          {msg && <div className="card-subtitle" style={{ marginTop: 6, color: msg === "Saved." ? "#a3e635" : "#f87171" }}>{msg}</div>}
+          {hist.length > 1 && (
+            <div style={{ marginTop: 10 }}>
+              <div style={{ fontSize: 11, color: "#94a3b8" }}>Sway RMS (m/s²), last {hist.length} stands ({eyes}) · lower is better</div>
+              <svg viewBox="0 0 600 60" style={{ width: "100%", height: 60, display: "block" }}>
+                {(() => { const vals = hist.map((h) => h.value); const hi = Math.max(0.2, ...vals); const x = (i) => 10 + (580 * i) / Math.max(1, hist.length - 1); const y = (v) => 52 - (46 * v) / hi;
+                  return <><path d={"M" + hist.map((h, i) => `${x(i).toFixed(1)} ${y(h.value).toFixed(1)}`).join(" L")} fill="none" stroke="#f59e0b" strokeWidth="1.5" />
+                    {hist.map((h, i) => <circle key={i} cx={x(i)} cy={y(h.value)} r="2.5" fill="#f59e0b"><title>{new Date(h.ts).toLocaleString()} · {h.value.toFixed(3)}{h.raw && h.raw.note ? " · " + h.raw.note : ""}</title></circle>)}</>; })()}
+              </svg>
+            </div>
+          )}
+        </div>
+      );
+    }
+
     // ---------- Spiral test: trace a 3-turn Archimedean spiral with a finger ----------
     const SPIRAL_TURNS = 3;
     function analyzeSpiral(points, cx, cy, R) {
@@ -3395,7 +3546,7 @@
     // Metrics shown in the Trends overlay picker by default (settings.trendMetrics overrides). Under ten, chosen for
     // being the ones most likely to move with QoL over months: sleep, recovery, dose-sensitive tests, gait.
     const DEFAULT_TREND_METRICS = ["oura/sleep_score", "oura/avg_hrv", "oura/total_sleep_h", "oura/readiness_score", "hae/resting_heart_rate",
-      "hae/walking_double_support_percentage", "motor/tremor_score", "motor/tap_score", "motor/ddk_score", "motor/gait_score"];
+      "hae/walking_double_support_percentage", "motor/tremor_score", "motor/tap_score", "motor/ddk_score", "motor/gait_score", "motor/balance_score"];
     const METRIC_LABELS = {
       "oura/sleep_score": "Sleep score (Oura)", "oura/avg_hrv": "Night HRV (Oura)", "oura/total_sleep_h": "Sleep hours (Oura)", "oura/deep_h": "Deep sleep (Oura)",
       "oura/readiness_score": "Readiness (Oura)", "oura/lowest_hr": "Lowest night HR (Oura)", "oura/temperature_deviation": "Temp deviation (Oura)", "oura/steps": "Steps (Oura)",
@@ -3408,6 +3559,7 @@
       "motor/spiral_error_pct": "Spiral deviation %", "motor/spiral_tremor_share": "Spiral tremor share",
       "motor/gait_score": "Gait score", "motor/gait_cadence": "Cadence (steps/min)", "motor/gait_step_cv": "Step variability %", "motor/gait_asymmetry": "Gait asymmetry", "motor/gait_stride_regularity": "Stride regularity",
       "motor/ddk_norm": "Pa-ta-ka vs healthy", "motor/read_norm": "Reading vs healthy", "motor/voice_norm": "Vowel vs healthy", "motor/gait_norm": "Gait vs healthy",
+      "motor/balance_score": "Balance score", "motor/balance_norm": "Balance vs healthy", "motor/balance_sway_rms": "Sway RMS", "motor/balance_jerk": "Sway jerk", "motor/balance_path": "Sway path", "motor/balance_area": "Sway area",
     };
     const metricLabel = (k) => METRIC_LABELS[k] || k.replace("/", " · ");
 
@@ -3498,7 +3650,7 @@
               </React.Fragment>
             ))}
           </div>
-          <div style={{ fontSize: 10, color: "#64748b", marginTop: 8 }}>Weighted means, renormalised over the tests run that day. Motor: gait 45 %, tapping 35 %, tremor 20 %. Voice: pa-ta-ka 50 %, reading 30 %, sustained vowel 20 %. Overall: motor 75 %, voice 25 %. Weights follow the mPower digital PD score (gait and tapping carry most of the signal, voice least) and MDS-UPDRS item shares. Healthy references assume straight-line walking and lab-style recordings; low on the left with high on the right means "stable, but below the reference". Dashed line = 3.</div>
+          <div style={{ fontSize: 10, color: "#64748b", marginTop: 8 }}>Weighted means, renormalised over the tests run that day. Motor: gait 35 %, balance 25 %, tapping 25 %, tremor 15 %. Voice: pa-ta-ka 50 %, reading 30 %, sustained vowel 20 %. Overall: motor 75 %, voice 25 %. Weights follow the mPower digital PD score (gait and tapping carry most of the signal, voice least) and MDS-UPDRS item shares. Healthy references assume straight-line walking and lab-style recordings; low on the left with high on the right means "stable, but below the reference". Dashed line = 3.</div>
         </div>
       );
     }
@@ -3527,11 +3679,11 @@
     // [key, label, decimals, direction, kind]  direction: 1 = higher is better, -1 = lower is better, 0 = neutral (no colour)
     const STAT_GROUPS = [
       ["QoL & doses", [["qol", "Mean QoL (1–5)", 2, 1, "score"], ["doses", "Levodopa doses / day", 1, 0], ["rated", "Rated blocks / day", 1, 0]]],
-      ["Test scores vs healthy reference (1–5)", [["rollup:overall_norm", "Overall", 1, 1, "score"], ["rollup:motor_norm", "Motor", 1, 1, "score"], ["motor/tremor_score", "Tremor (UPDRS-based)", 1, 1, "score"], ["motor/tap_score", "Tapping", 1, 1, "score"], ["motor/gait_norm", "Gait (cadence, variability)", 1, 1, "score"],
+      ["Test scores vs healthy reference (1–5)", [["rollup:overall_norm", "Overall", 1, 1, "score"], ["rollup:motor_norm", "Motor", 1, 1, "score"], ["motor/tremor_score", "Tremor (UPDRS-based)", 1, 1, "score"], ["motor/tap_score", "Tapping", 1, 1, "score"], ["motor/gait_norm", "Gait (cadence, variability)", 1, 1, "score"], ["motor/balance_norm", "Balance (sway, jerk)", 1, 1, "score"],
         ["rollup:voice_norm", "Voice", 1, 1, "score"], ["motor/ddk_norm", "Pa-ta-ka rate", 1, 1, "score"], ["motor/voice_norm", "Sustained vowel (jitter, PPE)", 1, 1, "score"], ["motor/read_norm", "Reading pitch variability", 1, 1, "score"]]],
-      ["Test scores vs your baseline (1–5)", [["rollup:overall_base", "Overall", 1, 1, "score"], ["rollup:motor_base", "Motor", 1, 1, "score"], ["motor/gait_score", "Gait", 1, 1, "score"],
+      ["Test scores vs your baseline (1–5)", [["rollup:overall_base", "Overall", 1, 1, "score"], ["rollup:motor_base", "Motor", 1, 1, "score"], ["motor/gait_score", "Gait", 1, 1, "score"], ["motor/balance_score", "Balance", 1, 1, "score"],
         ["rollup:voice_base", "Voice", 1, 1, "score"], ["motor/ddk_score", "Pa-ta-ka", 1, 1, "score"], ["motor/voice_score", "Sustained vowel", 1, 1, "score"], ["motor/read_score", "Reading", 1, 1, "score"]]],
-      ["Motor measures", [["motor/tremor_amp_cm", "Tremor amplitude (cm)", 2, -1], ["motor/tap_rate", "Taps / s", 2, 1], ["motor/tap_cv", "Tapping rhythm CV", 2, -1], ["motor/gait_cadence", "Cadence (steps/min)", 0, 1], ["motor/gait_step_cv", "Step variability (%)", 1, -1], ["motor/gait_stride_regularity", "Stride regularity", 2, 1], ["motor/gait_asymmetry", "Gait asymmetry", 2, -1], ["motor/spiral_error_pct", "Spiral deviation (%)", 1, -1], ["motor/spiral_tremor_share", "Spiral tremor share", 2, -1]]],
+      ["Motor measures", [["motor/tremor_amp_cm", "Tremor amplitude (cm)", 2, -1], ["motor/tap_rate", "Taps / s", 2, 1], ["motor/tap_cv", "Tapping rhythm CV", 2, -1], ["motor/gait_cadence", "Cadence (steps/min)", 0, 1], ["motor/gait_step_cv", "Step variability (%)", 1, -1], ["motor/gait_stride_regularity", "Stride regularity", 2, 1], ["motor/gait_asymmetry", "Gait asymmetry", 2, -1], ["motor/balance_sway_rms", "Sway RMS (m/s²)", 3, -1], ["motor/balance_jerk", "Sway jerk (m/s³)", 2, -1], ["motor/balance_path", "Sway path (/s)", 2, -1], ["motor/spiral_error_pct", "Spiral deviation (%)", 1, -1], ["motor/spiral_tremor_share", "Spiral tremor share", 2, -1]]],
       ["Voice measures", [["motor/ddk_rate", "Pa-ta-ka syll / s", 2, 1], ["motor/ddk_cv", "Pa-ta-ka rhythm CV", 2, -1], ["motor/voice_hnr", "Voice HNR (dB)", 1, 1], ["motor/voice_jitter_pct", "Voice jitter (%)", 2, -1], ["motor/voice_ppe", "Voice PPE", 3, -1], ["motor/voice_int_slope", "Voice loudness slope (dB/s)", 2, 1], ["motor/read_f0_sd_st", "Reading pitch var. (st)", 2, 1], ["motor/read_rate", "Reading rate (/s)", 2, 1]]],
       ["Oura", [["oura/sleep_score", "Sleep score", 0, 1], ["oura/readiness_score", "Readiness", 0, 1], ["oura/total_sleep_h", "Sleep (h)", 1, 1], ["oura/deep_h", "Deep (h)", 1, 1], ["oura/avg_hrv", "Night HRV (ms)", 0, 1], ["oura/lowest_hr", "Lowest HR", 0, -1], ["oura/temperature_deviation", "Temp dev (°C)", 2, 0]]],
       ["Watch", [["hae/resting_heart_rate", "Resting HR", 0, -1], ["hae/heart_rate_variability", "Daytime HRV (ms)", 0, 1], ["hae/step_count", "Steps", 0, 1], ["hae/walking_speed", "Walking speed", 2, 1], ["hae/walking_step_length", "Step length", 2, 1], ["hae/walking_double_support_percentage", "Double support %", 1, -1], ["hae/walking_asymmetry_percentage", "Asymmetry %", 1, -1]]],
@@ -3549,8 +3701,8 @@
     // MDS-UPDRS III. Within voice, pa-ta-ka leads because it is the levodopa-sensitive task (Rusz 2011; Bern/Cologne 2025).
     // "norm" = vs healthy reference (tremor and tapping scores are already absolute scales); "base" = vs own baseline.
     const ROLLUPS = {
-      "rollup:motor_norm": [["motor/gait_norm", 0.45], ["motor/tap_score", 0.35], ["motor/tremor_score", 0.20]],
-      "rollup:motor_base": [["motor/gait_score", 0.45], ["motor/tap_score", 0.35], ["motor/tremor_score", 0.20]],
+      "rollup:motor_norm": [["motor/gait_norm", 0.35], ["motor/balance_norm", 0.25], ["motor/tap_score", 0.25], ["motor/tremor_score", 0.15]],
+      "rollup:motor_base": [["motor/gait_score", 0.35], ["motor/balance_score", 0.25], ["motor/tap_score", 0.25], ["motor/tremor_score", 0.15]],
       "rollup:voice_norm": [["motor/ddk_norm", 0.5], ["motor/read_norm", 0.3], ["motor/voice_norm", 0.2]],
       "rollup:voice_base": [["motor/ddk_score", 0.5], ["motor/read_score", 0.3], ["motor/voice_score", 0.2]],
     };
@@ -3842,6 +3994,7 @@
                 <TremorTestCard />
                 <TapTestCard />
                 <GaitTestCard />
+                <BalanceTestCard />
                 <SpiralTestCard />
               </Section>
               <Section title="Voice" subtitle="Pa-ta-ka tracks levodopa state; sustained vowel and reading are slower baselines (weekly is fine)." storageKey="voice">

@@ -132,6 +132,14 @@ Steps = peaks >= 0.5×RMS, >= 0.3 s apart. Metrics: `gait_cadence` (steps/min), 
 and `gait_stride_regularity` (normalised autocorrelation at 1- and 2-step lags, Moe-Nilssen & Helbostad), `gait_asymmetry`
 (|AC1 − AC2|), `gait_rms`, `gait_score` (1–5 vs own baseline), `gait_norm` (1–5 vs healthy cadence 112±9 and step CV 2.5±1.5 %).
 
+## Balance test (motor/balance_*)
+Feet together, phone held flat against the chest, 30 s still (5 s lead-in). Gravity-free acceleration (or 2 s moving
+mean removed), 100 ms smoothing; x = mediolateral, z = anteroposterior. Metrics: `balance_sway_rms` (horizontal RMS
+m/s²), `balance_sway_ml`, `balance_sway_ap`, `balance_path` (per s), `balance_jerk` (m/s³), `balance_area` (95 % ellipse
+proxy), `balance_low_share` (0–1 Hz share), `balance_score` (1–5 vs own baseline, per eyes condition), `balance_norm`
+(eyes open only; sway RMS 0.08±0.03 and jerk 1.0±0.5 from trunk-accelerometer stance norms, Mancini 2012 — approximate
+for a chest-held phone). `raw.eyes` = open | closed.
+
 ## Norm-referenced scores (`*_norm`, 1–5)
 Alongside each personal-baseline score, mic-robust measures are compared to healthy-control references: pa-ta-ka rate
 vs 7.16±0.73 syll/s and reading F0 SD vs 2.48±0.56 st (Rusz et al. 2011, 23 HC), sustained-vowel jitter vs 0.37±0.20 %
@@ -139,8 +147,8 @@ and PPE vs 0.12±0.05 (UCI healthy recordings), gait as above. z (direction-adju
 2 ≥ −2, else 1. Shimmer and HNR are excluded as microphone-dependent. Composites (client-side, daily means of components):
 `rollup:motor_norm` (tremor_score, tap_score, gait_norm), `rollup:motor_base` (tremor_score, tap_score, gait_score),
 `rollup:voice_norm` (ddk/voice/read _norm), `rollup:voice_base` (ddk/voice/read _score), `rollup:overall_*`.
-Composites are weighted means renormalised over the tests present that day: motor gait 0.45 / tapping 0.35 / tremor
-0.20; voice pa-ta-ka 0.5 / reading 0.3 / vowel 0.2; overall motor 0.75 / voice 0.25. Weights follow the mPower digital
+Composites are weighted means renormalised over the tests present that day: motor gait 0.35 / balance 0.25 /
+tapping 0.25 / tremor 0.15; voice pa-ta-ka 0.5 / reading 0.3 / vowel 0.2; overall motor 0.75 / voice 0.25. Weights follow the mPower digital
 PD score (Zhan et al. 2018: gait 33.4 %, balance 23.2 %, tapping 23.0 %, voice 17.0 %, reaction 3.4 %) renormalised over
 our tasks, with tremor at roughly its MDS-UPDRS III item share. The Status card at the top of Trends shows all three vs healthy and vs baseline with sparklines.
 

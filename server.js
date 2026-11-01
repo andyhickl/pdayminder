@@ -608,6 +608,7 @@ app.get("/api/day", requireAuth, async (req, res) => {
     pool.query(
       `select ts, max(value) filter (where metric = 'tremor_score') as score, max(value) filter (where metric = 'tremor_amp_cm') as amp,
               max(value) filter (where metric = 'tap_score') as tap_score, max(value) filter (where metric = 'tap_rate') as tap_rate,
+              max(value) filter (where metric = 'gait_score') as gait_score, max(value) filter (where metric = 'balance_score') as balance_score,
               max(raw->>'hand') as hand, max(raw->>'note') as note
        from observations where user_id = $1 and source = 'motor' and (ts at time zone $2)::date = $3::date group by ts order by ts`,
       [uid, TZ, day]
