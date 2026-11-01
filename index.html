@@ -1484,9 +1484,9 @@
       ["Walk speed", (x) => x.daily.walking_speed ?? null, 2, "", 1],
       ["Dbl support", (x) => x.daily.walking_double_support_percentage ?? null, 1, "%", -1],
       ["Asymmetry", (x) => x.daily.walking_asymmetry_percentage ?? null, 1, "%", -1],
-      ["Protein", (x) => x.daily.protein ?? null, 0, " g", 0],
-      ["Fiber", (x) => x.daily.fiber ?? null, 0, " g", 1],
-      ["Caffeine", (x) => x.daily.caffeine ?? null, 0, " mg", 0],
+      ["Protein", (x) => (x.nutrition || {}).protein ?? x.daily.protein ?? null, 0, " g", 0],
+      ["Fiber", (x) => (x.nutrition || {}).fiber ?? x.daily.fiber ?? null, 0, " g", 1],
+      ["Caffeine", (x) => (x.nutrition || {}).caffeine ?? x.daily.caffeine ?? null, 0, " mg", 0],
     ];
     function DayVitalsCard({ dateKey, days }) {
       // re-fetch when the day's local QoL/meds change too, so bands and dose lines stay in sync
@@ -1577,6 +1577,9 @@
       ["motor/voice_int_slope", "Voice loudness slope (dB/s)", "#e9d5ff", 2],
       ["motor/voice_mpt", "Max phonation (s)", "#f5d0fe", 1],
       ["motor/spiral_error_pct", "Spiral deviation (%)", "#fbbf24", 1],
+      ["cronometer/fiber", "Fiber, Cronometer (g)", "#4ade80", 0],
+      ["cronometer/fat", "Fat, Cronometer (g)", "#fed7aa", 0],
+      ["cronometer/omega_3", "Omega-3, Cronometer (g)", "#67e8f9", 1],
       ["hae/dietary_energy", "Calories (kcal)", "#fb923c", 0],
       ["hae/protein", "Protein (g)", "#f97316", 0],
       ["derived/protein_near_dose", "Protein near levodopa (g)", "#ef4444", 0],
@@ -3419,6 +3422,17 @@
                 : <a className="pill-btn primary" href="/oauth/oura/start" style={{ textDecoration: "none" }}>Connect Oura</a>)}
             </div>
           )}
+          {info && info.cronometer && (
+            <div className="med-list" style={{ marginTop: 6 }}>
+              <strong>Cronometer</strong>{" "}
+              {info.cronometer.lastSync
+                ? `· last sync ${when(info.cronometer.lastSync.ts)}${info.cronometer.lastSync.status !== 200 ? " (failed: " + ((info.cronometer.lastSync.summary || {}).error || "?") + ")" : ` · ${info.cronometer.lastSync.rows} rows`}`
+                : "· not run yet (set CRONOMETER_EMAIL and CRONOMETER_PASSWORD on the cronometer-sync job)"}
+              {info.cronometer.lastSync && info.cronometer.lastSync.summary && Array.isArray(info.cronometer.lastSync.summary.supplements) && info.cronometer.lastSync.summary.supplements.length > 0 && (
+                <div style={{ fontSize: 11, color: "#94a3b8" }}>supplements seen: {info.cronometer.lastSync.summary.supplements.join(", ")}</div>
+              )}
+            </div>
+          )}
         </div>
       );
     }
@@ -3667,6 +3681,8 @@
       "hae/fiber": "Fiber (g)", "hae/sugar": "Sugar (g)", "hae/caffeine": "Caffeine (mg)", "hae/dietary_water": "Water (mL)", "hae/cholesterol": "Cholesterol (mg)",
       "hae/sodium": "Sodium (mg)", "hae/potassium": "Potassium (mg)", "hae/calcium": "Calcium (mg)", "hae/iron": "Iron (mg)", "hae/magnesium": "Magnesium (mg)", "hae/zinc": "Zinc (mg)",
       "hae/vitamin_c": "Vitamin C (mg)", "hae/vitamin_d": "Vitamin D (µg)", "hae/vitamin_b12": "Vitamin B12 (µg)", "hae/vitamin_b6": "Vitamin B6 (mg)", "hae/folate": "Folate (µg)",
+      "cronometer/energy": "Calories (Cronometer)", "cronometer/protein": "Protein (Cronometer)", "cronometer/carbs": "Carbs (Cronometer)", "cronometer/fat": "Fat (Cronometer)", "cronometer/fiber": "Fiber (Cronometer)",
+      "cronometer/sugars": "Sugars (Cronometer)", "cronometer/caffeine": "Caffeine (Cronometer)", "cronometer/water": "Water (Cronometer)", "cronometer/omega_3": "Omega-3 (Cronometer)", "cronometer/alcohol": "Alcohol (Cronometer)",
       "derived/protein_near_dose": "Protein within 90 min of a levodopa dose (g)", "derived/first_meal_hour": "First meal (hour of day)", "derived/last_meal_hour": "Last meal (hour of day)",
       "oura/sleep_score": "Sleep score (Oura)", "oura/avg_hrv": "Night HRV (Oura)", "oura/total_sleep_h": "Sleep hours (Oura)", "oura/deep_h": "Deep sleep (Oura)",
       "oura/readiness_score": "Readiness (Oura)", "oura/lowest_hr": "Lowest night HR (Oura)", "oura/temperature_deviation": "Temp deviation (Oura)", "oura/steps": "Steps (Oura)",
@@ -3807,7 +3823,8 @@
       ["Motor measures", [["motor/tremor_amp_cm", "Tremor amplitude (cm)", 2, -1], ["motor/tap_rate", "Taps / s", 2, 1], ["motor/tap_cv", "Tapping rhythm CV", 2, -1], ["motor/gait_cadence", "Cadence (steps/min)", 0, 1], ["motor/gait_step_cv", "Step variability (%)", 1, -1], ["motor/gait_stride_regularity", "Stride regularity", 2, 1], ["motor/gait_asymmetry", "Gait asymmetry", 2, -1], ["motor/balance_sway_rms", "Sway RMS (m/s²)", 3, -1], ["motor/balance_jerk", "Sway jerk (m/s³)", 2, -1], ["motor/balance_path", "Sway path (/s)", 2, -1], ["motor/spiral_error_pct", "Spiral deviation (%)", 1, -1], ["motor/spiral_tremor_share", "Spiral tremor share", 2, -1]]],
       ["Voice measures", [["motor/ddk_rate", "Pa-ta-ka syll / s", 2, 1], ["motor/ddk_cv", "Pa-ta-ka rhythm CV", 2, -1], ["motor/voice_hnr", "Voice HNR (dB)", 1, 1], ["motor/voice_jitter_pct", "Voice jitter (%)", 2, -1], ["motor/voice_ppe", "Voice PPE", 3, -1], ["motor/voice_int_slope", "Voice loudness slope (dB/s)", 2, 1], ["motor/read_f0_sd_st", "Reading pitch var. (st)", 2, 1], ["motor/read_rate", "Reading rate (/s)", 2, 1], ["motor/voice_mpt", "Max phonation (s)", 1, 1]]],
       ["Oura", [["oura/sleep_score", "Sleep score", 0, 1], ["oura/readiness_score", "Readiness", 0, 1], ["oura/total_sleep_h", "Sleep (h)", 1, 1], ["oura/deep_h", "Deep (h)", 1, 1], ["oura/avg_hrv", "Night HRV (ms)", 0, 1], ["oura/lowest_hr", "Lowest HR", 0, -1], ["oura/temperature_deviation", "Temp dev (°C)", 2, 0]]],
-      ["Nutrition", [["hae/dietary_energy", "Calories (kcal)", 0, 0], ["hae/protein", "Protein (g)", 0, 0], ["derived/protein_near_dose", "Protein near levodopa (g)", 0, -1], ["hae/carbohydrates", "Carbohydrates (g)", 0, 0], ["hae/total_fat", "Fat (g)", 0, 0], ["hae/fiber", "Fiber (g)", 0, 1], ["hae/sugar", "Sugar (g)", 0, -1], ["hae/caffeine", "Caffeine (mg)", 0, 0], ["hae/dietary_water", "Water (mL)", 0, 1], ["hae/sodium", "Sodium (mg)", 0, -1], ["hae/magnesium", "Magnesium (mg)", 0, 1], ["hae/vitamin_d", "Vitamin D (µg)", 1, 1], ["hae/vitamin_b12", "Vitamin B12 (µg)", 1, 1], ["derived/first_meal_hour", "First meal (h)", 1, 0], ["derived/last_meal_hour", "Last meal (h)", 1, 0]]],
+      ["Nutrition (Cronometer)", [["cronometer/energy", "Calories (kcal)", 0, 0], ["cronometer/protein", "Protein (g)", 0, 0], ["derived/protein_near_dose", "Protein near levodopa (g)", 0, -1], ["cronometer/carbs", "Carbs (g)", 0, 0], ["cronometer/fat", "Fat (g)", 0, 0], ["cronometer/fiber", "Fiber (g)", 0, 1], ["cronometer/sugars", "Sugars (g)", 0, -1], ["cronometer/caffeine", "Caffeine (mg)", 0, 0], ["cronometer/water", "Water (g)", 0, 1], ["cronometer/omega_3", "Omega-3 (g)", 1, 1], ["cronometer/sodium", "Sodium (mg)", 0, -1], ["cronometer/magnesium", "Magnesium (mg)", 0, 1], ["cronometer/vitamin_d", "Vitamin D", 0, 1], ["cronometer/b12", "Vitamin B12 (µg)", 1, 1], ["derived/first_meal_hour", "First meal (h)", 1, 0], ["derived/last_meal_hour", "Last meal (h)", 1, 0]]],
+      ["Nutrition (Apple Health)", [["hae/dietary_energy", "Calories (kcal)", 0, 0], ["hae/protein", "Protein (g)", 0, 0], ["derived/protein_near_dose", "Protein near levodopa (g)", 0, -1], ["hae/carbohydrates", "Carbohydrates (g)", 0, 0], ["hae/total_fat", "Fat (g)", 0, 0], ["hae/fiber", "Fiber (g)", 0, 1], ["hae/sugar", "Sugar (g)", 0, -1], ["hae/caffeine", "Caffeine (mg)", 0, 0], ["hae/dietary_water", "Water (mL)", 0, 1], ["hae/sodium", "Sodium (mg)", 0, -1], ["hae/magnesium", "Magnesium (mg)", 0, 1], ["hae/vitamin_d", "Vitamin D (µg)", 1, 1], ["hae/vitamin_b12", "Vitamin B12 (µg)", 1, 1]]],
       ["Watch", [["hae/resting_heart_rate", "Resting HR", 0, -1], ["hae/heart_rate_variability", "Daytime HRV (ms)", 0, 1], ["hae/step_count", "Steps", 0, 1], ["hae/walking_speed", "Walking speed", 2, 1], ["hae/walking_step_length", "Step length", 2, 1], ["hae/walking_double_support_percentage", "Double support %", 1, -1], ["hae/walking_asymmetry_percentage", "Asymmetry %", 1, -1]]],
     ];
     // Relative position of the latest value against the baseline as a 1–5 level: 3 = about baseline,

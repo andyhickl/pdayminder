@@ -62,6 +62,19 @@ dose; protein competes with levodopa for transport), `derived/first_meal_hour`, 
 non-zero hourly `dietary_energy`). Stats has a Nutrition group; Day vitals shows protein, fiber and caffeine.
 The full Cronometer profile (80+ nutrients, supplements, creatine) needs the Cronometer cron (backlog).
 
+## Cronometer sync (sync/cronometer.js, source = cronometer)
+Cronometer has no public API; the cron job logs in the way the web app does (anti-CSRF form login, GWT-RPC
+`authenticate` and `generateAuthorizationToken`, then the same `/export?generate=servings` CSV the Export Data
+button downloads). GWT hashes are read from the app's JS each run; the session cookie is cached in `oauth_tokens`
+(provider `cronometer`) so most runs skip the rate-limited login. Env on the `cronometer-sync` job:
+`CRONOMETER_EMAIL`, `CRONOMETER_PASSWORD`, `CRONOMETER_DAYS` (lookback, default 3), optional
+`CRONOMETER_USER_EMAIL`. Every nutrient column becomes an hourly-summed metric (`energy`, `protein`, `fiber`,
+`omega_3`, `b12`, ...); entries whose category/group says supplement, or whose name matches a supplement keyword
+(creatine, vitamin, omega, magnesium...), also become `supp_<slug>` with the numeric amount. The lookback window is
+rewritten each run so edits and deletions propagate. All `cronometer/*` metrics are summed per day; `/api/day`
+returns them as `nutrition`, which Day vitals prefers over the Apple Health copy. Unofficial: a Cronometer build
+can break it until the hashes or payloads are updated; the Apple Health path keeps the macros flowing meanwhile.
+
 ## Cumulative HAE metrics
 Steps, distance, energy, stand time etc. are keyed to local midnight and the largest value wins, because overlapping
 HAE automation windows send partial sums for the same day. Sleep is one row per night keyed on the end date; windows

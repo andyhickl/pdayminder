@@ -45,6 +45,27 @@ services:
       - key: OURA_DAYS
         value: "3"         # set to 365 once, run manually, then back to 3
 
+  - type: cron
+    name: cronometer-sync
+    runtime: node
+    plan: starter
+    schedule: "40 */3 * * *"       # every 3 hours (UTC); one login per session, sessions are reused
+    buildCommand: npm install
+    startCommand: node sync/cronometer.js
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: pday_db
+          property: connectionString
+      - key: NODE_VERSION
+        value: "20"
+      - key: CRONOMETER_EMAIL
+        sync: false        # your Cronometer login
+      - key: CRONOMETER_PASSWORD
+        sync: false        # a password you can rotate
+      - key: CRONOMETER_DAYS
+        value: "3"         # lookback; raise once for a backfill, then back to 3
+
 databases:
   - name: pday_db
     plan: basic-256mb

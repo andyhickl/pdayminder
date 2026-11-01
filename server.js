@@ -442,18 +442,20 @@ async function logIngest(userId, route, status, rows, body) {
 
 // Nutrition and other intake metrics arrive from HAE as hourly sums; their daily value is the sum, not the mean.
 const SUMMED_RE = /^(dietary_|protein|carbohydrates|total_fat|saturated_fat|monounsaturated_fat|polyunsaturated_fat|fiber|sugar|caffeine|water|cholesterol|sodium|potassium|calcium|iron|magnesium|zinc|phosphorus|selenium|copper|manganese|chromium|molybdenum|iodine|chloride|vitamin_|thiamin|riboflavin|niacin|folate|biotin|pantothenic)/;
-function isSummed(metric) { return SUMMED_RE.test(metric); }
+function isSummed(metric, source) { return source === "cronometer" || SUMMED_RE.test(metric); }
 
 // Daily series for one metric key: [[day, value], ...] over the last `days` days (local dates).
 // Handles summed vs averaged metrics and the derived metrics that need doses.
 async function dailySeries(uid, source, metric, days) {
   if (source === "derived") {
     if (metric === "protein_near_dose") {
-      // Protein logged within 90 minutes either side of a dopaminergic dose (hourly HAE rows whose hour start falls in the window).
+      // Protein logged within 90 minutes either side of a dopaminergic dose (hourly rows whose hour start falls in the
+      // window). Cronometer's own export wins over the Apple Health copy when both exist.
+      const src = (await pool.query("select 1 from observations where user_id = $1 and source = 'cronometer' and metric = 'protein' limit 1", [uid])).rows.length ? "cronometer" : "hae";
       const { rows } = await pool.query(
         `select to_char((o.ts at time zone $2)::date,'YYYY-MM-DD') as day, sum(o.value) as v
          from observations o
-         where o.user_id = $1 and o.source = 'hae' and o.metric = 'protein' and o.value is not null
+         where o.user_id = $1 and o.source = '${src}' and o.metric = 'protein' and o.value is not null
            and (o.ts at time zone $2)::date >= (now() at time zone $2)::date - ($3::int - 1)
            and exists (select 1 from med_doses d where d.user_id = o.user_id and d.drug = any($4)
                        and abs(extract(epoch from ((o.ts at time zone $2) - (d.day + d.taken_at)))) <= 5400)
@@ -465,14 +467,14 @@ async function dailySeries(uid, source, metric, days) {
       const { rows } = await pool.query(
         `select to_char((ts at time zone $2)::date,'YYYY-MM-DD') as day,
                 ${fn}(extract(hour from (ts at time zone $2)) + extract(minute from (ts at time zone $2)) / 60) as v
-         from observations where user_id = $1 and source = 'hae' and metric = 'dietary_energy' and value > 0
+         from observations where user_id = $1 and ((source = 'hae' and metric = 'dietary_energy') or (source = 'cronometer' and metric = 'energy')) and value > 0
            and (ts at time zone $2)::date >= (now() at time zone $2)::date - ($3::int - 1)
          group by 1 order by 1`, [uid, TZ, days]);
       return rows.map((r) => [r.day, Number(r.v)]);
     }
     return [];
   }
-  const agg = isSummed(metric) ? "sum(value)" : "avg(value)";
+  const agg = isSummed(metric, source) ? "sum(value)" : "avg(value)";
   const { rows } = await pool.query(
     `select to_char((ts at time zone $2)::date,'YYYY-MM-DD') as day, ${agg} as v
      from observations where user_id = $1 and source = $4 and metric = $5 and value is not null
@@ -596,8 +598,8 @@ app.get("/api/metrics", requireAuth, async (req, res) => {
   );
   // Derived nutrition metrics show up once protein / energy rows exist (computed on read, see dailySeries).
   const have = new Set(rows.map((r) => r.source + "/" + r.metric));
-  if (have.has("hae/protein")) rows.push({ source: "derived", metric: "protein_near_dose", rows: rows.find((r) => r.source === "hae" && r.metric === "protein").rows, last_ts: null });
-  if (have.has("hae/dietary_energy")) ["first_meal_hour", "last_meal_hour"].forEach((m) => rows.push({ source: "derived", metric: m, rows: 0, last_ts: null }));
+  if (have.has("hae/protein") || have.has("cronometer/protein")) rows.push({ source: "derived", metric: "protein_near_dose", rows: (rows.find((r) => (r.source === "cronometer" || r.source === "hae") && r.metric === "protein") || { rows: 0 }).rows, last_ts: null });
+  if (have.has("hae/dietary_energy") || have.has("cronometer/energy")) ["first_meal_hour", "last_meal_hour"].forEach((m) => rows.push({ source: "derived", metric: m, rows: 0, last_ts: null }));
   res.json(rows);
 });
 
@@ -632,7 +634,7 @@ app.get("/api/day", requireAuth, async (req, res) => {
   const day = String(req.query.day || "");
   if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) return res.status(400).json({ error: "day=YYYY-MM-DD" });
   const uid = req.user.id;
-  const [obs, qol, meds, dopa, oura, motor] = await Promise.all([
+  const [obs, qol, meds, dopa, oura, motor, cron] = await Promise.all([
     pool.query(
       `select ts, metric, value, raw from observations
        where user_id = $1 and source = 'hae' and (ts at time zone $2)::date = $3::date order by ts`,
@@ -653,6 +655,10 @@ app.get("/api/day", requireAuth, async (req, res) => {
        from observations where user_id = $1 and source = 'motor' and (ts at time zone $2)::date = $3::date group by ts order by ts`,
       [uid, TZ, day]
     ),
+    pool.query(
+      `select metric, sum(value) as value from observations where user_id = $1 and source = 'cronometer' and (ts at time zone $2)::date = $3::date group by metric`,
+      [uid, TZ, day]
+    ),
   ]);
   const hourly = {}, daily = {}, workouts = [];
   const counts = {};
@@ -663,7 +669,7 @@ app.get("/api/day", requireAuth, async (req, res) => {
     else if (counts[r.metric] > 1) (hourly[r.metric] = hourly[r.metric] || []).push({ ts: r.ts, value: r.value });
     else daily[r.metric] = r.value;
   });
-  res.json({ day, hourly, daily, oura: Object.fromEntries(oura.rows.map((r) => [r.metric, r.value])), motor: motor.rows, qol: qol.rows,
+  res.json({ day, hourly, daily, oura: Object.fromEntries(oura.rows.map((r) => [r.metric, r.value])), nutrition: Object.fromEntries(cron.rows.map((r) => [r.metric, Number(r.value)])), motor: motor.rows, qol: qol.rows,
     doses: meds.rows.map((r) => ({ ...r, dopaminergic: dopa.includes(r.drug || "sinemet") })), workouts });
 });
 
@@ -814,7 +820,13 @@ app.get("/api/integrations", requireAuth, async (req, res) => {
   const last = await pool.query(
     "select route, status, ts, rows from ingest_log where route = 'oura-sync' order by id desc limit 1"
   );
-  res.json({ oura: { configured: Boolean(OURA.clientId), connected: rows.find((r) => r.provider === "oura") || null, lastSync: last.rows[0] || null } });
+  const lastCron = await pool.query(
+    "select route, status, ts, rows, summary from ingest_log where route = 'cronometer-sync' order by id desc limit 1"
+  );
+  res.json({
+    oura: { configured: Boolean(OURA.clientId), connected: rows.find((r) => r.provider === "oura") || null, lastSync: last.rows[0] || null },
+    cronometer: { session: rows.find((r) => r.provider === "cronometer") || null, lastSync: lastCron.rows[0] || null },
+  });
 });
 
 app.delete("/api/integrations/oura", requireAuth, requireSession, async (req, res) => {
