@@ -76,7 +76,8 @@ doses for any analysis. Rule: post = 30–210 min after the latest dopaminergic 
 otherwise (no dose yet counts as pre).
 
 ## Legal
-`docs/privacy.md` and `docs/terms.md` are served publicly (no login) at `/privacy` and `/terms`.
+`docs/privacy.md`, `docs/terms.md` and `docs/bibliography.md` are served publicly (no login) at `/privacy`, `/terms`
+and `/bibliography` (annotated sources for every test, score and reference range; linked from Settings → About).
 
 ## Tremor test (motor/*)
 20 s phone accelerometer test in the app. Per-axis spectra (1–15 Hz) are summed; the 3.5–7.5 Hz band is scored.

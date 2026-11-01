@@ -1290,10 +1290,10 @@
           <div className="card-subtitle">Each medication with its scheduled times (quick-fill in the log dialog). Tick "dopaminergic" for levodopa-class drugs; those get the dose rays and lines, and define pre/post-dose for the tests.</div>
           {(local.medications || []).map((m, i) => (
             <div key={m.id + i} style={{ background: "#0f172a", borderRadius: 10, padding: "8px 10px", marginTop: 8 }}>
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 90px auto", gap: 6, alignItems: "end" }}>
-                <label style={{ fontSize: 11, color: "var(--muted)" }}>Name<input className="settings-input" value={m.name} onChange={(e) => updateMed(i, { name: e.target.value, id: m.id || slug(e.target.value) })} /></label>
-                <label style={{ fontSize: 11, color: "var(--muted)" }}>Dose<input className="settings-input" value={m.dose || ""} placeholder="25/100" onChange={(e) => updateMed(i, { dose: e.target.value })} /></label>
-                <button type="button" className="pill-btn" onClick={() => removeMed(i)} title="Remove">✕</button>
+              <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) 76px 34px", gap: 6, alignItems: "end" }}>
+                <label style={{ fontSize: 11, color: "var(--muted)", display: "flex", flexDirection: "column", gap: 2, minWidth: 0 }}>Name<input className="settings-input" style={{ width: "100%", boxSizing: "border-box" }} value={m.name} onChange={(e) => updateMed(i, { name: e.target.value, id: m.id || slug(e.target.value) })} /></label>
+                <label style={{ fontSize: 11, color: "var(--muted)", display: "flex", flexDirection: "column", gap: 2, minWidth: 0 }}>Dose<input className="settings-input" style={{ width: "100%", boxSizing: "border-box" }} value={m.dose || ""} placeholder="25/100" onChange={(e) => updateMed(i, { dose: e.target.value })} /></label>
+                <button type="button" className="pill-btn" style={{ padding: "4px 0", width: 34, textAlign: "center" }} onClick={() => removeMed(i)} title="Remove">✕</button>
               </div>
               <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, marginTop: 6 }}>
                 <input type="checkbox" checked={Boolean(m.dopaminergic)} onChange={(e) => updateMed(i, { dopaminergic: e.target.checked })} /> dopaminergic (levodopa-class)
@@ -1303,7 +1303,7 @@
                 <button type="button" className="pill-btn" onClick={() => updateMed(i, { times: m.times.slice(0, -1) })} disabled={!m.times.length}>−</button>
                 <button type="button" className="pill-btn" onClick={() => updateMed(i, { times: [...m.times, m.times.length ? m.times[m.times.length - 1] : "08:00"] })}>+</button>
                 {m.times.map((t, k) => (
-                  <input key={k} type="time" className="settings-input" style={{ width: "auto" }} value={t} onChange={(e) => { const times = [...m.times]; times[k] = e.target.value; updateMed(i, { times }); }} />
+                  <input key={k} type="time" className="settings-input" style={{ width: 118, boxSizing: "border-box" }} value={t} onChange={(e) => { const times = [...m.times]; times[k] = e.target.value; updateMed(i, { times }); }} />
                 ))}
               </div>
             </div>
@@ -3625,7 +3625,7 @@
         <div style={{ minWidth: 0 }}>
           <div style={{ display: "flex", alignItems: "baseline", gap: 6 }}>
             <div style={{ fontSize: 22, fontWeight: 700, color: col(has ? r.last : null), lineHeight: 1 }}>{has ? fmt(r.last) : "–"}</div>
-            <div style={{ fontSize: 10, color: "#64748b", whiteSpace: "nowrap" }}>{has ? `7d ${fmt(r.m7)} · 30d ${fmt(r.m30)}` : "no tests yet"}</div>
+            <div style={{ fontSize: 10, color: "#64748b", whiteSpace: "nowrap" }}>{has ? `7d ${fmt(r.m7)} · 30d ${fmt(r.m30)}` : k.endsWith("_base") ? "building baselines" : "no tests yet"}</div>
           </div>
           {has && <div style={{ marginTop: 4 }}><Spark series={r.series} color={col(r.last)} h={26} /></div>}
         </div>); };
@@ -3634,14 +3634,14 @@
           <div className="card-header">
             <div>
               <div className="card-title">Status</div>
-              <div className="card-subtitle">Composite test scores (1–5, 5 best), daily means over 30 days. Left: vs healthy reference. Right: vs your own baseline. They answer different questions; both can be true at once.</div>
+              <div className="card-subtitle">Composite test scores (1–5, 5 best), daily means over 30 days. Left: vs healthy reference. Right: vs your personal baseline, which needs five saved tests of each kind before it scores anything. They answer different questions; both can be true at once.</div>
             </div>
           </div>
           {err && <div className="card-subtitle">Couldn't load ({err}).</div>}
           <div style={{ display: "grid", gridTemplateColumns: "52px minmax(0, 1fr) minmax(0, 1fr)", gap: 6, alignItems: "center", marginTop: 6 }}>
             <div />
             <div style={{ fontSize: 10, color: "#94a3b8", textTransform: "uppercase", letterSpacing: "0.04em" }}>vs healthy</div>
-            <div style={{ fontSize: 10, color: "#94a3b8", textTransform: "uppercase", letterSpacing: "0.04em" }}>vs baseline</div>
+            <div style={{ fontSize: 10, color: "#94a3b8", textTransform: "uppercase", letterSpacing: "0.04em" }}>vs personal baseline</div>
             {rows.map(([label, kn, kb]) => (
               <React.Fragment key={label}>
                 <div style={{ fontSize: 14, fontWeight: 600 }}>{label}</div>
@@ -3681,7 +3681,7 @@
       ["QoL & doses", [["qol", "Mean QoL (1–5)", 2, 1, "score"], ["doses", "Levodopa doses / day", 1, 0], ["rated", "Rated blocks / day", 1, 0]]],
       ["Test scores vs healthy reference (1–5)", [["rollup:overall_norm", "Overall", 1, 1, "score"], ["rollup:motor_norm", "Motor", 1, 1, "score"], ["motor/tremor_score", "Tremor (UPDRS-based)", 1, 1, "score"], ["motor/tap_score", "Tapping", 1, 1, "score"], ["motor/gait_norm", "Gait (cadence, variability)", 1, 1, "score"], ["motor/balance_norm", "Balance (sway, jerk)", 1, 1, "score"],
         ["rollup:voice_norm", "Voice", 1, 1, "score"], ["motor/ddk_norm", "Pa-ta-ka rate", 1, 1, "score"], ["motor/voice_norm", "Sustained vowel (jitter, PPE)", 1, 1, "score"], ["motor/read_norm", "Reading pitch variability", 1, 1, "score"]]],
-      ["Test scores vs your baseline (1–5)", [["rollup:overall_base", "Overall", 1, 1, "score"], ["rollup:motor_base", "Motor", 1, 1, "score"], ["motor/gait_score", "Gait", 1, 1, "score"], ["motor/balance_score", "Balance", 1, 1, "score"],
+      ["Test scores vs personal baseline (1–5)", [["rollup:overall_base", "Overall", 1, 1, "score"], ["rollup:motor_base", "Motor", 1, 1, "score"], ["motor/gait_score", "Gait", 1, 1, "score"], ["motor/balance_score", "Balance", 1, 1, "score"],
         ["rollup:voice_base", "Voice", 1, 1, "score"], ["motor/ddk_score", "Pa-ta-ka", 1, 1, "score"], ["motor/voice_score", "Sustained vowel", 1, 1, "score"], ["motor/read_score", "Reading", 1, 1, "score"]]],
       ["Motor measures", [["motor/tremor_amp_cm", "Tremor amplitude (cm)", 2, -1], ["motor/tap_rate", "Taps / s", 2, 1], ["motor/tap_cv", "Tapping rhythm CV", 2, -1], ["motor/gait_cadence", "Cadence (steps/min)", 0, 1], ["motor/gait_step_cv", "Step variability (%)", 1, -1], ["motor/gait_stride_regularity", "Stride regularity", 2, 1], ["motor/gait_asymmetry", "Gait asymmetry", 2, -1], ["motor/balance_sway_rms", "Sway RMS (m/s²)", 3, -1], ["motor/balance_jerk", "Sway jerk (m/s³)", 2, -1], ["motor/balance_path", "Sway path (/s)", 2, -1], ["motor/spiral_error_pct", "Spiral deviation (%)", 1, -1], ["motor/spiral_tremor_share", "Spiral tremor share", 2, -1]]],
       ["Voice measures", [["motor/ddk_rate", "Pa-ta-ka syll / s", 2, 1], ["motor/ddk_cv", "Pa-ta-ka rhythm CV", 2, -1], ["motor/voice_hnr", "Voice HNR (dB)", 1, 1], ["motor/voice_jitter_pct", "Voice jitter (%)", 2, -1], ["motor/voice_ppe", "Voice PPE", 3, -1], ["motor/voice_int_slope", "Voice loudness slope (dB/s)", 2, 1], ["motor/read_f0_sd_st", "Reading pitch var. (st)", 2, 1], ["motor/read_rate", "Reading rate (/s)", 2, 1]]],
@@ -3900,7 +3900,7 @@
         <div className="app-shell">
           <header className="app-header" style={{ gap: 10, justifyContent: "flex-start", alignItems: "center", flexDirection: "row" }}>
             <img src="/static/icon.svg" alt="" width="30" height="30" style={{ borderRadius: 8, display: "block" }} />
-            <div className="app-title">PDayMinder</div>
+            <div className="app-title">PDayMinder <span style={{ color: "var(--muted)", fontWeight: 400 }}>/ {(TABS.find((t) => t[0] === tab) || TABS[0])[1]}</span></div>
           </header>
 
           {tab === "qol" && (
@@ -4030,6 +4030,14 @@
               <ApiKeysCard />
               <DataCard days={days} setDays={setDays} settings={settings} />
               <SourcesCard />
+              <div className="card">
+                <div className="card-header"><div><div className="card-title">About</div><div className="card-subtitle">Where the tests, scores and reference ranges come from.</div></div></div>
+                <div className="controls-row" style={{ gap: 8, flexWrap: "wrap" }}>
+                  <a className="pill-btn" href="/bibliography" style={{ textDecoration: "none" }}>Annotated bibliography</a>
+                  <a className="pill-btn" href="https://github.com/andyhickl/pdayminder" style={{ textDecoration: "none" }}>Source code</a>
+                  <a className="pill-btn" href="/privacy" style={{ textDecoration: "none" }}>Privacy</a>
+                </div>
+              </div>
               <div className="card">
                 <div className="card-header"><div><div className="card-title">Account</div><div className="card-subtitle">Signed in. Sessions last 90 days per device.</div></div></div>
                 <form method="post" action="/logout"><button type="submit" className="pill-btn">Sign out</button></form>

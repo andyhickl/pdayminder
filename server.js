@@ -667,7 +667,9 @@ function mdToHtml(md) {
   const inline = (t) => esc(t)
     .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
     .replace(/_(.+?)_/g, "<em>$1</em>")
-    .replace(/\b((?:https?:\/\/)?(?:github\.com|cloud\.ouraring\.com)\/[\w./-]+)/g, (m) => `<a href="${m.startsWith("http") ? m : "https://" + m}">${m}</a>`)
+    .replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, '<a href="$2">$1</a>')
+    .replace(/(^|[^"(>\w])((?:https?:\/\/)[\w./?=&%#-]+)/g, (m, pre, url) => `${pre}<a href="${url}">${url}</a>`)
+    .replace(/\b((?:github\.com|cloud\.ouraring\.com)\/[\w./-]+)/g, (m) => `<a href="https://${m}">${m}</a>`)
     .replace(/([\w.+-]+@[\w-]+\.[\w.]+)/g, '<a href="mailto:$1">$1</a>');
   const out = [];
   let list = false;
@@ -688,10 +690,11 @@ function legalPage(file, title) {
     res.type("html").send(`<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>${title}</title><style>body{font-family:system-ui,-apple-system,sans-serif;max-width:720px;margin:40px auto;padding:0 20px;line-height:1.55;color:#1e293b}
 h1{font-size:26px}h2{font-size:18px;margin-top:28px}a{color:#0369a1}nav{font-size:14px;margin-bottom:24px}nav a{margin-right:14px}</style></head>
-<body><nav><a href="/privacy">Privacy Policy</a><a href="/terms">Terms of Service</a><a href="https://github.com/andyhickl/pdayminder">Source</a></nav>${mdToHtml(md)}</body></html>`);
+<body><nav><a href="/">App</a><a href="/bibliography">Bibliography</a><a href="/privacy">Privacy Policy</a><a href="/terms">Terms of Service</a><a href="https://github.com/andyhickl/pdayminder">Source</a></nav>${mdToHtml(md)}</body></html>`);
   };
 }
 app.get("/privacy", legalPage("privacy.md", "PDayMinder Privacy Policy"));
+app.get("/bibliography", legalPage("bibliography.md", "PDayMinder: Annotated Bibliography"));
 app.get("/terms", legalPage("terms.md", "PDayMinder Terms of Service"));
 
 // ---------- Oura OAuth2 ----------
