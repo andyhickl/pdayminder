@@ -3750,8 +3750,8 @@
     const TABS = [["qol", "QoL", "◉"], ["tests", "Tests", "✚"], ["trends", "Trends", "↗"], ["stats", "Stats", "Σ"], ["settings", "Settings", "⚙"]];
     const TAB_TAGLINES = { qol: "Track meds and QoL, one ring per day.", tests: "Short objective tests. Same conditions each time.", trends: "What moves with what.", stats: "The numbers behind the charts.", settings: "Integrations, keys, data." };
 
-    function Section({ title, subtitle, storageKey, children }) {
-      const [open, setOpen] = useState(() => { try { return localStorage.getItem("pdm-sec-" + storageKey) !== "closed"; } catch { return true; } });
+    function Section({ title, subtitle, storageKey, defaultOpen = true, children }) {
+      const [open, setOpen] = useState(() => { try { const v = localStorage.getItem("pdm-sec-" + storageKey); return v ? v !== "closed" : defaultOpen; } catch { return defaultOpen; } });
       useEffect(() => { try { localStorage.setItem("pdm-sec-" + storageKey, open ? "open" : "closed"); } catch {} }, [open]);
       return (
         <div className="section">
@@ -4132,12 +4132,21 @@
 
           {tab === "settings" && (
             <>
-              <SettingsCard settings={settings} onUpdate={(next) => setSettings(next)} />
-              <TrendMetricsCard settings={settings} onUpdate={(next) => setSettings(next)} />
-              <IntegrationsCard />
-              <ApiKeysCard />
-              <DataCard days={days} setDays={setDays} settings={settings} />
-              <SourcesCard />
+              <Section title="Profile" subtitle="Sleep window and medications." storageKey="set-profile">
+                <SettingsCard settings={settings} onUpdate={(next) => setSettings(next)} />
+              </Section>
+              <Section title="Trends" subtitle="Which synced metrics the Trends overlay picker offers." storageKey="set-trends" defaultOpen={false}>
+                <TrendMetricsCard settings={settings} onUpdate={(next) => setSettings(next)} />
+              </Section>
+              <Section title="Connections" subtitle="Oura, Health Auto Export, API keys for agents, and what has synced." storageKey="set-connections" defaultOpen={false}>
+                <IntegrationsCard />
+                <ApiKeysCard />
+                <SourcesCard />
+              </Section>
+              <Section title="Data" subtitle="Export, import, backup." storageKey="set-data" defaultOpen={false}>
+                <DataCard days={days} setDays={setDays} settings={settings} />
+              </Section>
+              <Section title="About and account" storageKey="set-about" defaultOpen={false}>
               <div className="card">
                 <div className="card-header"><div><div className="card-title">About</div><div className="card-subtitle">Where the tests, scores and reference ranges come from.</div></div></div>
                 <div className="controls-row" style={{ gap: 8, flexWrap: "wrap" }}>
@@ -4150,6 +4159,7 @@
                 <div className="card-header"><div><div className="card-title">Account</div><div className="card-subtitle">Signed in. Sessions last 90 days per device.</div></div></div>
                 <form method="post" action="/logout"><button type="submit" className="pill-btn">Sign out</button></form>
               </div>
+              </Section>
             </>
           )}
 
