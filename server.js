@@ -965,6 +965,12 @@ async function migrateScores() {
   await ensureFirstUser();
   await repairCumulative();
   await migrateScores();
+  // Intake metrics arrive as hourly sums; drop stray per-sample rows (from an automation run without aggregation)
+  // that sit inside an hour which also has an hour-aligned row, so the day total isn't counted twice.
+  await pool.query(`delete from observations o where o.source = 'hae' and o.metric ~ $1
+    and date_trunc('hour', o.ts) <> o.ts
+    and exists (select 1 from observations h where h.user_id = o.user_id and h.source = o.source and h.metric = o.metric
+                and h.ts = date_trunc('hour', o.ts))`, [SUMMED_RE.source]).catch((e) => console.error("intake dedupe", e.message));
   await pool.query(`delete from qol_ratings q where type <> 'rating'
     and not exists (select 1 from qol_ratings r where r.user_id = q.user_id and r.day = q.day and r.type = 'rating')
     and not exists (select 1 from med_doses d where d.user_id = q.user_id and d.day = q.day)`).catch((e) => console.error("placeholder cleanup", e.message));
