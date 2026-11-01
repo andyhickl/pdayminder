@@ -1584,7 +1584,7 @@
       ["hae/total_fat", "Fat (g)", "#fed7aa", 0],
       ["hae/fiber", "Fiber (g)", "#86efac", 0],
       ["hae/caffeine", "Caffeine (mg)", "#a3e635", 0],
-      ["hae/water", "Water (mL)", "#38bdf8", 0],
+      ["hae/dietary_water", "Water (mL)", "#38bdf8", 0],
       ["derived/first_meal_hour", "First meal (h)", "#fcd34d", 1],
       ["derived/last_meal_hour", "Last meal (h)", "#fde68a", 1],
     ];
@@ -3664,7 +3664,7 @@
       "hae/protein", "hae/fiber", "hae/caffeine", "derived/protein_near_dose"];
     const METRIC_LABELS = {
       "hae/dietary_energy": "Calories (kcal)", "hae/protein": "Protein (g)", "hae/carbohydrates": "Carbohydrates (g)", "hae/total_fat": "Fat (g)", "hae/saturated_fat": "Saturated fat (g)",
-      "hae/fiber": "Fiber (g)", "hae/sugar": "Sugar (g)", "hae/caffeine": "Caffeine (mg)", "hae/water": "Water (mL)", "hae/cholesterol": "Cholesterol (mg)",
+      "hae/fiber": "Fiber (g)", "hae/sugar": "Sugar (g)", "hae/caffeine": "Caffeine (mg)", "hae/dietary_water": "Water (mL)", "hae/cholesterol": "Cholesterol (mg)",
       "hae/sodium": "Sodium (mg)", "hae/potassium": "Potassium (mg)", "hae/calcium": "Calcium (mg)", "hae/iron": "Iron (mg)", "hae/magnesium": "Magnesium (mg)", "hae/zinc": "Zinc (mg)",
       "hae/vitamin_c": "Vitamin C (mg)", "hae/vitamin_d": "Vitamin D (µg)", "hae/vitamin_b12": "Vitamin B12 (µg)", "hae/vitamin_b6": "Vitamin B6 (mg)", "hae/folate": "Folate (µg)",
       "derived/protein_near_dose": "Protein within 90 min of a levodopa dose (g)", "derived/first_meal_hour": "First meal (hour of day)", "derived/last_meal_hour": "Last meal (hour of day)",
@@ -3807,7 +3807,7 @@
       ["Motor measures", [["motor/tremor_amp_cm", "Tremor amplitude (cm)", 2, -1], ["motor/tap_rate", "Taps / s", 2, 1], ["motor/tap_cv", "Tapping rhythm CV", 2, -1], ["motor/gait_cadence", "Cadence (steps/min)", 0, 1], ["motor/gait_step_cv", "Step variability (%)", 1, -1], ["motor/gait_stride_regularity", "Stride regularity", 2, 1], ["motor/gait_asymmetry", "Gait asymmetry", 2, -1], ["motor/balance_sway_rms", "Sway RMS (m/s²)", 3, -1], ["motor/balance_jerk", "Sway jerk (m/s³)", 2, -1], ["motor/balance_path", "Sway path (/s)", 2, -1], ["motor/spiral_error_pct", "Spiral deviation (%)", 1, -1], ["motor/spiral_tremor_share", "Spiral tremor share", 2, -1]]],
       ["Voice measures", [["motor/ddk_rate", "Pa-ta-ka syll / s", 2, 1], ["motor/ddk_cv", "Pa-ta-ka rhythm CV", 2, -1], ["motor/voice_hnr", "Voice HNR (dB)", 1, 1], ["motor/voice_jitter_pct", "Voice jitter (%)", 2, -1], ["motor/voice_ppe", "Voice PPE", 3, -1], ["motor/voice_int_slope", "Voice loudness slope (dB/s)", 2, 1], ["motor/read_f0_sd_st", "Reading pitch var. (st)", 2, 1], ["motor/read_rate", "Reading rate (/s)", 2, 1], ["motor/voice_mpt", "Max phonation (s)", 1, 1]]],
       ["Oura", [["oura/sleep_score", "Sleep score", 0, 1], ["oura/readiness_score", "Readiness", 0, 1], ["oura/total_sleep_h", "Sleep (h)", 1, 1], ["oura/deep_h", "Deep (h)", 1, 1], ["oura/avg_hrv", "Night HRV (ms)", 0, 1], ["oura/lowest_hr", "Lowest HR", 0, -1], ["oura/temperature_deviation", "Temp dev (°C)", 2, 0]]],
-      ["Nutrition", [["hae/dietary_energy", "Calories (kcal)", 0, 0], ["hae/protein", "Protein (g)", 0, 0], ["derived/protein_near_dose", "Protein near levodopa (g)", 0, -1], ["hae/carbohydrates", "Carbohydrates (g)", 0, 0], ["hae/total_fat", "Fat (g)", 0, 0], ["hae/fiber", "Fiber (g)", 0, 1], ["hae/sugar", "Sugar (g)", 0, -1], ["hae/caffeine", "Caffeine (mg)", 0, 0], ["hae/water", "Water (mL)", 0, 1], ["hae/sodium", "Sodium (mg)", 0, -1], ["hae/magnesium", "Magnesium (mg)", 0, 1], ["hae/vitamin_d", "Vitamin D (µg)", 1, 1], ["hae/vitamin_b12", "Vitamin B12 (µg)", 1, 1], ["derived/first_meal_hour", "First meal (h)", 1, 0], ["derived/last_meal_hour", "Last meal (h)", 1, 0]]],
+      ["Nutrition", [["hae/dietary_energy", "Calories (kcal)", 0, 0], ["hae/protein", "Protein (g)", 0, 0], ["derived/protein_near_dose", "Protein near levodopa (g)", 0, -1], ["hae/carbohydrates", "Carbohydrates (g)", 0, 0], ["hae/total_fat", "Fat (g)", 0, 0], ["hae/fiber", "Fiber (g)", 0, 1], ["hae/sugar", "Sugar (g)", 0, -1], ["hae/caffeine", "Caffeine (mg)", 0, 0], ["hae/dietary_water", "Water (mL)", 0, 1], ["hae/sodium", "Sodium (mg)", 0, -1], ["hae/magnesium", "Magnesium (mg)", 0, 1], ["hae/vitamin_d", "Vitamin D (µg)", 1, 1], ["hae/vitamin_b12", "Vitamin B12 (µg)", 1, 1], ["derived/first_meal_hour", "First meal (h)", 1, 0], ["derived/last_meal_hour", "Last meal (h)", 1, 0]]],
       ["Watch", [["hae/resting_heart_rate", "Resting HR", 0, -1], ["hae/heart_rate_variability", "Daytime HRV (ms)", 0, 1], ["hae/step_count", "Steps", 0, 1], ["hae/walking_speed", "Walking speed", 2, 1], ["hae/walking_step_length", "Step length", 2, 1], ["hae/walking_double_support_percentage", "Double support %", 1, -1], ["hae/walking_asymmetry_percentage", "Asymmetry %", 1, -1]]],
     ];
     // Relative position of the latest value against the baseline as a 1–5 level: 3 = about baseline,
