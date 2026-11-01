@@ -4014,7 +4014,7 @@
 
           {tab === "qol" && (
             <>
-
+          <Section title="Date" subtitle={formatPrettyDate(selectedDate)} storageKey="qol-date" defaultOpen={false}>
           <div className="card">
             <div className="card-header">
               <div>
@@ -4058,7 +4058,8 @@
               onSelect={handleCalendarSelect}
             />
           </div>
-
+          </Section>
+          <Section title="Today" subtitle="Tap a segment to rate it; log doses as they happen." storageKey="qol-ring">
           <div className="card">
             <div className="card-header">
               <div>
@@ -4092,8 +4093,10 @@
               )) : "none logged yet"}
             </div>
           </div>
-
+          </Section>
+          <Section title="Recent days" subtitle="A week at a glance; tap any block to rate it." storageKey="qol-summary">
               <QoLSummaryCard days={days} onCellClick={handleSummaryCellClick} selectedKey={dateKey} />
+          </Section>
             </>
           )}
 
@@ -4121,10 +4124,18 @@
                 <div className="day-nav-date" style={{ textDecoration: "none", cursor: "default" }}>{formatPrettyDate(selectedDate)}</div>
                 <button className="day-nav-btn" type="button" onClick={() => goToOffsetDay(1)}><span>Next</span> <span>→</span></button>
               </div>
-              <DayVitalsCard dateKey={dateKey} days={days} />
-              <TrendsCard settings={settings} />
-              <VitalsTrendsCard />
-              <WorkoutsCard />
+              <Section title="Day" subtitle="Hourly vitals over the selected day's QoL and doses." storageKey="tr-day">
+                <DayVitalsCard dateKey={dateKey} days={days} />
+              </Section>
+              <Section title="QoL correlations" subtitle="Daily QoL against doses and any synced metric, with lag." storageKey="tr-corr">
+                <TrendsCard settings={settings} />
+              </Section>
+              <Section title="Vitals and test trends" subtitle="Sparklines, 7-day smoothed, for every synced measure." storageKey="tr-vitals" defaultOpen={false}>
+                <VitalsTrendsCard />
+              </Section>
+              <Section title="Workouts" storageKey="tr-workouts" defaultOpen={false}>
+                <WorkoutsCard />
+              </Section>
             </>
           )}
 

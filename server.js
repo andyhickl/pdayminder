@@ -627,13 +627,13 @@ app.get("/api/day", requireAuth, async (req, res) => {
 // Several daily metrics at once, pivoted: [{day, "hae/heart_rate_variability": 48.2, ...}]
 app.get("/api/daily-multi", requireAuth, async (req, res) => {
   const days = Math.min(365, Number(req.query.days) || 30);
-  const wanted = String(req.query.metrics || "").split(",").map((x) => x.trim()).filter(Boolean).slice(0, 20);
+  const wanted = String(req.query.metrics || "").split(",").map((x) => x.trim()).filter(Boolean).slice(0, 80);
   if (!wanted.length) return res.json([]);
   const pairs = wanted.map((w) => w.split("/"));
   const { rows } = await pool.query(
     `select to_char((ts at time zone $2)::date,'YYYY-MM-DD') as day, source || '/' || metric as key, avg(value) as v
      from observations
-     where user_id = $1 and (ts at time zone $2)::date >= (current_date at time zone $2)::date - ($3::int - 1)
+     where user_id = $1 and (ts at time zone $2)::date >= (now() at time zone $2)::date - ($3::int - 1)
        and (source, metric) in (${pairs.map((_, i) => `($${4 + i * 2}, $${5 + i * 2})`).join(",")})
      group by 1, 2 order by 1`,
     [req.user.id, TZ, days, ...pairs.flat()]
