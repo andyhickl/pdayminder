@@ -1260,7 +1260,7 @@
         <div className="card settings-card">
           <div className="card-header">
             <div>
-              <div className="card-title">Settings</div>
+              <div className="card-title">Profile settings</div>
               <div className="card-subtitle">
                 Sleep window (pre-fills the ring on new days) and your medication list.
               </div>
@@ -1472,24 +1472,36 @@
       );
     }
 
+    const prevDateKey = (k) => { const [y, m, d] = k.split("-").map(Number); return toDateKey(new Date(y, m - 1, d - 1)); };
+    // Tiles: [label, getter -> number|null, decimals, unit, direction (1 higher is better, -1 lower is better, 0 neutral)]
+    const DAY_TILES = [
+      ["Sleep", (x) => x.oura.total_sleep_h ?? x.daily.sleep_analysis_totalsleep ?? null, 1, " h", 1],
+      ["Readiness", (x) => x.oura.readiness_score ?? null, 0, "", 1],
+      ["Night HRV", (x) => x.oura.avg_hrv ?? null, 0, " ms", 1],
+      ["Deep", (x) => x.oura.deep_h ?? x.daily.sleep_analysis_deep ?? null, 1, " h", 1],
+      ["Resting HR", (x) => x.oura.lowest_hr ?? x.daily.resting_heart_rate ?? null, 0, " bpm", -1],
+      ["Steps", (x) => x.daily.step_count ?? x.oura.steps ?? null, 0, "", 1],
+      ["Walk speed", (x) => x.daily.walking_speed ?? null, 2, "", 1],
+      ["Dbl support", (x) => x.daily.walking_double_support_percentage ?? null, 1, "%", -1],
+      ["Asymmetry", (x) => x.daily.walking_asymmetry_percentage ?? null, 1, "%", -1],
+    ];
     function DayVitalsCard({ dateKey, days }) {
       // re-fetch when the day's local QoL/meds change too, so bands and dose lines stay in sync
       const localDay = days[dateKey];
       const sig = localDay ? JSON.stringify([localDay.segments, localDay.meds]) : "";
       const [data, err] = useJson(`/api/day?day=${dateKey}`, [dateKey, sig]);
+      const [prev] = useJson(`/api/day?day=${prevDateKey(dateKey)}`, [dateKey]);
       const fmt = (v, d = 0) => (v == null ? "–" : Number(v).toFixed(d));
-      const d = data ? data.daily : {};
-      const o = data ? data.oura || {} : {};
-      const stats = data ? [
-        ["Sleep", o.total_sleep_h != null ? fmt(o.total_sleep_h, 1) + " h" : d.sleep_analysis_totalsleep != null ? fmt(d.sleep_analysis_totalsleep, 1) + " h" : "–"],
-        ["Readiness", o.readiness_score != null ? fmt(o.readiness_score) : "–"],
-        ["Night HRV", o.avg_hrv != null ? fmt(o.avg_hrv) + " ms" : "–"],
-        ["Deep", o.deep_h != null ? fmt(o.deep_h, 1) + " h" : d.sleep_analysis_deep != null ? fmt(d.sleep_analysis_deep, 1) + " h" : "–"],
-        ["Resting HR", o.lowest_hr != null ? fmt(o.lowest_hr) + " bpm" : d.resting_heart_rate != null ? fmt(d.resting_heart_rate) + " bpm" : "–"],
-        ["Steps", d.step_count != null ? Math.round(d.step_count).toLocaleString() : "–"],
-        ["Walk speed", d.walking_speed != null ? fmt(d.walking_speed, 2) : "–"],
-        ["Dbl support", d.walking_double_support_percentage != null ? fmt(d.walking_double_support_percentage, 1) + "%" : "–"],
-      ] : [];
+      const isToday = dateKey === toDateKey(new Date());
+      const stats = data ? DAY_TILES.map(([label, get, dec, unit, dir]) => {
+        const v = get({ daily: data.daily || {}, oura: data.oura || {} });
+        if (v == null) return null; // not synced yet (the Watch's daily totals arrive the next morning)
+        const pv = prev ? get({ daily: prev.daily || {}, oura: prev.oura || {} }) : null;
+        let arrow = null;
+        if (pv != null && pv !== 0 && Math.abs(v - pv) / Math.abs(pv) >= 0.02) { const up = v > pv; const good = dir === 0 ? null : (up ? dir > 0 : dir < 0); arrow = { up, good }; }
+        const partial = isToday && label === "Steps";
+        return [label + (partial ? " (so far)" : ""), (label === "Steps" ? Math.round(v).toLocaleString() : fmt(v, dec)) + unit, arrow, pv == null ? null : fmt(pv, dec) + unit];
+      }).filter(Boolean) : [];
       const hasHourly = data && (data.hourly.heart_rate_avg || []).length > 0;
       return (
         <div className="card">
@@ -1502,16 +1514,20 @@
           {err && <div className="card-subtitle">Couldn't load ({err}).</div>}
           {data && !hasHourly && <div className="card-subtitle">No hourly data synced for this day yet.</div>}
           {hasHourly && <DayVitalsChart data={data} />}
-          {data && (
+          {data && stats.length > 0 && (
             <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8, marginTop: 10 }}>
-              {stats.map(([k, v]) => (
-                <div key={k} style={{ background: "#0f172a", borderRadius: 8, padding: "8px 10px" }}>
+              {stats.map(([k, v, arrow, pv]) => (
+                <div key={k} style={{ background: "#0f172a", borderRadius: 8, padding: "8px 10px" }} title={pv ? `previous day ${pv}` : ""}>
                   <div style={{ fontSize: 11, color: "#94a3b8" }}>{k}</div>
-                  <div style={{ fontSize: 16, fontWeight: 600 }}>{v}</div>
+                  <div style={{ fontSize: 16, fontWeight: 600, display: "flex", alignItems: "center", gap: 4 }}>
+                    {v}
+                    {arrow && <span style={{ fontSize: 12, color: arrow.good == null ? "#94a3b8" : arrow.good ? "#22c55e" : "#ef4444" }}>{arrow.up ? "▲" : "▼"}</span>}
+                  </div>
                 </div>
               ))}
             </div>
           )}
+          {data && stats.length > 0 && <div style={{ fontSize: 10, color: "#64748b", marginTop: 6 }}>Arrows compare with the previous day (green = better, red = worse, for that metric's direction). Watch gait totals and step counts arrive the next morning, so they're hidden until then; today's steps show Oura's running count.</div>}
           {data && data.workouts.length > 0 && (
             <div className="med-list" style={{ marginTop: 8 }}>
               Workouts: {data.workouts.map((w) => `${w.name || "workout"} ${w.minutes ? Math.round(w.minutes) + " min" : ""}`).join(", ")}
@@ -3193,8 +3209,8 @@
         <div className="card">
           <div className="card-header">
             <div>
-              <div className="card-title">Trends</div>
-              <div className="card-subtitle">Daily mean QoL (line) with doses per day (bars), plus any synced metric.</div>
+              <div className="card-title">QoL correlations</div>
+              <div className="card-subtitle">Daily mean QoL (line) with levodopa doses per day (bars), plus any synced metric on a second axis.</div>
             </div>
           </div>
           <div className="controls-row" style={{ flexWrap: "wrap", gap: 8 }}>
@@ -3633,7 +3649,7 @@
         <div className="card">
           <div className="card-header">
             <div>
-              <div className="card-title">Status</div>
+              <div className="card-title">Status vs benchmarks</div>
               <div className="card-subtitle">Composite test scores (1–5, 5 best), daily means over 30 days. Left: vs healthy reference. Right: vs your personal baseline, which needs five saved tests of each kind before it scores anything. They answer different questions; both can be true at once.</div>
             </div>
           </div>
@@ -3740,8 +3756,8 @@
             const present = rows.filter(([k]) => data && data[k] && data[k].n30 > 0);
             if (data && !present.length) return null;
             return (
-              <div className="card" key={group}>
-                <div className="card-header"><div><div className="card-title">{group}</div><div className="card-subtitle">Daily values; means over the last 7, 14 and 30 days; min, max and SD over 30 days; baseline = days 8–90 ago.</div></div></div>
+              <Section key={group} title={group} subtitle="Daily values; 7/14/30-day means; min, max, SD over 30 days; baseline = days 8–90 ago." storageKey={"stats-" + group.toLowerCase().replace(/[^a-z]+/g, "-")}>
+              <div className="card">
                 <div className="stats-list">
                   {(data ? present : rows).map(([k, label, d, dir, kind]) => {
                     const r = data && data[k];
@@ -3769,6 +3785,7 @@
                   })}
                 </div>
               </div>
+              </Section>
             );
           })}
         </>
@@ -3909,7 +3926,7 @@
           <div className="card">
             <div className="card-header">
               <div>
-                <div className="card-title">Day view</div>
+                <div className="card-title">Date picker</div>
                 <div className="card-subtitle">One page per day. Arrows or calendar to change.</div>
               </div>
             </div>
@@ -4007,7 +4024,6 @@
 
           {tab === "trends" && (
             <>
-              <StatusCard />
               <div className="day-nav" style={{ marginTop: 0 }}>
                 <button className="day-nav-btn" type="button" onClick={() => goToOffsetDay(-1)}><span>←</span> <span>Prev</span></button>
                 <div className="day-nav-date" style={{ textDecoration: "none", cursor: "default" }}>{formatPrettyDate(selectedDate)}</div>
@@ -4020,7 +4036,7 @@
             </>
           )}
 
-          {tab === "stats" && <StatsTab />}
+          {tab === "stats" && <><StatusCard /><StatsTab /></>}
 
           {tab === "settings" && (
             <>
