@@ -47,6 +47,9 @@ The UCI telemonitoring set: 42 PD patients, 5,875 recordings over six months wit
 **Boersma P, Weenink D. Praat: doing phonetics by computer; Jadoul Y, Thompson B, de Boer B. Introducing Parselmouth. Journal of Phonetics 2018;71:1–15.**
 Reference implementation for jitter, shimmer and HNR. _Validation:_ our analyser matches Praat on synthetic phonations for F0 (exact), jitter (within ~0.02 points), HNR (within ~1 dB with noise present); shimmer reads about a third lower on step-change test tones.
 
+**Maslan J, Leng X, Rees C, Blalock D, Butler SG. Maximum phonation time in healthy older adults. Journal of Voice 2011;25(6):709–713.**
+Normative hold times for sustained /a/ in healthy adults; most land between about 15 and 25 s, with men slightly longer and a slow decline with age. _Used for:_ the 20 ± 6 s reference behind `voice_mpt_norm`. Reduced phonation time in PD reflects weaker breath support and incomplete vocal-fold closure and improves with LSVT-style voice therapy, which is why it sits outside the Voice composite as a slow, therapy-sensitive measure.
+
 ## Voice: pa-ta-ka, reading, levodopa response
 
 **Rusz J, Cmejla R, Ruzickova H, Ruzicka E. Quantitative acoustic measurements for characterization of speech and voice disorders in early untreated Parkinson's disease. Journal of the Acoustical Society of America 2011;129(1):350–367.** [https://www.sami.fel.cvut.cz/Articles/Rusz_et_al_FA2011.pdf](https://www.sami.fel.cvut.cz/Articles/Rusz_et_al_FA2011.pdf)

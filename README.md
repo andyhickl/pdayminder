@@ -105,6 +105,12 @@ Scoring: `voice_score` (0–4) counts how many of jitter, shimmer, HNR, PPE are 
 >1 SD (needs 5 prior tests). Group-reference labels were removed: the UCI reference used studio mics and the groups
 overlap (AUC ~0.75), so single values can't say anything about diagnosis; the card shows only a muted percentile.
 
+Max phonation mode: the same card can record one hold of "ahh" for as long as the breath lasts (up to 60 s, Done to
+stop). `voice_mpt` = the longest continuous voiced stretch in seconds; `voice_mpt_norm` scores it 1–5 against ~20 ± 6 s
+for healthy adults (Maslan 2011), `voice_mpt_score` against the user's own prior holds (needs 5). It tracks breath
+support and glottal closure, moves with voice therapy (LSVT), and is a slow measure: weekly is enough. It is not part
+of the Voice composite.
+
 ## Pa-ta-ka / DDK test (motor/ddk_*)
 10 s of repeated /pa-ta-ka/. Syllable nuclei = peaks of a 10 ms RMS envelope (15 ms smoothing), >=80 ms apart, with a
 valley <=80% of the lower neighbour (no ASR). `coverage` = share of the speech span inside the detected run; the card

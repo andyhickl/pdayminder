@@ -1572,6 +1572,7 @@
       ["motor/voice_jitter_pct", "Voice jitter (%)", "#a78bfa", 2],
       ["motor/voice_ppe", "Voice PPE", "#d8b4fe", 3],
       ["motor/voice_int_slope", "Voice loudness slope (dB/s)", "#e9d5ff", 2],
+      ["motor/voice_mpt", "Max phonation (s)", "#f5d0fe", 1],
       ["motor/spiral_error_pct", "Spiral deviation (%)", "#fbbf24", 1],
     ];
     function rolling(rows, key, n = 7) {
@@ -2064,7 +2065,16 @@
       gait_cadence: { mean: 112, sd: 9 }, gait_step_cv: { mean: 2.5, sd: 1.5 },
       // Quiet stance, eyes open, trunk accelerometer (Mancini et al. 2012, healthy controls): RMS sway ~0.08±0.03 m/s², jerk ~1.0±0.5 m/s³ — approximate for a chest-held phone.
       balance_sway_rms: { mean: 0.08, sd: 0.03 }, balance_jerk: { mean: 1.0, sd: 0.5 },
+      // Maximum phonation time, healthy adults (Maslan et al. 2011 and clinical norms): ~20 ± 6 s; drops with reduced breath support and glottal closure in PD.
+      voice_mpt: { mean: 20, sd: 6 },
     };
+    // Single-measure score against the person's own history: z vs prior mean/SD, same bins as normScore. Null until 5 priors.
+    function singleBaselineScore(value, history, higherIsWorse) {
+      if (!history || history.length < 5) return { score: null, n: history ? history.length : 0 };
+      const mean = history.reduce((a, b) => a + b, 0) / history.length; const sd = Math.sqrt(history.reduce((a, b) => a + (b - mean) ** 2, 0) / history.length) || 1e-9;
+      const z = ((value - mean) / sd) * (higherIsWorse ? -1 : 1);
+      return { score: z >= -0.5 ? 5 : z >= -1 ? 4 : z >= -1.5 ? 3 : z >= -2 ? 2 : 1, n: history.length, z };
+    }
     function NormLine({ norm, what }) {
       if (!norm) return null;
       return (
@@ -2123,7 +2133,7 @@
       let run = [], longest = [];
       frames.forEach((f) => { if (f.voiced) { run.push(f); if (run.length > longest.length) longest = run; } else run = []; });
       const voicedSeconds = frames.filter((f) => f.voiced).length * 0.02;
-      if (longest.length < 10) return { voicedSeconds, tooShort: true };
+      if (longest.length < 10) return { voicedSeconds, maxPhonation: longest.length * 0.02, tooShort: true };
       const f0s = longest.map((f) => f.f0);
       const medF0 = [...f0s].sort((a, b) => a - b)[Math.floor(f0s.length / 2)];
       const T = sampleRate / medF0;
@@ -2212,12 +2222,17 @@
 
     function VoiceTestCard() {
       const [phase, setPhase] = useState("idle");
+      const [mode, setMode] = useState("steady"); // steady (5 s, jitter/shimmer/HNR/PPE) | mpt (hold as long as you can)
+      const [mptResult, setMptResult] = useState(null);
+      const [mptBase, setMptBase] = useState(null);
       const [left, setLeft] = useState(VOICE_SECONDS);
       const [level, setLevel] = useState(0);
       const [result, setResult] = useState(null);
       const [note, setNote] = useState("");
       const [msg, setMsg] = useState("");
       const [history] = useJson("/api/observations?source=motor&metric=voice_hnr&limit=60", [phase]);
+      const [mptHistory] = useJson("/api/observations?source=motor&metric=voice_mpt&limit=60", [phase]);
+      useEffect(() => { if (phase === "mptdone" && mptResult && mptHistory) setMptBase(singleBaselineScore(mptResult.mpt, mptHistory.map((o) => o.value), false)); }, [phase, mptHistory]);
       const audioRef = useRef(null); // keep nodes referenced so Safari doesn't GC the processor
       const cancel = () => { const a = audioRef.current; if (a) { try { clearInterval(a.tick); clearTimeout(a.done); a.proc.disconnect(); a.src.disconnect(); a.gain.disconnect(); a.stream.getTracks().forEach((t) => t.stop()); a.ctx.close(); } catch {} audioRef.current = null; } setPhase("idle"); setMsg(""); };
       const start = async () => {
@@ -2239,20 +2254,38 @@
         proc.onaudioprocess = (e) => { const d = e.inputBuffer.getChannelData(0); chunks.push(new Float32Array(d)); let s2 = 0; for (let i = 0; i < d.length; i++) { s2 += d[i] * d[i]; if (Math.abs(d[i]) > peak) peak = Math.abs(d[i]); } setLevel(Math.sqrt(s2 / d.length)); };
         src.connect(proc); proc.connect(gain); gain.connect(ctx.destination);
         audioRef.current = { ctx, src, proc, gain, stream };
-        setPhase("recording"); setLeft(VOICE_SECONDS);
+        const isMpt = mode === "mpt"; const limit = isMpt ? 60 : VOICE_SECONDS;
+        setPhase("recording"); setLeft(isMpt ? 0 : VOICE_SECONDS);
         const t0 = performance.now();
-        const tick = setInterval(() => setLeft(Math.max(0, Math.ceil(VOICE_SECONDS - (performance.now() - t0) / 1000))), 200);
+        const tick = setInterval(() => setLeft(isMpt ? (performance.now() - t0) / 1000 : Math.max(0, Math.ceil(VOICE_SECONDS - (performance.now() - t0) / 1000))), 200);
         audioRef.current.tick = tick;
-        audioRef.current.done = setTimeout(() => {
-          clearInterval(tick);
+        const finish = () => {
+          clearInterval(tick); clearTimeout(audioRef.current && audioRef.current.done);
           try { proc.disconnect(); src.disconnect(); gain.disconnect(); } catch {}
           stream.getTracks().forEach((t) => t.stop()); const sr = ctx.sampleRate; ctx.close(); audioRef.current = null;
           const total = chunks.reduce((a, c) => a + c.length, 0); const pcm = new Float32Array(total); let o = 0; chunks.forEach((c) => { pcm.set(c, o); o += c.length; });
           if (total === 0) { setPhase("idle"); setMsg("No audio reached the page (0 samples). On iPhone use Safari (or the home-screen app), allow the microphone, and make sure the ring/silent switch isn't blocking audio."); return; }
           const res = analyzeVoice(pcm, sr);
+          if (isMpt) {
+            if (!res || res.voicedSeconds < 1) { setPhase("idle"); setMsg(`Hardly any voiced sound captured (${res ? res.voicedSeconds.toFixed(1) : 0} s). Take a deep breath and hold "ahh" until you run out.`); return; }
+            setMptResult({ mpt: res.maxPhonation != null ? res.maxPhonation : res.voicedSeconds, voiced: res.voicedSeconds, captured: total / sr, f0: res.meanF0 || null, loudnessDb: res.loudnessDb != null ? res.loudnessDb : null, intSlope: res.intSlope != null ? res.intSlope : null });
+            setMptBase(null); setPhase("mptdone"); return;
+          }
           if (!res || res.tooShort) { setPhase("idle"); setMsg(`Not enough steady voiced sound (${res ? res.voicedSeconds.toFixed(1) : 0} s voiced of ${(total / sr).toFixed(1)} s captured, peak level ${(peak * 100).toFixed(0)}%). Hold a steady "ahh" about 15 cm from the phone.`); return; }
           setResult(res); setPhase("done");
-        }, VOICE_SECONDS * 1000 + 200);
+        };
+        audioRef.current.finish = finish;
+        audioRef.current.done = setTimeout(finish, limit * 1000 + 200);
+      };
+      const stopMpt = () => { const a = audioRef.current; if (a && a.finish) a.finish(); };
+      const saveMpt = async () => {
+        const ts = new Date().toISOString();
+        const nrm = normScore([{ value: mptResult.mpt, ...NORMS.voice_mpt }]);
+        const raw = { mode: "mpt", note: note || null, voicedSeconds: Number(mptResult.voiced.toFixed(2)), captured: Number(mptResult.captured.toFixed(1)), ...doseContextNow() };
+        const items = [["voice_mpt", Number(mptResult.mpt.toFixed(2))], ["voice_mpt_norm", nrm ? nrm.score : null], ["voice_mpt_score", mptBase && mptBase.score != null ? mptBase.score : null]].filter(([, v]) => v != null)
+          .map(([metric, value]) => ({ ts, source: "motor", metric, value, raw }));
+        const r = await apiFetch("/api/observations", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(items) });
+        if (r.ok) { setPhase("idle"); setMptResult(null); setNote(""); setMsg("Saved."); } else setMsg("Save failed.");
       };
       const save = async () => {
         const ts = new Date().toISOString();
@@ -2283,14 +2316,46 @@
               <div className="card-subtitle">Hold a steady "ahh" at a comfortable pitch and volume for 5 s, phone about 15 cm from your mouth, same quiet room each time.</div>
             </div>
           </div>
-          {phase === "idle" && <div className="controls-row"><button type="button" className="pill-btn primary" onClick={start}>Start 5-second recording</button></div>}
+          {phase === "idle" && (
+            <>
+              <div className="controls-row" style={{ gap: 8, flexWrap: "wrap" }}>
+                <button type="button" className={"pill-btn" + (mode === "steady" ? " primary" : "")} onClick={() => setMode("steady")}>steady 5 s (quality)</button>
+                <button type="button" className={"pill-btn" + (mode === "mpt" ? " primary" : "")} onClick={() => setMode("mpt")}>max phonation (hold as long as you can)</button>
+              </div>
+              {mode === "mpt" && <div className="card-subtitle" style={{ marginTop: 4 }}>Take a deep breath, then hold "ahh" at a comfortable pitch and volume until you run out of air. Tap Done when you stop (it also stops at 60 s). Healthy adults manage roughly 15–25 s; this tracks breath support and vocal-fold closure, and responds to voice therapy.</div>}
+              <div className="controls-row" style={{ marginTop: 6 }}><button type="button" className="pill-btn primary" onClick={start}>{mode === "mpt" ? "Start, then hold as long as you can" : "Start 5-second recording"}</button></div>
+            </>
+          )}
           {phase === "recording" && (
             <div style={{ textAlign: "center", padding: "14px 0" }}>
-              <div style={{ fontSize: 48, fontWeight: 700 }}>{left}</div>
+              <div style={{ fontSize: 48, fontWeight: 700 }}>{mode === "mpt" ? left.toFixed(1) + " s" : left}</div>
               <div style={{ height: 8, background: "#0f172a", borderRadius: 4, margin: "8px 40px" }}><div style={{ height: 8, borderRadius: 4, background: "#a3e635", width: `${Math.min(100, level * 400)}%` }} /></div>
               <div className="card-subtitle">Say "ahhhh"…</div>
+              {mode === "mpt" && <button type="button" className="pill-btn primary" style={{ marginTop: 8, marginRight: 8 }} onClick={stopMpt}>Done</button>}
               <button type="button" className="pill-btn" style={{ marginTop: 8 }} onClick={cancel}>Cancel</button>
             </div>
+          )}
+          {phase === "mptdone" && mptResult && (
+            <>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8, marginTop: 6 }}>
+                {[["Max phonation", mptResult.mpt.toFixed(1) + " s"], ["Voiced total", mptResult.voiced.toFixed(1) + " s"], ["Pitch", mptResult.f0 ? Math.round(mptResult.f0) + " Hz" : "–"]].map(([k, v]) => (
+                  <div key={k} style={{ background: "#0f172a", borderRadius: 8, padding: "8px 10px" }}><div style={{ fontSize: 11, color: "#94a3b8" }}>{k}</div><div style={{ fontSize: 16, fontWeight: 600 }}>{v}</div></div>
+                ))}
+              </div>
+              <div style={{ background: "#0f172a", borderRadius: 8, padding: "8px 10px", marginTop: 8 }}>
+                <div style={{ fontSize: 11, color: "#94a3b8" }}>Score vs your own baseline (1–5)</div>
+                {mptBase == null ? <div style={{ fontSize: 13 }}>…</div> : mptBase.score == null ? <div style={{ fontSize: 13 }}>Building baseline: {mptBase.n} of 5 saved. No score until then.</div>
+                  : <div style={{ fontSize: 16, fontWeight: 600, color: ratingColor(mptBase.score) }}>{mptBase.score} <span style={{ fontSize: 11, fontWeight: 400, color: "#94a3b8" }}>· z = {mptBase.z.toFixed(2)} vs your {mptBase.n} prior holds</span></div>}
+              </div>
+              <NormLine norm={normScore([{ value: mptResult.mpt, ...NORMS.voice_mpt }])} what="hold time vs ~20 ± 6 s for healthy adults" />
+              <div style={{ fontSize: 10, color: "#64748b", marginTop: 6 }}>Max phonation time = the longest continuous voiced stretch. A slow measure: weekly is plenty. Not part of the Voice composite.</div>
+              <DoseStateLine />
+              <div className="controls-row" style={{ gap: 8, marginTop: 6 }}>
+                <input value={note} onChange={(e) => setNote(e.target.value)} placeholder="Note (e.g. pre-dose)" style={{ flex: 1, background: "#0f172a", color: "#e2e8f0", border: "1px solid #334155", borderRadius: 8, padding: "8px 10px", fontSize: 14 }} />
+                <button type="button" className="pill-btn primary" onClick={saveMpt}>Save</button>
+                <button type="button" className="pill-btn" onClick={() => { setPhase("idle"); setMptResult(null); }}>Discard</button>
+              </div>
+            </>
           )}
           {phase === "done" && result && (
             <>
@@ -2328,7 +2393,17 @@
             </>
           )}
           {msg && <div className="card-subtitle" style={{ marginTop: 6, color: msg === "Saved." ? "#a3e635" : "#f87171" }}>{msg}</div>}
-          {hist.length > 1 && (
+          {mode === "mpt" && mptHistory && mptHistory.length > 1 && (
+            <div style={{ marginTop: 10 }}>
+              <div style={{ fontSize: 11, color: "#94a3b8" }}>Max phonation (s), last {mptHistory.length} holds · higher is better</div>
+              <svg viewBox="0 0 600 60" style={{ width: "100%", height: 60, display: "block" }}>
+                {(() => { const h = [...mptHistory].reverse(); const vals = h.map((x) => x.value); const hi = Math.max(30, ...vals); const x = (i) => 10 + (580 * i) / Math.max(1, h.length - 1); const y = (v) => 52 - (46 * v) / hi;
+                  return <><line x1="10" x2="590" y1={y(20)} y2={y(20)} stroke="#334155" strokeDasharray="3 3" /><path d={"M" + h.map((o, i) => `${x(i).toFixed(1)} ${y(o.value).toFixed(1)}`).join(" L")} fill="none" stroke="#c084fc" strokeWidth="1.5" />
+                    {h.map((o, i) => <circle key={i} cx={x(i)} cy={y(o.value)} r="2.5" fill="#c084fc"><title>{new Date(o.ts).toLocaleString()} · {o.value.toFixed(1)} s{o.raw && o.raw.note ? " · " + o.raw.note : ""}</title></circle>)}</>; })()}
+              </svg>
+            </div>
+          )}
+          {mode !== "mpt" && hist.length > 1 && (
             <div style={{ marginTop: 10 }}>
               <div style={{ fontSize: 11, color: "#94a3b8" }}>HNR (dB), last {hist.length} tests · higher = clearer voice</div>
               <svg viewBox="0 0 600 60" style={{ width: "100%", height: 60, display: "block" }}>
@@ -3575,6 +3650,7 @@
       "motor/spiral_error_pct": "Spiral deviation %", "motor/spiral_tremor_share": "Spiral tremor share",
       "motor/gait_score": "Gait score", "motor/gait_cadence": "Cadence (steps/min)", "motor/gait_step_cv": "Step variability %", "motor/gait_asymmetry": "Gait asymmetry", "motor/gait_stride_regularity": "Stride regularity",
       "motor/ddk_norm": "Pa-ta-ka vs healthy", "motor/read_norm": "Reading vs healthy", "motor/voice_norm": "Vowel vs healthy", "motor/gait_norm": "Gait vs healthy",
+      "motor/voice_mpt": "Max phonation (s)", "motor/voice_mpt_norm": "Max phonation vs healthy", "motor/voice_mpt_score": "Max phonation score",
       "motor/balance_score": "Balance score", "motor/balance_norm": "Balance vs healthy", "motor/balance_sway_rms": "Sway RMS", "motor/balance_jerk": "Sway jerk", "motor/balance_path": "Sway path", "motor/balance_area": "Sway area",
     };
     const metricLabel = (k) => METRIC_LABELS[k] || k.replace("/", " · ");
@@ -3696,11 +3772,11 @@
     const STAT_GROUPS = [
       ["QoL & doses", [["qol", "Mean QoL (1–5)", 2, 1, "score"], ["doses", "Levodopa doses / day", 1, 0], ["rated", "Rated blocks / day", 1, 0]]],
       ["Test scores vs healthy reference (1–5)", [["rollup:overall_norm", "Overall", 1, 1, "score"], ["rollup:motor_norm", "Motor", 1, 1, "score"], ["motor/tremor_score", "Tremor (UPDRS-based)", 1, 1, "score"], ["motor/tap_score", "Tapping", 1, 1, "score"], ["motor/gait_norm", "Gait (cadence, variability)", 1, 1, "score"], ["motor/balance_norm", "Balance (sway, jerk)", 1, 1, "score"],
-        ["rollup:voice_norm", "Voice", 1, 1, "score"], ["motor/ddk_norm", "Pa-ta-ka rate", 1, 1, "score"], ["motor/voice_norm", "Sustained vowel (jitter, PPE)", 1, 1, "score"], ["motor/read_norm", "Reading pitch variability", 1, 1, "score"]]],
+        ["rollup:voice_norm", "Voice", 1, 1, "score"], ["motor/ddk_norm", "Pa-ta-ka rate", 1, 1, "score"], ["motor/voice_norm", "Sustained vowel (jitter, PPE)", 1, 1, "score"], ["motor/read_norm", "Reading pitch variability", 1, 1, "score"], ["motor/voice_mpt_norm", "Max phonation time", 1, 1, "score"]]],
       ["Test scores vs personal baseline (1–5)", [["rollup:overall_base", "Overall", 1, 1, "score"], ["rollup:motor_base", "Motor", 1, 1, "score"], ["motor/gait_score", "Gait", 1, 1, "score"], ["motor/balance_score", "Balance", 1, 1, "score"],
-        ["rollup:voice_base", "Voice", 1, 1, "score"], ["motor/ddk_score", "Pa-ta-ka", 1, 1, "score"], ["motor/voice_score", "Sustained vowel", 1, 1, "score"], ["motor/read_score", "Reading", 1, 1, "score"]]],
+        ["rollup:voice_base", "Voice", 1, 1, "score"], ["motor/ddk_score", "Pa-ta-ka", 1, 1, "score"], ["motor/voice_score", "Sustained vowel", 1, 1, "score"], ["motor/read_score", "Reading", 1, 1, "score"], ["motor/voice_mpt_score", "Max phonation time", 1, 1, "score"]]],
       ["Motor measures", [["motor/tremor_amp_cm", "Tremor amplitude (cm)", 2, -1], ["motor/tap_rate", "Taps / s", 2, 1], ["motor/tap_cv", "Tapping rhythm CV", 2, -1], ["motor/gait_cadence", "Cadence (steps/min)", 0, 1], ["motor/gait_step_cv", "Step variability (%)", 1, -1], ["motor/gait_stride_regularity", "Stride regularity", 2, 1], ["motor/gait_asymmetry", "Gait asymmetry", 2, -1], ["motor/balance_sway_rms", "Sway RMS (m/s²)", 3, -1], ["motor/balance_jerk", "Sway jerk (m/s³)", 2, -1], ["motor/balance_path", "Sway path (/s)", 2, -1], ["motor/spiral_error_pct", "Spiral deviation (%)", 1, -1], ["motor/spiral_tremor_share", "Spiral tremor share", 2, -1]]],
-      ["Voice measures", [["motor/ddk_rate", "Pa-ta-ka syll / s", 2, 1], ["motor/ddk_cv", "Pa-ta-ka rhythm CV", 2, -1], ["motor/voice_hnr", "Voice HNR (dB)", 1, 1], ["motor/voice_jitter_pct", "Voice jitter (%)", 2, -1], ["motor/voice_ppe", "Voice PPE", 3, -1], ["motor/voice_int_slope", "Voice loudness slope (dB/s)", 2, 1], ["motor/read_f0_sd_st", "Reading pitch var. (st)", 2, 1], ["motor/read_rate", "Reading rate (/s)", 2, 1]]],
+      ["Voice measures", [["motor/ddk_rate", "Pa-ta-ka syll / s", 2, 1], ["motor/ddk_cv", "Pa-ta-ka rhythm CV", 2, -1], ["motor/voice_hnr", "Voice HNR (dB)", 1, 1], ["motor/voice_jitter_pct", "Voice jitter (%)", 2, -1], ["motor/voice_ppe", "Voice PPE", 3, -1], ["motor/voice_int_slope", "Voice loudness slope (dB/s)", 2, 1], ["motor/read_f0_sd_st", "Reading pitch var. (st)", 2, 1], ["motor/read_rate", "Reading rate (/s)", 2, 1], ["motor/voice_mpt", "Max phonation (s)", 1, 1]]],
       ["Oura", [["oura/sleep_score", "Sleep score", 0, 1], ["oura/readiness_score", "Readiness", 0, 1], ["oura/total_sleep_h", "Sleep (h)", 1, 1], ["oura/deep_h", "Deep (h)", 1, 1], ["oura/avg_hrv", "Night HRV (ms)", 0, 1], ["oura/lowest_hr", "Lowest HR", 0, -1], ["oura/temperature_deviation", "Temp dev (°C)", 2, 0]]],
       ["Watch", [["hae/resting_heart_rate", "Resting HR", 0, -1], ["hae/heart_rate_variability", "Daytime HRV (ms)", 0, 1], ["hae/step_count", "Steps", 0, 1], ["hae/walking_speed", "Walking speed", 2, 1], ["hae/walking_step_length", "Step length", 2, 1], ["hae/walking_double_support_percentage", "Double support %", 1, -1], ["hae/walking_asymmetry_percentage", "Asymmetry %", 1, -1]]],
     ];
