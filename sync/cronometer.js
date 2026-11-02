@@ -173,6 +173,12 @@ async function main() {
   const csv = await exportCsv(jar, token, "servings", start, end);
   const rows = parseCsv(csv);
   console.log(`cronometer servings ${start}..${end}: ${rows.length} entries`);
+  if (rows.length) {
+    const cols = Object.keys(rows[0]);
+    const numeric = cols.filter((c) => !META.has(c) && rows.some((r) => r[c] !== "" && isFinite(Number(r[c]))));
+    console.log(`columns (${cols.length}): ${cols.slice(0, 12).map((c) => JSON.stringify(c)).join(", ")}${cols.length > 12 ? ", …" : ""}`);
+    console.log(`numeric nutrient columns: ${numeric.length}; sample row: ${JSON.stringify(Object.fromEntries(Object.entries(rows[0]).slice(0, 10)))}`);
+  }
 
   // Aggregate per hour; collect supplements.
   const hours = {}; const supps = []; const units = {};
