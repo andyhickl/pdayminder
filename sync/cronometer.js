@@ -181,7 +181,8 @@ async function main() {
   const cols = rows.length ? Object.keys(rows[0]) : [];
   const servingsHasNutrients = cols.some((c) => !META.has(c) && rows.some((r) => r[c] !== "" && isFinite(Number(r[c]))));
   console.log(`cronometer servings ${start}..${end}: ${rows.length} entries, ${cols.length} columns${servingsHasNutrients ? " (with nutrients)" : ""}`);
-  const dailyCsv = await exportCsv(jar, token, "dailySummary", start, end);
+  // The export nonce is single-use: mint a fresh one for the second export.
+  const dailyCsv = await exportCsv(jar, await exportToken(jar, cronUser), "dailySummary", start, end);
   const daily = parseCsv(dailyCsv);
   console.log(`cronometer daily summary: ${daily.length} days, ${daily.length ? Object.keys(daily[0]).length : 0} columns`);
 
