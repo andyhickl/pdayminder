@@ -675,11 +675,12 @@
     }
     // Tests call this at save time; App keeps the ref current.
     const doseCtxRef = { current: null };
-    function doseContextNow() {
-      const c = doseCtxRef.current; if (!c) return null;
-      const now = new Date(); const key = toDateKey(now);
+    function doseContextNow(at) {
+      const c = doseCtxRef.current; if (!c) return { dose_state: "pre", minutes_since_dose: null, dose_time: null };
+      const now = at && !isNaN(at) ? at : new Date(); const key = toDateKey(now);
       const r = doseState(c.days[key], c.settings, now.getHours() * 60 + now.getMinutes());
-      return { dose_state: r.state, minutes_since_dose: r.minutesSinceDose };
+      const doseMin = r.minutesSinceDose == null ? null : now.getHours() * 60 + now.getMinutes() - r.minutesSinceDose;
+      return { dose_state: r.state, minutes_since_dose: r.minutesSinceDose, dose_time: doseMin == null ? null : minutesToTimeString(doseMin) };
     }
 
     // ---------- Utilities ----------
@@ -1240,6 +1241,135 @@
       );
     }
 
+    // ---------- Symptom events ----------
+    const EVENT_TYPES = [
+      ["dystonia", "Dystonia / cramping / posturing", "#f472b6"], ["dyskinesia", "Involuntary movement", "#c084fc"], ["freezing", "Freezing", "#38bdf8"],
+      ["off", "Off episode", "#64748b"], ["fall", "Fall / near-fall", "#f87171"], ["pain", "Pain", "#fb923c"], ["other", "Other", "#94a3b8"],
+    ];
+    const EVENT_REGIONS = ["left foot", "right foot", "left leg", "right leg", "left arm", "right arm", "trunk", "neck", "face", "whole body"];
+    const EVENT_TRIGGERS = ["walking", "standing", "sitting", "cooking", "after eating", "exercise", "stress", "fatigue", "late dose", "missed dose"];
+    const eventColor = (t) => (EVENT_TYPES.find((e) => e[0] === t) || EVENT_TYPES[6])[2];
+    const eventLabel = (t) => (EVENT_TYPES.find((e) => e[0] === t) || EVENT_TYPES[6])[1];
+    function toLocalInput(d) { const z = new Date(d); z.setMinutes(z.getMinutes() - z.getTimezoneOffset()); return z.toISOString().slice(0, 16); }
+    function EventModal({ open, initial, onClose, onSaved }) {
+      const blank = () => ({ type: "dystonia", regions: [], severity: 3, start: toLocalInput(Date.now() - 30 * 60000), end: toLocalInput(Date.now()), ongoing: false, triggers: [], note: "" });
+      const [f, setF] = useState(blank);
+      const [busy, setBusy] = useState(false);
+      useEffect(() => {
+        if (!open) return;
+        if (initial) setF({ type: initial.type, regions: initial.regions || [], severity: initial.severity || 3, start: toLocalInput(initial.start), end: initial.end ? toLocalInput(initial.end) : toLocalInput(Date.now()), ongoing: !initial.end, triggers: initial.triggers || [], note: initial.note || "", original_start: initial.start });
+        else setF(blank());
+      }, [open, initial]);
+      if (!open) return null;
+      const toggle = (key, v) => setF((o) => ({ ...o, [key]: o[key].includes(v) ? o[key].filter((x) => x !== v) : [...o[key], v] }));
+      const ctx = doseContextNow(new Date(f.start));
+      const save = async () => {
+        setBusy(true);
+        const body = { type: f.type, regions: f.regions, severity: f.severity, start: new Date(f.start).toISOString(), end: f.ongoing ? null : new Date(f.end).toISOString(), triggers: f.triggers, note: f.note, original_start: f.original_start || null };
+        const r = await apiFetch("/api/events", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+        setBusy(false);
+        if (r.ok) { onSaved && onSaved(await r.json()); onClose(); } else alert("Save failed.");
+      };
+      const pill = (on, color) => ({ background: on ? (color || "#1d4ed8") : undefined, color: on ? "#fff" : undefined, borderStyle: on ? "solid" : "dashed" });
+      return (
+        <div className="modal-backdrop" onClick={onClose}>
+          <div className="modal" onClick={(e) => e.stopPropagation()} style={{ maxHeight: "90vh", overflowY: "auto" }}>
+            <div className="modal-header"><div className="modal-title">{initial ? "Edit event" : "Log an event"}</div></div>
+            <div className="modal-body">
+              <div style={{ fontSize: 11, color: "var(--muted)" }}>What happened, where in the body, how bad, and when. Dose context is worked out from your logged doses.</div>
+              <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 8 }}>Type</div>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 4 }}>
+                {EVENT_TYPES.map(([k, label, color]) => <button key={k} type="button" className="quick-time-pill" style={pill(f.type === k, color)} onClick={() => setF((o) => ({ ...o, type: k }))}>{label}</button>)}
+              </div>
+              <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 8 }}>Where</div>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 4 }}>
+                {EVENT_REGIONS.map((r) => <button key={r} type="button" className="quick-time-pill" style={pill(f.regions.includes(r))} onClick={() => toggle("regions", r)}>{r}</button>)}
+              </div>
+              <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 8 }}>Severity (1 = noticeable, 5 = couldn't function)</div>
+              <div style={{ display: "flex", gap: 6, marginTop: 4 }}>
+                {[1, 2, 3, 4, 5].map((n) => <button key={n} type="button" className="quick-time-pill" style={{ ...pill(f.severity === n, ratingColor(6 - n)), minWidth: 36, textAlign: "center" }} onClick={() => setF((o) => ({ ...o, severity: n }))}>{n}</button>)}
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginTop: 8 }}>
+                <label style={{ fontSize: 11, color: "var(--muted)" }}>Started<input type="datetime-local" className="settings-input" style={{ width: "100%", boxSizing: "border-box", marginTop: 2 }} value={f.start} onChange={(e) => setF((o) => ({ ...o, start: e.target.value }))} /></label>
+                <label style={{ fontSize: 11, color: "var(--muted)" }}>Ended<input type="datetime-local" className="settings-input" style={{ width: "100%", boxSizing: "border-box", marginTop: 2 }} value={f.end} disabled={f.ongoing} onChange={(e) => setF((o) => ({ ...o, end: e.target.value }))} /></label>
+              </div>
+              <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, marginTop: 6 }}><input type="checkbox" checked={f.ongoing} onChange={(e) => setF((o) => ({ ...o, ongoing: e.target.checked }))} /> still happening (set the end later)</label>
+              <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 8 }}>What you were doing / possible triggers</div>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 4 }}>
+                {EVENT_TRIGGERS.map((r) => <button key={r} type="button" className="quick-time-pill" style={pill(f.triggers.includes(r))} onClick={() => toggle("triggers", r)}>{r}</button>)}
+              </div>
+              <textarea value={f.note} onChange={(e) => setF((o) => ({ ...o, note: e.target.value }))} placeholder="Describe it in your words: what it looked like, what helped, what you'd eaten…" rows={3}
+                style={{ width: "100%", boxSizing: "border-box", marginTop: 8, background: "#0f172a", color: "#e2e8f0", border: "1px solid #334155", borderRadius: 8, padding: "8px 10px", fontSize: 13, fontFamily: "inherit" }} />
+              <div style={{ fontSize: 11, color: ctx.dose_state === "post" ? "#a3e635" : "#fbbf24", marginTop: 6 }}>
+                {ctx.minutes_since_dose == null ? "No levodopa dose logged before this start time today." : `${ctx.minutes_since_dose} min after the ${ctx.dose_time} dose (${ctx.dose_state === "ramp" ? "dose still ramping" : ctx.dose_state === "post" ? "within the dose window" : "past the dose window"}).`}
+              </div>
+            </div>
+            <div className="modal-footer">
+              <button className="btn-secondary" onClick={onClose}>Cancel</button>
+              <button className="btn-primary" disabled={busy} onClick={save}>{busy ? "Saving…" : "Save"}</button>
+            </div>
+          </div>
+        </div>
+      );
+    }
+    function fmtEventTime(iso) { return new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }); }
+    function DayEventsList({ events, onEdit, onDeleted }) {
+      if (!events || !events.length) return null;
+      const del = async (e) => { if (!window.confirm("Delete this event?")) return; const r = await apiFetch("/api/events?ts=" + encodeURIComponent(e.ts), { method: "DELETE" }); if (r.ok) onDeleted && onDeleted(); };
+      return (
+        <div style={{ marginTop: 8 }}>
+          {events.map((e) => (
+            <div key={e.ts} style={{ display: "flex", gap: 8, alignItems: "flex-start", background: "#0f172a", borderRadius: 8, padding: "6px 10px", marginTop: 6, borderLeft: `3px solid ${eventColor(e.type)}` }}>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontSize: 13 }}><strong>{eventLabel(e.type)}</strong> · severity {e.severity} · {fmtEventTime(e.start)}–{e.end ? fmtEventTime(e.end) : "ongoing"}{e.minutes != null ? ` (${e.minutes} min)` : ""}</div>
+                <div style={{ fontSize: 11, color: "#94a3b8" }}>
+                  {(e.regions || []).join(", ")}{e.regions && e.regions.length && e.triggers && e.triggers.length ? " · " : ""}{(e.triggers || []).join(", ")}
+                  {e.minutes_since_dose != null ? ` · ${e.minutes_since_dose} min after ${e.dose_time} dose` : " · no prior dose that day"}
+                </div>
+                {e.note && <div style={{ fontSize: 12, marginTop: 2, whiteSpace: "pre-wrap" }}>{e.note}</div>}
+              </div>
+              <button type="button" className="pill-btn" style={{ padding: "2px 8px" }} onClick={() => onEdit(e)}>edit</button>
+              <button type="button" onClick={() => del(e)} title="Delete" style={{ background: "none", border: 0, color: "#64748b", cursor: "pointer", padding: 0, fontSize: 12 }}>✕</button>
+            </div>
+          ))}
+        </div>
+      );
+    }
+    // When do events happen relative to the last levodopa dose? Diphasic patterns cluster early (ramp) and late (wearing off);
+    // peak-dose patterns cluster in the middle.
+    function EventTimingCard() {
+      const [events] = useJson("/api/events?days=180", []);
+      if (!events) return null;
+      if (!events.length) return <div className="card"><div className="card-subtitle">No events logged yet. Use "Log an event" on the QoL tab when something happens; three or four episodes are enough to start seeing a pattern.</div></div>;
+      const bins = Array.from({ length: 9 }, (_, i) => i * 30); // 0..240+
+      const byType = {};
+      events.forEach((e) => { if (e.minutes_since_dose == null) return; const b = Math.min(8, Math.floor(e.minutes_since_dose / 30)); (byType[e.type] = byType[e.type] || Array(9).fill(0))[b]++; });
+      const types = Object.keys(byType); const maxN = Math.max(1, ...types.flatMap((t) => byType[t]));
+      const W = 600, H = 150, padL = 10, padB = 28, bw = (W - 2 * padL) / 9;
+      const noDose = events.filter((e) => e.minutes_since_dose == null).length;
+      return (
+        <div className="card">
+          <div className="card-header"><div><div className="card-title">When events happen after a dose</div><div className="card-subtitle">{events.length} events in 180 days, by minutes since the last levodopa dose. Early and late clusters suggest diphasic (ramp-up / wearing-off) patterns; a middle cluster suggests peak-dose.</div></div></div>
+          <svg viewBox={`0 0 ${W} ${H}`} style={{ width: "100%", height: H, display: "block" }}>
+            {bins.map((b, i) => {
+              let y0 = H - padB;
+              return (
+                <g key={i}>
+                  {types.map((t) => { const n = byType[t][i]; if (!n) return null; const h = ((H - padB - 10) * n) / maxN; y0 -= h; return <rect key={t} x={padL + i * bw + 3} y={y0} width={bw - 6} height={h} fill={eventColor(t)} opacity="0.85"><title>{eventLabel(t)}: {n}</title></rect>; })}
+                  <text x={padL + i * bw + bw / 2} y={H - padB + 14} fontSize="10" fill="#64748b" textAnchor="middle">{i === 8 ? "4h+" : `${b}–${b + 30}`}</text>
+                </g>
+              );
+            })}
+            <text x={W / 2} y={H - 2} fontSize="10" fill="#64748b" textAnchor="middle">minutes after last levodopa dose</text>
+          </svg>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 10, fontSize: 11, color: "#94a3b8" }}>
+            {types.map((t) => <span key={t}><span style={{ display: "inline-block", width: 10, height: 10, background: eventColor(t), borderRadius: 2, marginRight: 4 }} />{eventLabel(t)} ({byType[t].reduce((a, b) => a + b, 0)})</span>)}
+            {noDose > 0 && <span>{noDose} with no prior dose that day (not shown)</span>}
+          </div>
+        </div>
+      );
+    }
+
     function SettingsCard({ settings, onUpdate }) {
       const [local, setLocal] = useState(settings);
 
@@ -1436,6 +1566,11 @@
               <text x={x(h)} y={H - 5} fontSize="10" fill="#64748b" textAnchor="middle">{String(h).padStart(2, "0")}:00</text>
             </g>
           ))}
+          {(data.events || []).map((e, i) => {
+            const dayStart = new Date(data.day + "T00:00:00"); const h0 = Math.max(0, (new Date(e.start) - dayStart) / 36e5); const h1 = Math.min(24, e.end ? (new Date(e.end) - dayStart) / 36e5 : h0 + 0.5);
+            if (h1 <= 0 || h0 >= 24) return null;
+            return <g key={"e" + i}><rect x={x(h0)} y={padT} width={Math.max(2, x(h1) - x(h0))} height={H - padT - padB} fill={eventColor(e.type)} opacity="0.35" /><rect x={x(h0)} y={padT} width={Math.max(2, x(h1) - x(h0))} height={4} fill={eventColor(e.type)} /><title>{eventLabel(e.type)} {e.severity}/5 {fmtEventTime(e.start)}–{e.end ? fmtEventTime(e.end) : "ongoing"}{e.minutes_since_dose != null ? ` · ${e.minutes_since_dose} min after dose` : ""}</title></g>;
+          })}
           {band && <path d={band} fill="#38bdf8" opacity="0.18" />}
           {avg.length > 0 && <path d={line(avg, y)} fill="none" stroke="#38bdf8" strokeWidth="2" />}
           {hrv.length > 0 && <path d={line(hrv, yh)} fill="none" stroke="#a3e635" strokeWidth="1.5" strokeDasharray="4 3" />}
@@ -3707,6 +3842,8 @@
       "hae/vitamin_c": "Vitamin C (mg)", "hae/vitamin_d": "Vitamin D (µg)", "hae/vitamin_b12": "Vitamin B12 (µg)", "hae/vitamin_b6": "Vitamin B6 (mg)", "hae/folate": "Folate (µg)",
       "cronometer/energy": "Calories (Cronometer)", "cronometer/protein": "Protein (Cronometer)", "cronometer/carbs": "Carbs (Cronometer)", "cronometer/fat": "Fat (Cronometer)", "cronometer/fiber": "Fiber (Cronometer)",
       "cronometer/sugars": "Sugars (Cronometer)", "cronometer/caffeine": "Caffeine (Cronometer)", "cronometer/water": "Water (Cronometer)", "cronometer/omega_3": "Omega-3 (Cronometer)", "cronometer/alcohol": "Alcohol (Cronometer)",
+      "derived/events_count": "Symptom events / day", "derived/event_minutes": "Minutes in symptom events / day", "derived/events_dystonia": "Dystonia events / day", "derived/events_dyskinesia": "Involuntary-movement events / day",
+      "derived/events_freezing": "Freezing events / day", "derived/events_off": "Off episodes / day", "derived/events_fall": "Falls / day", "derived/events_pain": "Pain events / day", "derived/events_other": "Other events / day",
       "derived/protein_near_dose": "Protein within 90 min of a levodopa dose (g)", "derived/first_meal_hour": "First meal (hour of day)", "derived/last_meal_hour": "Last meal (hour of day)",
       "oura/sleep_score": "Sleep score (Oura)", "oura/avg_hrv": "Night HRV (Oura)", "oura/total_sleep_h": "Sleep hours (Oura)", "oura/deep_h": "Deep sleep (Oura)",
       "oura/readiness_score": "Readiness (Oura)", "oura/lowest_hr": "Lowest night HR (Oura)", "oura/temperature_deviation": "Temp deviation (Oura)", "oura/steps": "Steps (Oura)",
@@ -3847,6 +3984,7 @@
       ["Motor measures", [["motor/tremor_amp_cm", "Tremor amplitude (cm)", 2, -1], ["motor/tap_rate", "Taps / s", 2, 1], ["motor/tap_cv", "Tapping rhythm CV", 2, -1], ["motor/gait_cadence", "Cadence (steps/min)", 0, 1], ["motor/gait_step_cv", "Step variability (%)", 1, -1], ["motor/gait_stride_regularity", "Stride regularity", 2, 1], ["motor/gait_asymmetry", "Gait asymmetry", 2, -1], ["motor/balance_sway_rms", "Sway RMS (m/s²)", 3, -1], ["motor/balance_jerk", "Sway jerk (m/s³)", 2, -1], ["motor/balance_path", "Sway path (/s)", 2, -1], ["motor/spiral_error_pct", "Spiral deviation (%)", 1, -1], ["motor/spiral_tremor_share", "Spiral tremor share", 2, -1]]],
       ["Voice measures", [["motor/ddk_rate", "Pa-ta-ka syll / s", 2, 1], ["motor/ddk_cv", "Pa-ta-ka rhythm CV", 2, -1], ["motor/voice_hnr", "Voice HNR (dB)", 1, 1], ["motor/voice_jitter_pct", "Voice jitter (%)", 2, -1], ["motor/voice_ppe", "Voice PPE", 3, -1], ["motor/voice_int_slope", "Voice loudness slope (dB/s)", 2, 1], ["motor/read_f0_sd_st", "Reading pitch var. (st)", 2, 1], ["motor/read_rate", "Reading rate (/s)", 2, 1], ["motor/voice_mpt", "Max phonation (s)", 1, 1]]],
       ["Oura", [["oura/sleep_score", "Sleep score", 0, 1], ["oura/readiness_score", "Readiness", 0, 1], ["oura/total_sleep_h", "Sleep (h)", 1, 1], ["oura/deep_h", "Deep (h)", 1, 1], ["oura/avg_hrv", "Night HRV (ms)", 0, 1], ["oura/lowest_hr", "Lowest HR", 0, -1], ["oura/temperature_deviation", "Temp dev (°C)", 2, 0]]],
+      ["Symptom events", [["derived/events_count", "Events / day", 1, -1], ["derived/event_minutes", "Minutes in events / day", 0, -1], ["derived/events_dystonia", "Dystonia / day", 1, -1], ["derived/events_dyskinesia", "Involuntary movement / day", 1, -1], ["derived/events_off", "Off episodes / day", 1, -1], ["derived/events_freezing", "Freezing / day", 1, -1]]],
       ["Nutrition (Cronometer)", [["cronometer/energy", "Calories (kcal)", 0, 0], ["cronometer/protein", "Protein (g)", 0, 0], ["derived/protein_near_dose", "Protein near levodopa (g)", 0, -1], ["cronometer/carbs", "Carbs (g)", 0, 0], ["cronometer/fat", "Fat (g)", 0, 0], ["cronometer/fiber", "Fiber (g)", 0, 1], ["cronometer/sugars", "Sugars (g)", 0, -1], ["cronometer/caffeine", "Caffeine (mg)", 0, 0], ["cronometer/water", "Water (g)", 0, 1], ["cronometer/omega_3", "Omega-3 (g)", 1, 1], ["cronometer/sodium", "Sodium (mg)", 0, -1], ["cronometer/magnesium", "Magnesium (mg)", 0, 1], ["cronometer/vitamin_d", "Vitamin D", 0, 1], ["cronometer/b12", "Vitamin B12 (µg)", 1, 1], ["derived/first_meal_hour", "First meal (h)", 1, 0], ["derived/last_meal_hour", "Last meal (h)", 1, 0]]],
       ["Nutrition (Apple Health)", [["hae/dietary_energy", "Calories (kcal)", 0, 0], ["hae/protein", "Protein (g)", 0, 0], ["derived/protein_near_dose", "Protein near levodopa (g)", 0, -1], ["hae/carbohydrates", "Carbohydrates (g)", 0, 0], ["hae/total_fat", "Fat (g)", 0, 0], ["hae/fiber", "Fiber (g)", 0, 1], ["hae/sugar", "Sugar (g)", 0, -1], ["hae/caffeine", "Caffeine (mg)", 0, 0], ["hae/dietary_water", "Water (mL)", 0, 1], ["hae/sodium", "Sodium (mg)", 0, -1], ["hae/magnesium", "Magnesium (mg)", 0, 1], ["hae/vitamin_d", "Vitamin D (µg)", 1, 1], ["hae/vitamin_b12", "Vitamin B12 (µg)", 1, 1]]],
       ["Watch", [["hae/resting_heart_rate", "Resting HR", 0, -1], ["hae/heart_rate_variability", "Daytime HRV (ms)", 0, 1], ["hae/step_count", "Steps", 0, 1], ["hae/walking_speed", "Walking speed", 2, 1], ["hae/walking_step_length", "Step length", 2, 1], ["hae/walking_double_support_percentage", "Double support %", 1, -1], ["hae/walking_asymmetry_percentage", "Asymmetry %", 1, -1]]],
@@ -3952,8 +4090,11 @@
         segment: null,
       });
       const [medModalOpen, setMedModalOpen] = useState(false);
+      const [eventModal, setEventModal] = useState({ open: false, initial: null });
+      const [eventsTick, setEventsTick] = useState(0);
 
       const dateKey = toDateKey(selectedDate);
+      const [dayEvents] = useJson(`/api/day?day=${dateKey}`, [dateKey, eventsTick, days]);
 
       useEffect(() => {
         setDays((prev) => {
@@ -4154,6 +4295,7 @@
               >
                 💊 Log medication
               </button>
+              <button type="button" className="pill-btn" onClick={() => setEventModal({ open: true, initial: null })}>⚡ Log an event</button>
             </div>
             <div className="med-list">
               <span>Doses:</span> {medList.length ? medList.map((m, i) => (
@@ -4163,6 +4305,8 @@
                 </span>
               )) : "none logged yet"}
             </div>
+            <div className="med-list" style={{ marginTop: 6 }}><span>Events:</span> {dayEvents && dayEvents.events && dayEvents.events.length ? "" : "none logged (dystonia, involuntary movement, freezing, off episodes, falls, pain)"}</div>
+            <DayEventsList events={dayEvents && dayEvents.events} onEdit={(e) => setEventModal({ open: true, initial: e })} onDeleted={() => setEventsTick((t) => t + 1)} />
           </div>
           </Section>
           <Section title="Recent days" subtitle="A week at a glance; tap any block to rate it." storageKey="qol-summary">
@@ -4212,6 +4356,10 @@
               </Section>
               <Section title="Nutrition trends" subtitle="Cronometer daily totals; protein near levodopa from the hourly Apple Health relay." storageKey="tr-nutrition" defaultOpen={false}>
                 <VitalsTrendsCard metrics={VITALS_GROUPS.nutrition} />
+              </Section>
+              <Section title="Events" subtitle="Dystonia, dyskinesia, freezing, off episodes: how often, how long, and when after a dose." storageKey="tr-events" defaultOpen={false}>
+                <EventTimingCard />
+                <VitalsTrendsCard metrics={[["derived/events_count", "Events / day", "#f472b6", 0], ["derived/event_minutes", "Minutes in events / day", "#fb7185", 0], ["derived/events_dystonia", "Dystonia events / day", "#f472b6", 0], ["derived/events_dyskinesia", "Involuntary-movement events / day", "#c084fc", 0], ["derived/events_off", "Off episodes / day", "#64748b", 0], ["derived/events_freezing", "Freezing events / day", "#38bdf8", 0]]} subtitle="Days with no events read as gaps, not zeros, until the first event is logged." />
               </Section>
               <Section title="Supplement trends" subtitle="One line per supplement found in Cronometer." storageKey="tr-supps" defaultOpen={false}>
                 <SupplementTrendsCard />
@@ -4276,6 +4424,7 @@
             onClose={() => setSegmentModalState((s) => ({ ...s, open: false }))}
             onSave={handleSegmentSave}
           />
+          <EventModal open={eventModal.open} initial={eventModal.initial} onClose={() => setEventModal({ open: false, initial: null })} onSaved={() => setEventsTick((t) => t + 1)} />
           <MedModal
             open={medModalOpen}
             settings={settings}

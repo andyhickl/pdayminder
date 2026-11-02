@@ -62,6 +62,17 @@ dose; protein competes with levodopa for transport), `derived/first_meal_hour`, 
 non-zero hourly `dietary_energy`). Stats has a Nutrition group; Day vitals shows protein, fiber and caffeine.
 The full Cronometer profile (80+ nutrients, supplements, creatine) needs the Cronometer cron (backlog).
 
+## Symptom events (source = event)
+"Log an event" on the QoL tab records dystonia / cramping / posturing, involuntary movement, freezing, off episodes,
+falls, pain or other: body regions, severity 1–5, start and end (or "still happening"), triggers, free note. Stored
+as one observation per event (`metric = event`, `ts = start`, `value = duration minutes`, details in `raw`) with
+the dose context computed server-side at save: `dose_state`, `minutes_since_dose`, `dose_time`. Endpoints:
+`GET /api/events?days=`, `POST /api/events` (upsert by start; `original_start` moves an edited event),
+`DELETE /api/events?ts=`. `/api/day` returns the day's events; Day vitals draws them as shaded bands with the dose
+lines. Derived daily metrics (`derived/events_count`, `event_minutes`, `events_<type>`) feed Stats, Trends and QoL
+correlations; the Trends "Events" section adds a histogram of events by minutes since the last levodopa dose
+(early/late clusters suggest diphasic patterns, a middle cluster peak-dose).
+
 ## Cronometer sync (sync/cronometer.js, source = cronometer)
 Cronometer has no public API; the cron job logs in the way the web app does (anti-CSRF form login, GWT-RPC
 `authenticate` and `generateAuthorizationToken`, then the same `/export?generate=servings` CSV the Export Data

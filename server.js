@@ -369,24 +369,67 @@ app.get("/api/observations", requireAuth, async (req, res) => {
     `select ts, source, metric, value, raw from observations where ${where.join(" and ")} order by ts desc limit $${args.length}`,
     args
   );
-  if (req.query.annotate === "dose") {
-    // dose_state recomputed from logged levodopa doses: post = 30–210 min after the latest dose that day, ramp < 30, else pre
-    const dopa = await dopaDrugs(req.user.id);
-    const doses = await pool.query(
-      `select to_char(day,'YYYY-MM-DD') as day, extract(hour from taken_at)*60 + extract(minute from taken_at) as m
-       from med_doses where user_id = $1 and drug = any($2) order by day, taken_at`, [req.user.id, dopa]);
-    const byDay = {}; doses.rows.forEach((r) => (byDay[r.day] = byDay[r.day] || []).push(Number(r.m)));
-    for (const r of rows) {
-      const d = new Date(r.ts); const day = d.toLocaleDateString("en-CA", { timeZone: TZ });
-      const parts = new Intl.DateTimeFormat("en-US", { hour: "numeric", minute: "numeric", hour12: false, timeZone: TZ }).formatToParts(d);
-      const mod = (Number(parts.find((p) => p.type === "hour").value) % 24) * 60 + Number(parts.find((p) => p.type === "minute").value);
-      const prior = (byDay[day] || []).filter((m) => m <= mod);
-      if (!prior.length) { r.dose_state = "pre"; r.minutes_since_dose = null; continue; }
-      const since = mod - Math.max(...prior); r.minutes_since_dose = since;
-      r.dose_state = since < 30 ? "ramp" : since <= 210 ? "post" : "pre";
-    }
-  }
+  if (req.query.annotate === "dose") await annotateDose(req.user.id, rows);
   res.json(rows);
+});
+
+// dose_state recomputed from logged levodopa doses: post = 30–210 min after the latest dose that day, ramp < 30, else pre.
+// Mutates each row (needs .ts) adding dose_state, minutes_since_dose, dose_time.
+async function annotateDose(userId, rows) {
+  const dopa = await dopaDrugs(userId);
+  const doses = await pool.query(
+    `select to_char(day,'YYYY-MM-DD') as day, extract(hour from taken_at)*60 + extract(minute from taken_at) as m
+     from med_doses where user_id = $1 and drug = any($2) order by day, taken_at`, [userId, dopa]);
+  const byDay = {}; doses.rows.forEach((r) => (byDay[r.day] = byDay[r.day] || []).push(Number(r.m)));
+  for (const r of rows) {
+    const d = new Date(r.ts); const day = d.toLocaleDateString("en-CA", { timeZone: TZ });
+    const parts = new Intl.DateTimeFormat("en-US", { hour: "numeric", minute: "numeric", hour12: false, timeZone: TZ }).formatToParts(d);
+    const mod = (Number(parts.find((p) => p.type === "hour").value) % 24) * 60 + Number(parts.find((p) => p.type === "minute").value);
+    const prior = (byDay[day] || []).filter((m) => m <= mod);
+    if (!prior.length) { r.dose_state = "pre"; r.minutes_since_dose = null; r.dose_time = null; continue; }
+    const last = Math.max(...prior); const since = mod - last; r.minutes_since_dose = since;
+    r.dose_time = `${String(Math.floor(last / 60)).padStart(2, "0")}:${String(last % 60).padStart(2, "0")}`;
+    r.dose_state = since < 30 ? "ramp" : since <= 210 ? "post" : "pre";
+  }
+  return rows;
+}
+
+// ---------- Symptom events (dystonia, dyskinesia, freezing, off episodes, falls, pain) ----------
+// Stored as observations: source 'event', metric 'event', ts = start, value = duration in minutes (null while ongoing),
+// raw = {type, regions, severity, start, end, triggers, note, dose_state, minutes_since_dose, dose_time}.
+const EVENT_TYPES = ["dystonia", "dyskinesia", "freezing", "off", "fall", "pain", "other"];
+app.get("/api/events", requireAuth, async (req, res) => {
+  const days = Math.min(365, Number(req.query.days) || 30);
+  const { rows } = await pool.query(
+    `select ts, value as minutes, raw from observations where user_id = $1 and source = 'event' and metric = 'event'
+       and ts >= now() - ($2 || ' days')::interval order by ts desc`, [req.user.id, String(days)]);
+  res.json(rows.map((r) => ({ ts: r.ts, minutes: r.minutes, ...r.raw })));
+});
+app.post("/api/events", requireAuth, async (req, res) => {
+  const b = req.body || {};
+  const start = new Date(b.start || Date.now()); if (isNaN(start)) return res.status(400).json({ error: "start must be a date" });
+  const end = b.end ? new Date(b.end) : null; if (end && (isNaN(end) || end < start)) return res.status(400).json({ error: "end must be after start" });
+  const type = EVENT_TYPES.includes(b.type) ? b.type : "other";
+  const minutes = end ? Math.round((end - start) / 60000) : null;
+  const ctx = (await annotateDose(req.user.id, [{ ts: start.toISOString() }]))[0];
+  const raw = {
+    type, regions: Array.isArray(b.regions) ? b.regions.slice(0, 12).map(String) : [], severity: Math.max(1, Math.min(5, Number(b.severity) || 3)),
+    start: start.toISOString(), end: end ? end.toISOString() : null, triggers: Array.isArray(b.triggers) ? b.triggers.slice(0, 12).map(String) : [],
+    note: b.note ? String(b.note).slice(0, 2000) : null, dose_state: ctx.dose_state, minutes_since_dose: ctx.minutes_since_dose, dose_time: ctx.dose_time,
+  };
+  // Editing keeps the original start as the key; a changed start moves the row.
+  if (b.original_start && new Date(b.original_start).toISOString() !== start.toISOString())
+    await pool.query("delete from observations where user_id = $1 and source = 'event' and metric = 'event' and ts = $2", [req.user.id, new Date(b.original_start).toISOString()]);
+  await pool.query(
+    `insert into observations (user_id, ts, source, metric, value, raw) values ($1,$2,'event','event',$3,$4)
+     on conflict (user_id, source, metric, ts) do update set value = excluded.value, raw = excluded.raw`,
+    [req.user.id, start.toISOString(), minutes, raw]);
+  res.json({ ok: true, event: { ts: start.toISOString(), minutes, ...raw } });
+});
+app.delete("/api/events", requireAuth, async (req, res) => {
+  const ts = new Date(String(req.query.ts || "")); if (isNaN(ts)) return res.status(400).json({ error: "ts" });
+  await pool.query("delete from observations where user_id = $1 and source = 'event' and metric = 'event' and ts = $2", [req.user.id, ts.toISOString()]);
+  res.json({ ok: true });
 });
 
 // Med doses from any source (e.g. an agent reading a reminder app)
@@ -461,6 +504,17 @@ async function dailySeries(uid, source, metric, days) {
            and exists (select 1 from med_doses d where d.user_id = o.user_id and d.drug = any($4)
                        and abs(extract(epoch from ((o.ts at time zone $2) - (d.day + d.taken_at)))) <= 5400)
          group by 1 order by 1`, [uid, TZ, days, await dopaDrugs(uid)]);
+      return rows.map((r) => [r.day, Number(r.v)]);
+    }
+    if (metric === "events_count" || metric === "event_minutes" || metric.startsWith("events_")) {
+      const type = metric.startsWith("events_") && metric !== "events_count" ? metric.slice(7) : null;
+      const { rows } = await pool.query(
+        `select to_char((ts at time zone $2)::date,'YYYY-MM-DD') as day,
+                ${metric === "event_minutes" ? "sum(coalesce(value, 0))" : "count(*)"} as v
+         from observations where user_id = $1 and source = 'event' and metric = 'event'
+           and (ts at time zone $2)::date >= (now() at time zone $2)::date - ($3::int - 1)
+           ${type ? "and raw->>'type' = $4" : ""}
+         group by 1 order by 1`, type ? [uid, TZ, days, type] : [uid, TZ, days]);
       return rows.map((r) => [r.day, Number(r.v)]);
     }
     if (metric === "first_meal_hour" || metric === "last_meal_hour") {
@@ -600,6 +654,11 @@ app.get("/api/metrics", requireAuth, async (req, res) => {
   // Derived nutrition metrics show up once protein / energy rows exist (computed on read, see dailySeries).
   const have = new Set(rows.map((r) => r.source + "/" + r.metric));
   if (have.has("hae/protein") || have.has("cronometer/protein")) rows.push({ source: "derived", metric: "protein_near_dose", rows: (rows.find((r) => (r.source === "cronometer" || r.source === "hae") && r.metric === "protein") || { rows: 0 }).rows, last_ts: null });
+  if (have.has("event/event")) {
+    const ev = await pool.query("select raw->>'type' as type, count(*)::int as n from observations where user_id = $1 and source = 'event' group by 1", [req.user.id]);
+    rows.push({ source: "derived", metric: "events_count", rows: ev.rows.reduce((a, r) => a + r.n, 0), last_ts: null }, { source: "derived", metric: "event_minutes", rows: 0, last_ts: null });
+    ev.rows.forEach((r) => rows.push({ source: "derived", metric: "events_" + r.type, rows: r.n, last_ts: null }));
+  }
   if (have.has("hae/dietary_energy") || have.has("cronometer/entries")) ["first_meal_hour", "last_meal_hour"].forEach((m) => rows.push({ source: "derived", metric: m, rows: 0, last_ts: null }));
   res.json(rows);
 });
@@ -635,7 +694,7 @@ app.get("/api/day", requireAuth, async (req, res) => {
   const day = String(req.query.day || "");
   if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) return res.status(400).json({ error: "day=YYYY-MM-DD" });
   const uid = req.user.id;
-  const [obs, qol, meds, dopa, oura, motor, cron] = await Promise.all([
+  const [obs, qol, meds, dopa, oura, motor, cron, events] = await Promise.all([
     pool.query(
       `select ts, metric, value, raw from observations
        where user_id = $1 and source = 'hae' and (ts at time zone $2)::date = $3::date order by ts`,
@@ -660,6 +719,11 @@ app.get("/api/day", requireAuth, async (req, res) => {
       `select metric, sum(value) as value from observations where user_id = $1 and source = 'cronometer' and (ts at time zone $2)::date = $3::date group by metric`,
       [uid, TZ, day]
     ),
+    pool.query(
+      `select ts, value as minutes, raw from observations where user_id = $1 and source = 'event' and metric = 'event'
+         and (ts at time zone $2)::date between $3::date - 1 and $3::date order by ts`,
+      [uid, TZ, day]
+    ),
   ]);
   const hourly = {}, daily = {}, workouts = [];
   const counts = {};
@@ -671,6 +735,7 @@ app.get("/api/day", requireAuth, async (req, res) => {
     else daily[r.metric] = r.value;
   });
   res.json({ day, hourly, daily, oura: Object.fromEntries(oura.rows.map((r) => [r.metric, r.value])), nutrition: Object.fromEntries(cron.rows.map((r) => [r.metric, Number(r.value)])), motor: motor.rows, qol: qol.rows,
+    events: events.rows.map((r) => ({ ts: r.ts, minutes: r.minutes, ...r.raw })).filter((e) => !e.end || new Date(e.end).toLocaleDateString("en-CA", { timeZone: TZ }) >= day),
     doses: meds.rows.map((r) => ({ ...r, dopaminergic: dopa.includes(r.drug || "sinemet") })), workouts });
 });
 
