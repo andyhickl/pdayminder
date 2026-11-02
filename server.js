@@ -451,7 +451,8 @@ async function dailySeries(uid, source, metric, days) {
     if (metric === "protein_near_dose") {
       // Protein logged within 90 minutes either side of a dopaminergic dose (hourly rows whose hour start falls in the
       // window). Cronometer's own export wins over the Apple Health copy when both exist.
-      const src = (await pool.query("select 1 from observations where user_id = $1 and source = 'cronometer' and metric = 'protein' limit 1", [uid])).rows.length ? "cronometer" : "hae";
+      // Needs hourly rows: HAE's hourly relay. (Cronometer's export gives daily totals unless the account exports per-entry nutrients.)
+      const src = (await pool.query("select 1 from observations where user_id = $1 and source = 'cronometer' and metric = 'protein' and raw->>'granularity' is distinct from 'day' limit 1", [uid])).rows.length ? "cronometer" : "hae";
       const { rows } = await pool.query(
         `select to_char((o.ts at time zone $2)::date,'YYYY-MM-DD') as day, sum(o.value) as v
          from observations o
@@ -467,7 +468,7 @@ async function dailySeries(uid, source, metric, days) {
       const { rows } = await pool.query(
         `select to_char((ts at time zone $2)::date,'YYYY-MM-DD') as day,
                 ${fn}(extract(hour from (ts at time zone $2)) + extract(minute from (ts at time zone $2)) / 60) as v
-         from observations where user_id = $1 and ((source = 'hae' and metric = 'dietary_energy') or (source = 'cronometer' and metric = 'energy')) and value > 0
+         from observations where user_id = $1 and ((source = 'hae' and metric = 'dietary_energy') or (source = 'cronometer' and metric = 'entries')) and value > 0
            and (ts at time zone $2)::date >= (now() at time zone $2)::date - ($3::int - 1)
          group by 1 order by 1`, [uid, TZ, days]);
       return rows.map((r) => [r.day, Number(r.v)]);
@@ -599,7 +600,7 @@ app.get("/api/metrics", requireAuth, async (req, res) => {
   // Derived nutrition metrics show up once protein / energy rows exist (computed on read, see dailySeries).
   const have = new Set(rows.map((r) => r.source + "/" + r.metric));
   if (have.has("hae/protein") || have.has("cronometer/protein")) rows.push({ source: "derived", metric: "protein_near_dose", rows: (rows.find((r) => (r.source === "cronometer" || r.source === "hae") && r.metric === "protein") || { rows: 0 }).rows, last_ts: null });
-  if (have.has("hae/dietary_energy") || have.has("cronometer/energy")) ["first_meal_hour", "last_meal_hour"].forEach((m) => rows.push({ source: "derived", metric: m, rows: 0, last_ts: null }));
+  if (have.has("hae/dietary_energy") || have.has("cronometer/entries")) ["first_meal_hour", "last_meal_hour"].forEach((m) => rows.push({ source: "derived", metric: m, rows: 0, last_ts: null }));
   res.json(rows);
 });
 

@@ -124,13 +124,16 @@ function unitOf(col) { const m = col.match(/\(([^)]*)\)/); return m ? m[1] : nul
 function localIso(day, hhmm) {
   // Interpret day + time in TZ and return an ISO instant.
   const guess = new Date(`${day}T${hhmm}:00Z`);
-  const offsetMin = (new Date(guess.toLocaleString("en-US", { timeZone: TZ })) - new Date(guess.toLocaleString("en-US", { timeZone: "UTC" }))) / 60000;
-  return new Date(guess.getTime() - offsetMin * 60000).toISOString();
+  const off = (d) => (new Date(d.toLocaleString("en-US", { timeZone: TZ })) - new Date(d.toLocaleString("en-US", { timeZone: "UTC" }))) / 60000;
+  let t = new Date(guess.getTime() - off(guess) * 60000);
+  t = new Date(guess.getTime() - off(t) * 60000); // second pass handles DST transition days
+  return t.toISOString();
 }
 function hourKey(row) {
   const day = row.Day || row.Date; if (!/^\d{4}-\d{2}-\d{2}$/.test(day || "")) return null;
-  let t = (row.Time || "").match(/^(\d{1,2}):(\d{2})/);
+  let t = (row.Time || "").match(/^(\d{1,2}):(\d{2})\s*([AaPp][Mm])?/);
   let hh = t ? Number(t[1]) : null;
+  if (t && t[3]) { const pm = /p/i.test(t[3]); if (pm && hh < 12) hh += 12; if (!pm && hh === 12) hh = 0; }
   if (hh == null) { const g = (row.Group || "").toLowerCase(); const nominal = Object.keys(GROUP_TIME).find((k) => g.includes(k)); hh = Number((nominal ? GROUP_TIME[nominal] : "15:00").slice(0, 2)); }
   return { day, ts: localIso(day, String(hh).padStart(2, "0") + ":00"), entryTs: localIso(day, t ? `${String(hh).padStart(2, "0")}:${t[2]}` : String(hh).padStart(2, "0") + ":00") };
 }
@@ -170,22 +173,25 @@ async function main() {
 
   const fmt = (d) => d.toLocaleDateString("en-CA", { timeZone: TZ });
   const end = fmt(new Date()), start = fmt(new Date(Date.now() - (DAYS - 1) * 86400000));
+  // Two exports: servings (entry names, times, amounts; nutrients per entry only on accounts whose export includes
+  // them) and the daily summary (every nutrient, one row per day). Nutrients come from servings per hour when
+  // present, otherwise from the daily summary keyed to local midnight; never both.
   const csv = await exportCsv(jar, token, "servings", start, end);
   const rows = parseCsv(csv);
-  console.log(`cronometer servings ${start}..${end}: ${rows.length} entries`);
-  if (rows.length) {
-    const cols = Object.keys(rows[0]);
-    const numeric = cols.filter((c) => !META.has(c) && rows.some((r) => r[c] !== "" && isFinite(Number(r[c]))));
-    console.log(`columns (${cols.length}): ${cols.slice(0, 12).map((c) => JSON.stringify(c)).join(", ")}${cols.length > 12 ? ", …" : ""}`);
-    console.log(`numeric nutrient columns: ${numeric.length}; sample row: ${JSON.stringify(Object.fromEntries(Object.entries(rows[0]).slice(0, 10)))}`);
-  }
+  const cols = rows.length ? Object.keys(rows[0]) : [];
+  const servingsHasNutrients = cols.some((c) => !META.has(c) && rows.some((r) => r[c] !== "" && isFinite(Number(r[c]))));
+  console.log(`cronometer servings ${start}..${end}: ${rows.length} entries, ${cols.length} columns${servingsHasNutrients ? " (with nutrients)" : ""}`);
+  const dailyCsv = await exportCsv(jar, token, "dailySummary", start, end);
+  const daily = parseCsv(dailyCsv);
+  console.log(`cronometer daily summary: ${daily.length} days, ${daily.length ? Object.keys(daily[0]).length : 0} columns`);
 
   // Aggregate per hour; collect supplements.
   const hours = {}; const supps = []; const units = {};
   for (const r of rows) {
     const k = hourKey(r); if (!k) continue;
     const h = (hours[k.ts] = hours[k.ts] || { day: k.day, sums: {}, n: 0 }); h.n++;
-    for (const [col, val] of Object.entries(r)) {
+    h.sums.entries = (h.sums.entries || 0) + 1;
+    if (servingsHasNutrients) for (const [col, val] of Object.entries(r)) {
       if (META.has(col) || val === "") continue;
       const v = Number(val); if (!isFinite(v)) continue;
       const m = metricName(col); if (!m) continue;
@@ -194,6 +200,19 @@ async function main() {
     if (isSupplement(r)) {
       const amt = Number(String(r.Amount || "").match(/[\d.]+/)?.[0]) || 1;
       supps.push({ ts: k.entryTs, metric: "supp_" + slug(r["Food Name"] || "supplement"), value: amt, raw: { name: r["Food Name"], amount: r.Amount, group: r.Group, category: r.Category } });
+    }
+  }
+
+  // Daily totals from the summary export, at local midnight (skipped when servings already carried nutrients).
+  const dailyRows = [];
+  if (!servingsHasNutrients) for (const r of daily) {
+    const day = r.Date || r.Day; if (!/^\d{4}-\d{2}-\d{2}$/.test(day || "")) continue;
+    const ts = localIso(day, "00:00");
+    for (const [col, val] of Object.entries(r)) {
+      if (META.has(col) || val === "") continue;
+      const v = Number(val); if (!isFinite(v)) continue;
+      const m = metricName(col); if (!m || m === "entries") continue;
+      dailyRows.push({ ts, metric: m, value: v, raw: { units: unitOf(col), granularity: "day" } });
     }
   }
 
@@ -213,6 +232,13 @@ async function main() {
         ); n++;
       }
     }
+    for (const d of dailyRows) {
+      await client.query(
+        `insert into observations (user_id, ts, source, metric, value, raw) values ($1,$2,'cronometer',$3,$4,$5)
+         on conflict (user_id, source, metric, ts) do update set value = excluded.value, raw = excluded.raw`,
+        [userId, d.ts, d.metric, Number(d.value.toFixed(4)), d.raw]
+      ); n++;
+    }
     for (const s of supps) {
       await client.query(
         `insert into observations (user_id, ts, source, metric, value, raw) values ($1,$2,'cronometer',$3,$4,$5)
@@ -222,11 +248,11 @@ async function main() {
     }
     await client.query(
       "insert into ingest_log (user_id, route, status, rows, bytes, summary) values ($1,'cronometer-sync',200,$2,$3,$4)",
-      [userId, n, Buffer.byteLength(csv), { range: { start, end }, entries: rows.length, hours: Object.keys(hours).length, supplements: supps.map((s) => s.raw.name).slice(0, 20) }]
+      [userId, n, Buffer.byteLength(csv) + Buffer.byteLength(dailyCsv), { range: { start, end }, entries: rows.length, days: daily.length, hours: Object.keys(hours).length, dailyMetrics: dailyRows.length, supplements: supps.map((s) => s.raw.name).slice(0, 20) }]
     );
     await client.query("commit");
   } catch (e) { await client.query("rollback"); throw e; } finally { client.release(); }
-  console.log(`cronometer sync wrote ${n} rows (${Object.keys(hours).length} hours, ${supps.length} supplement entries)`);
+  console.log(`cronometer sync wrote ${n} rows (${Object.keys(hours).length} hours of entries, ${dailyRows.length} daily nutrient values, ${supps.length} supplement entries)`);
 }
 
 if (require.main === module) {
