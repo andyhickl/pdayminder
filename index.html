@@ -547,6 +547,8 @@
     .matrix-cell:hover { box-shadow: 0 0 0 2px #38bdf8; }
     .matrix-cell.selected-day { box-shadow: 0 0 0 1px rgba(56, 189, 248, 0.55); }
     .matrix-cell.future { cursor: default; opacity: 0.5; }
+    .matrix-cell { position: relative; }
+    .matrix-cell .ev-mark { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; font-size: 11px; line-height: 1; color: #fff; text-shadow: 0 0 2px #000, 0 0 3px #000; pointer-events: none; }
     .matrix-cell.future:hover { box-shadow: 0 0 0 1px rgba(15, 23, 42, 0.7); }
     .qol-bars {
       display: grid;
@@ -979,7 +981,7 @@
       );
     }
 
-    function DayRing({ day, onSegmentClick, settings: ringSettings }) {
+    function DayRing({ day, onSegmentClick, settings: ringSettings, events }) {
       const width = 260;
       const height = 260;
       const cx = width / 2;
@@ -1071,6 +1073,23 @@
             <text x={cx} y={cy + 10} textAnchor="middle" fontSize="10" fill="#6b7280">
               tap a segment to rate QoL
             </text>
+
+            {(events || []).map((e, i) => {
+              const span = eventSpanOnDay(e, day.dateKey); if (!span) return null;
+              const a0 = (span[0] / 1440) * Math.PI * 2 - Math.PI / 2, a1 = (Math.max(span[1], span[0] + 8) / 1440) * Math.PI * 2 - Math.PI / 2;
+              const rArc = rOuter + 4, rIn = rInner - 4;
+              const p = (r, a) => [cx + r * Math.cos(a), cy + r * Math.sin(a)];
+              const [ax0, ay0] = p(rArc, a0), [ax1, ay1] = p(rArc, a1);
+              const arc = `M ${ax0.toFixed(1)} ${ay0.toFixed(1)} A ${rArc} ${rArc} 0 ${a1 - a0 > Math.PI ? 1 : 0} 1 ${ax1.toFixed(1)} ${ay1.toFixed(1)}`;
+              const ray = (a) => { const [x1, y1] = p(rIn, a), [x2, y2] = p(rArc, a); return <line x1={x1} y1={y1} x2={x2} y2={y2} stroke="#ef4444" strokeWidth="1.5" opacity="0.9" />; };
+              return (
+                <g key={`ev-${i}`}>
+                  <path d={arc} fill="none" stroke="#ef4444" strokeWidth="4" strokeLinecap="round" opacity="0.95" />
+                  {ray(a0)}{e.end && ray(a1)}
+                  <title>{eventLabel(e.type)} {e.severity}/5 · {fmtEventTime(e.start)}–{e.end ? fmtEventTime(e.end) : "ongoing"}</title>
+                </g>
+              );
+            })}
 
             {normalizeMeds(day.meds).map((m, i) => {
               const t = m.t; const dopa = isDopa(ringSettings, m.drug);
@@ -1311,6 +1330,13 @@
           </div>
         </div>
       );
+    }
+    // [startMin, endMin] of an event clipped to the local day `key`, or null if it doesn't touch that day. Ongoing = until now.
+    function eventSpanOnDay(e, key) {
+      const s = new Date(e.start), en = e.end ? new Date(e.end) : new Date();
+      const d0 = new Date(key + "T00:00:00"), d1 = new Date(d0.getTime() + 86400000);
+      if (en <= d0 || s >= d1) return null;
+      return [Math.max(0, (Math.max(s, d0) - d0) / 60000), Math.min(1440, (Math.min(en, d1) - d0) / 60000)];
     }
     function fmtEventTime(iso) { return new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }); }
     function DayEventsList({ events, onEdit, onDeleted }) {
@@ -3641,7 +3667,7 @@
       );
     }
 
-    function QoLSummaryCard({ days, onCellClick, selectedKey }) {
+    function QoLSummaryCard({ days, onCellClick, selectedKey, events }) {
       const now = new Date();
       const nowMinutes = now.getHours() * 60 + now.getMinutes();
       const todayKey = toDateKey(now);
@@ -3699,6 +3725,7 @@
             label: `${dateObj.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" })} · ${String(segIndex * 2).padStart(2, "0")}:00–${String(segIndex * 2 + 2).padStart(2, "0")}:00`,
             future: isToday && segMidMinute > nowMinutes,
             isSelectedDay: key === selectedKey,
+            events: (events || []).filter((e) => { const sp = eventSpanOnDay(e, key); return sp && sp[0] < (segIndex + 1) * 120 && sp[1] > segIndex * 120; }),
           });
         }
       });
@@ -3716,7 +3743,7 @@
             </div>
           </div>
           <div style={{ fontSize: "11px", color: "var(--muted)", marginTop: 4 }}>
-            Each cell is a 2-hour block: red → lower QoL, green/blue → better QoL, gray = sleep, black = no data / not yet logged.
+            Each cell is a 2-hour block: red → lower QoL, green/blue → better QoL, gray = sleep, black = no data / not yet logged. <span style={{ color: "#ef4444" }}>✱</span> = a symptom event touched that block.
           </div>
           <div className="summary-chart" style={{ display: "grid", gridTemplateColumns: "34px 1fr 28px", gap: 4, alignItems: "stretch" }}>
             <div style={{ display: "grid", gridTemplateRows: "repeat(7, 1fr)", fontSize: 10, color: "var(--muted)", gap: 3 }}>
@@ -3730,9 +3757,9 @@
                   key={cell.key}
                   className={"matrix-cell" + (cell.isSelectedDay ? " selected-day" : "") + (cell.future ? " future" : "")}
                   style={{ backgroundColor: cell.color }}
-                  title={cell.label}
+                  title={cell.label + (cell.events.length ? " · " + cell.events.map((e) => `${eventLabel(e.type)} ${e.severity}/5`).join(", ") : "")}
                   onClick={() => !cell.future && onCellClick && onCellClick(cell.dateKey, cell.segIndex, cell.label)}
-                />
+                >{cell.events.length > 0 && <span className="ev-mark" style={{ color: "#ef4444" }}>✱</span>}</div>
               ))}
             </div>
             <div className="matrix-vnav">
@@ -4095,6 +4122,7 @@
 
       const dateKey = toDateKey(selectedDate);
       const [dayEvents] = useJson(`/api/day?day=${dateKey}`, [dateKey, eventsTick, days]);
+      const [recentEvents] = useJson("/api/events?days=21", [eventsTick]);
 
       useEffect(() => {
         setDays((prev) => {
@@ -4282,7 +4310,7 @@
               </div>
             </div>
             <div className="ring-container">
-              <DayRing day={day} onSegmentClick={handleSegmentClick} settings={settings} />
+              <DayRing day={day} onSegmentClick={handleSegmentClick} settings={settings} events={dayEvents && dayEvents.events} />
               <div className="ring-caption">
                 Red = tougher hours. Green/blue = better QoL. Gray with 😴 = sleep, black = no data/not yet logged.
               </div>
@@ -4310,7 +4338,7 @@
           </div>
           </Section>
           <Section title="Recent days" subtitle="A week at a glance; tap any block to rate it." storageKey="qol-summary">
-              <QoLSummaryCard days={days} onCellClick={handleSummaryCellClick} selectedKey={dateKey} />
+              <QoLSummaryCard days={days} onCellClick={handleSummaryCellClick} selectedKey={dateKey} events={recentEvents} />
           </Section>
             </>
           )}
