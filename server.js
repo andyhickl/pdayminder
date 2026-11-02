@@ -403,7 +403,9 @@ app.get("/api/events", requireAuth, async (req, res) => {
   const { rows } = await pool.query(
     `select ts, value as minutes, raw from observations where user_id = $1 and source = 'event' and metric = 'event'
        and ts >= now() - ($2 || ' days')::interval order by ts desc`, [req.user.id, String(days)]);
-  res.json(rows.map((r) => ({ ts: r.ts, minutes: r.minutes, ...r.raw })));
+  const out = rows.map((r) => ({ ts: r.ts, minutes: r.minutes, ...r.raw }));
+  await annotateDose(req.user.id, out); // doses logged after the event still count
+  res.json(out);
 });
 app.post("/api/events", requireAuth, async (req, res) => {
   const b = req.body || {};
@@ -735,7 +737,7 @@ app.get("/api/day", requireAuth, async (req, res) => {
     else daily[r.metric] = r.value;
   });
   res.json({ day, hourly, daily, oura: Object.fromEntries(oura.rows.map((r) => [r.metric, r.value])), nutrition: Object.fromEntries(cron.rows.map((r) => [r.metric, Number(r.value)])), motor: motor.rows, qol: qol.rows,
-    events: events.rows.map((r) => ({ ts: r.ts, minutes: r.minutes, ...r.raw })).filter((e) => !e.end || new Date(e.end).toLocaleDateString("en-CA", { timeZone: TZ }) >= day),
+    events: await annotateDose(uid, events.rows.map((r) => ({ ts: r.ts, minutes: r.minutes, ...r.raw })).filter((e) => !e.end || new Date(e.end).toLocaleDateString("en-CA", { timeZone: TZ }) >= day)),
     doses: meds.rows.map((r) => ({ ...r, dopaminergic: dopa.includes(r.drug || "sinemet") })), workouts });
 });
 
