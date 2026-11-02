@@ -983,7 +983,7 @@ async function migrateScores() {
   await pool.query(`delete from observations o where o.source = 'hae' and o.metric ~ $1
     and date_trunc('hour', o.ts) <> o.ts
     and exists (select 1 from observations h where h.user_id = o.user_id and h.source = o.source and h.metric = o.metric
-                and h.ts = date_trunc('hour', o.ts))`, [SUMMED_RE.source]).catch((e) => console.error("intake dedupe", e.message));
+                and h.ts = date_trunc('hour', h.ts) and (h.ts at time zone $2)::date = (o.ts at time zone $2)::date)`, [SUMMED_RE.source, TZ]).catch((e) => console.error("intake dedupe", e.message));
   await pool.query(`delete from qol_ratings q where type <> 'rating'
     and not exists (select 1 from qol_ratings r where r.user_id = q.user_id and r.day = q.day and r.type = 'rating')
     and not exists (select 1 from med_doses d where d.user_id = q.user_id and d.day = q.day)`).catch((e) => console.error("placeholder cleanup", e.message));
