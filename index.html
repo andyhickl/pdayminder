@@ -660,6 +660,9 @@
     const medT = (m) => (typeof m === "string" ? m : m.t);
     const medDrug = (m) => (typeof m === "string" ? "sinemet" : m.drug || "sinemet");
     const normalizeMeds = (arr) => { const seen = new Set(); return (arr || []).map((m) => ({ t: medT(m), drug: medDrug(m) })).filter((m) => m.t && !seen.has(m.t + "|" + m.drug) && seen.add(m.t + "|" + m.drug)).sort((a, b) => a.t.localeCompare(b.t)); };
+    const normalizeSupps = (arr) => { const seen = new Set(); return (arr || []).map((x) => ({ t: x && x.t, id: x && x.id })).filter((x) => x.t && x.id && !seen.has(x.t + "|" + x.id) && seen.add(x.t + "|" + x.id)).sort((a, b) => a.t.localeCompare(b.t)); };
+    const normalizeSupplements = (settings) => (settings && Array.isArray(settings.supplements) ? settings.supplements : []).map((x) => ({ id: x.id || slug(x.name), name: x.name || x.id, dose: x.dose || "", times: Array.isArray(x.times) ? x.times.filter(Boolean) : [] }));
+    const suppName = (settings, id) => { const x = (settings.supplements || []).find((y) => y.id === id); return x ? x.name : id; };
     const isDopa = (settings, drug) => { const m = (settings.medications || []).find((x) => x.id === drug); return m ? m.dopaminergic : drug === "sinemet"; };
     const medName = (settings, drug) => { const m = (settings.medications || []).find((x) => x.id === drug); return m ? m.name : drug; };
     // Dose state for a moment on a day: post-dose = 30 min–3.5 h after the latest dopaminergic dose; ramp = under 30 min; pre = otherwise.
@@ -806,7 +809,7 @@
         const raw = localStorage.getItem("pdayminder-days");
         if (!raw) return {};
         const parsed = JSON.parse(raw) || {};
-        Object.values(parsed).forEach((d) => { if (d) d.meds = normalizeMeds(d.meds); });
+        Object.values(parsed).forEach((d) => { if (d) { d.meds = normalizeMeds(d.meds); d.supps = normalizeSupps(d.supps); } });
         return parsed;
       } catch {
         return {};
@@ -892,7 +895,7 @@
           seg.type = "sleep";
         }
       });
-      return { dateKey, segments, meds: [] };
+      return { dateKey, segments, meds: [], supps: [] };
     }
 
     // ---------- Components ----------
@@ -982,8 +985,8 @@
     }
 
     function DayRing({ day, onSegmentClick, settings: ringSettings, events }) {
-      const width = 260;
-      const height = 260;
+      const width = 300;
+      const height = 300;
       const cx = width / 2;
       const cy = height / 2;
       const rOuter = 105;
@@ -1074,52 +1077,67 @@
               tap a segment to rate QoL
             </text>
 
-            {(events || []).map((e, i) => {
-              const span = eventSpanOnDay(e, day.dateKey); if (!span) return null;
-              const a0 = (span[0] / 1440) * Math.PI * 2 - Math.PI / 2, a1 = (Math.max(span[1], span[0] + 8) / 1440) * Math.PI * 2 - Math.PI / 2;
-              const rArc = rOuter + 4, rIn = rInner - 4;
+            {(() => {
+              // Markers: dose rays (blue), supplement rays (yellow), event arcs + rays (red). Labels sit in bubbles on two
+              // rings outside the wheel; when two labels would collide, the lower-priority one moves out, then is dropped.
               const p = (r, a) => [cx + r * Math.cos(a), cy + r * Math.sin(a)];
-              const [ax0, ay0] = p(rArc, a0), [ax1, ay1] = p(rArc, a1);
-              const arc = `M ${ax0.toFixed(1)} ${ay0.toFixed(1)} A ${rArc} ${rArc} 0 ${a1 - a0 > Math.PI ? 1 : 0} 1 ${ax1.toFixed(1)} ${ay1.toFixed(1)}`;
-              const ray = (a) => { const [x1, y1] = p(rIn, a), [x2, y2] = p(rArc, a); return <line x1={x1} y1={y1} x2={x2} y2={y2} stroke="#ef4444" strokeWidth="1.5" opacity="0.9" />; };
+              const angleOfMin = (min) => (min / 1440) * Math.PI * 2 - Math.PI / 2;
+              const markers = [];
+              normalizeMeds(day.meds).forEach((m, i) => {
+                const dopa = isDopa(ringSettings, m.drug);
+                markers.push({ key: `med-${i}`, kind: dopa ? "dose" : "othermed", angle: angleForTimeStr(m.t), label: m.t, color: dopa ? "#38bdf8" : "#94a3b8", priority: dopa ? 0 : 3, title: `${medName(ringSettings, m.drug)} ${m.t}` });
+              });
+              normalizeSupps(day.supps).forEach((x, i) => {
+                markers.push({ key: `supp-${i}`, kind: "supp", angle: angleForTimeStr(x.t), label: x.t, color: "#facc15", priority: 2, title: `${suppName(ringSettings, x.id)} ${x.t}` });
+              });
+              const arcs = [];
+              (events || []).forEach((e, i) => {
+                const span = eventSpanOnDay(e, day.dateKey); if (!span) return;
+                const a0 = angleOfMin(span[0]), a1 = angleOfMin(Math.max(span[1], span[0] + 8));
+                arcs.push({ key: `ev-${i}`, a0, a1, ongoing: !e.end, title: `${eventLabel(e.type)} ${e.severity}/5 · ${fmtEventTime(e.start)}–${e.end ? fmtEventTime(e.end) : "ongoing"}` });
+                markers.push({ key: `ev-${i}-s`, kind: "event", angle: a0, label: fmtEventTime(e.start).replace(/\s?[AP]M/i, ""), color: "#ef4444", priority: 1, title: arcs[arcs.length - 1].title });
+                if (e.end) markers.push({ key: `ev-${i}-e`, kind: "event", angle: a1, label: fmtEventTime(e.end).replace(/\s?[AP]M/i, ""), color: "#ef4444", priority: 1, title: arcs[arcs.length - 1].title });
+              });
+              // Label placement: by priority, two rings, minimum angular gap scaled by radius so bubbles don't overlap.
+              const rings = [rOuter + 24, rOuter + 38];
+              const placed = [[], []];
+              const norm = (a) => Math.atan2(Math.sin(a), Math.cos(a));
+              const gapOk = (ring, a) => placed[ring].every((b) => Math.abs(norm(a - b)) * rings[ring] > 34);
+              [...markers].sort((a, b) => a.priority - b.priority).forEach((m) => {
+                if (m.kind === "othermed") return; // dots only
+                const ring = gapOk(0, m.angle) ? 0 : gapOk(1, m.angle) ? 1 : -1;
+                m.ring = ring; if (ring >= 0) placed[ring].push(m.angle);
+              });
+              const rArc = rInner - 5;
               return (
-                <g key={`ev-${i}`}>
-                  <path d={arc} fill="none" stroke="#ef4444" strokeWidth="4" strokeLinecap="round" opacity="0.95" />
-                  {ray(a0)}{e.end && ray(a1)}
-                  <title>{eventLabel(e.type)} {e.severity}/5 · {fmtEventTime(e.start)}–{e.end ? fmtEventTime(e.end) : "ongoing"}</title>
-                </g>
+                <>
+                  {arcs.map((e) => {
+                    const [ax0, ay0] = p(rArc, e.a0), [ax1, ay1] = p(rArc, e.a1);
+                    const d = `M ${ax0.toFixed(1)} ${ay0.toFixed(1)} A ${rArc} ${rArc} 0 ${e.a1 - e.a0 > Math.PI ? 1 : 0} 1 ${ax1.toFixed(1)} ${ay1.toFixed(1)}`;
+                    const ray = (a, k) => { const [x1, y1] = p(rArc, a), [x2, y2] = p(rOuter + 6, a); return <line key={k} x1={x1} y1={y1} x2={x2} y2={y2} stroke="#ef4444" strokeWidth="1.5" opacity="0.9" />; };
+                    return <g key={e.key}><path d={d} fill="none" stroke="#ef4444" strokeWidth="4" strokeLinecap="round" opacity="0.95" />{ray(e.a0, "s")}{!e.ongoing && ray(e.a1, "e")}<title>{e.title}</title></g>;
+                  })}
+                  {markers.map((m) => {
+                    if (m.kind === "othermed") { const [rx, ry] = p(rOuter + 6, m.angle); return <g key={m.key}><circle cx={rx} cy={ry} r="3" fill="#94a3b8" opacity="0.9"><title>{m.title}</title></circle></g>; }
+                    if (m.kind === "event") return null; // rays drawn with the arc
+                    const [x1, y1] = p(m.kind === "supp" ? rInner * 0.6 : rInner * 0.4, m.angle), [x2, y2] = p(rOuter * 1.05, m.angle);
+                    return <line key={m.key} x1={x1} y1={y1} x2={x2} y2={y2} stroke={m.color} strokeWidth={m.kind === "supp" ? 1.5 : 2} strokeLinecap="round" opacity="0.9"><title>{m.title}</title></line>;
+                  })}
+                  {markers.map((m) => {
+                    if (m.ring == null || m.ring < 0) return null;
+                    const [lx, ly] = p(rings[m.ring], m.angle);
+                    const w = m.label.length * 5.4 + 8, h = 13;
+                    return (
+                      <g key={m.key + "-l"}>
+                        <rect x={lx - w / 2} y={ly - h / 2} width={w} height={h} rx="6" fill="#020617" stroke={m.color} strokeWidth="1" />
+                        <text x={lx} y={ly + 3.5} fontSize="9" textAnchor="middle" fill={m.color}>{m.label}</text>
+                        <title>{m.title}</title>
+                      </g>
+                    );
+                  })}
+                </>
               );
-            })}
-
-            {normalizeMeds(day.meds).map((m, i) => {
-              const t = m.t; const dopa = isDopa(ringSettings, m.drug);
-              const angle = angleForTimeStr(t);
-              const innerR = rInner * 0.4;
-              const outerR = rOuter * 1.05;
-              const x1 = cx + innerR * Math.cos(angle);
-              const y1 = cy + innerR * Math.sin(angle);
-              const x2 = cx + outerR * Math.cos(angle);
-              const y2 = cy + outerR * Math.sin(angle);
-
-              const labelAngle = angle + (6 * Math.PI / 180);
-              let labelRadius = rOuter + 22;
-              const sinA = Math.sin(labelAngle);
-              if (sinA > 0.75) labelRadius = rOuter + 14;
-
-              const lx = cx + labelRadius * Math.cos(labelAngle);
-              const ly = cy + labelRadius * Math.sin(labelAngle) + 3;
-
-              if (!dopa) {
-                const rx = cx + (rOuter + 6) * Math.cos(angle), ry = cy + (rOuter + 6) * Math.sin(angle);
-                return <g key={`med-${i}-${t}`}><circle cx={rx} cy={ry} r="3" fill="#94a3b8" opacity="0.9"><title>{medName(ringSettings, m.drug)} {t}</title></circle></g>;
-              }
-              return (
-                <g key={`med-${i}-${t}`}>
-                  <line x1={x1} y1={y1} x2={x2} y2={y2} stroke="#38bdf8" strokeWidth="2" strokeLinecap="round" opacity="0.9" />
-                  <text x={lx} y={ly} fontSize="9" textAnchor="middle" fill="#38bdf8">{t}</text>
-                </g>
-              );
-            })}
+            })()}
           </svg>
         </div>
       );
@@ -1215,24 +1233,28 @@
       );
     }
 
-    function MedModal({ open, settings, onClose, onSave }) {
-      const meds = settings.medications || [];
+    // One dialog for medications and supplements: pick an item, pick a time (quick-fill from its schedule).
+    function MedModal({ open, settings, onClose, onSave, kind = "med" }) {
+      const isSupp = kind === "supp";
+      const meds = isSupp ? normalizeSupplements(settings) : (settings.medications || []);
       const now = new Date();
       const defaultTime = minutesToTimeString(now.getHours() * 60 + now.getMinutes());
       const [time, setTime] = useState(defaultTime);
       const [drug, setDrug] = useState(() => (meds.find((m) => m.dopaminergic) || meds[0] || { id: "sinemet" }).id);
-      useEffect(() => { if (open) { const n = new Date(); setTime(minutesToTimeString(n.getHours() * 60 + n.getMinutes())); } }, [open]);
+      useEffect(() => { if (open) { const n = new Date(); setTime(minutesToTimeString(n.getHours() * 60 + n.getMinutes())); if (!meds.find((m) => m.id === drug)) setDrug((meds.find((m) => m.dopaminergic) || meds[0] || { id: "sinemet" }).id); } }, [open]);
       if (!open) return null;
       const med = meds.find((m) => m.id === drug) || meds[0];
+      const accent = isSupp ? "#ca8a04" : "#1d4ed8";
       return (
         <div className="modal-backdrop" onClick={onClose}>
           <div className="modal" onClick={(e) => e.stopPropagation()}>
-            <div className="modal-header"><div className="modal-title">Log medication</div></div>
+            <div className="modal-header"><div className="modal-title">{isSupp ? "Log supplement" : "Log medication"}</div></div>
             <div className="modal-body">
-              <div style={{ fontSize: "11px", color: "var(--muted)" }}>Which medication, and when. Defaults to now.</div>
+              <div style={{ fontSize: "11px", color: "var(--muted)" }}>{isSupp ? "Which supplement, and when. Defaults to now. Add supplements under Settings › Profile." : "Which medication, and when. Defaults to now."}</div>
+              {isSupp && !meds.length && <div style={{ fontSize: 12, color: "#fbbf24", marginTop: 6 }}>No supplements set up yet. Settings › Profile › Supplements.</div>}
               <div className="quick-times" style={{ marginTop: 6 }}>
                 {meds.map((m) => (
-                  <button key={m.id} type="button" className={"quick-time-pill" + (drug === m.id ? " active" : "")} style={drug === m.id ? { background: "#1d4ed8", color: "#fff" } : {}} onClick={() => setDrug(m.id)}>
+                  <button key={m.id} type="button" className={"quick-time-pill" + (drug === m.id ? " active" : "")} style={drug === m.id ? { background: accent, color: "#fff" } : {}} onClick={() => setDrug(m.id)}>
                     {m.name}{m.dose ? ` ${m.dose}` : ""}{m.dopaminergic ? " ·L" : ""}
                   </button>
                 ))}
@@ -1249,11 +1271,11 @@
                   </div>
                 </>
               )}
-              <div style={{ fontSize: 10, color: "var(--muted)", marginTop: 6 }}>·L marks dopaminergic (levodopa-class) medications; those drive the dose rays, dose lines and pre/post-dose tagging.</div>
+              {!isSupp && <div style={{ fontSize: 10, color: "var(--muted)", marginTop: 6 }}>·L marks dopaminergic (levodopa-class) medications; those drive the dose rays, dose lines and pre/post-dose tagging.</div>}
             </div>
             <div className="modal-footer">
               <button className="btn-secondary" onClick={onClose}>Cancel</button>
-              <button className="btn-primary" onClick={() => onSave({ t: time, drug })}>Save</button>
+              <button className="btn-primary" disabled={!med} onClick={() => onSave(isSupp ? { t: time, id: drug } : { t: time, drug })}>Save</button>
             </div>
           </div>
         </div>
@@ -1411,6 +1433,8 @@
 
       const updateMed = (i, patch) => { const meds = (local.medications || []).map((m, k) => (k === i ? { ...m, ...patch } : m)); handleChange("medications", meds); };
       const removeMed = (i) => { if (!window.confirm("Remove this medication from settings? Logged doses stay.")) return; handleChange("medications", (local.medications || []).filter((_, k) => k !== i)); };
+      const updateSupp = (i, patch) => { const list = (local.supplements || []).map((m, k) => (k === i ? { ...m, ...patch } : m)); handleChange("supplements", list); };
+      const removeSupp = (i) => { if (!window.confirm("Remove this supplement from settings? Logged entries stay.")) return; handleChange("supplements", (local.supplements || []).filter((_, k) => k !== i)); };
 
       return (
         <div className="card settings-card">
@@ -1422,6 +1446,7 @@
               </div>
             </div>
           </div>
+          <div style={{ marginTop: 10, fontSize: 13, fontWeight: 600 }}>Sleep</div>
           <div className="settings-row">
             <label>
               Sleep start
@@ -1470,6 +1495,28 @@
           ))}
           <div className="controls-row" style={{ marginTop: 12 }}>
             <button type="button" className="pill-btn primary" onClick={() => handleChange("medications", [...(local.medications || []), { id: "med-" + Date.now().toString(36), name: "New medication", dose: "", dopaminergic: false, times: ["08:00"] }])}>+ Add medication</button>
+          </div>
+          <div style={{ marginTop: 16, fontSize: 13, fontWeight: 600 }}>Supplements</div>
+          <div className="card-subtitle">Single-nutrient supplements you want to time (creatine, vitamin D, fiber, CoQ10…). Logged from the QoL tab; yellow rays on the ring. Multivitamins and anything you want broken into nutrients belong in Cronometer.</div>
+          {(local.supplements || []).map((m, i) => (
+            <div key={m.id + i} style={{ background: "#0f172a", borderRadius: 10, padding: "8px 10px", marginTop: 8 }}>
+              <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) 76px 30px", gap: 6, alignItems: "end" }}>
+                <label style={{ fontSize: 11, color: "var(--muted)", display: "flex", flexDirection: "column", gap: 2, minWidth: 0 }}>Name<input className="settings-input" style={{ width: "100%", height: 28, boxSizing: "border-box" }} value={m.name} onChange={(e) => updateSupp(i, { name: e.target.value, id: m.id || slug(e.target.value) })} /></label>
+                <label style={{ fontSize: 11, color: "var(--muted)", display: "flex", flexDirection: "column", gap: 2, minWidth: 0 }}>Dose<input className="settings-input" style={{ width: "100%", height: 28, boxSizing: "border-box" }} value={m.dose || ""} placeholder="5 g" onChange={(e) => updateSupp(i, { dose: e.target.value })} /></label>
+                <button type="button" className="pill-btn" style={{ padding: 0, width: 30, height: 28, boxSizing: "border-box", display: "flex", alignItems: "center", justifyContent: "center", lineHeight: 1 }} onClick={() => removeSupp(i)} title="Remove supplement" aria-label="Remove supplement">✕</button>
+              </div>
+              <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 6, flexWrap: "wrap" }}>
+                <span style={{ fontSize: 11, color: "var(--muted)" }}>{m.times.length}× daily</span>
+                <button type="button" className="pill-btn" onClick={() => updateSupp(i, { times: m.times.slice(0, -1) })} disabled={!m.times.length}>−</button>
+                <button type="button" className="pill-btn" onClick={() => updateSupp(i, { times: [...m.times, m.times.length ? m.times[m.times.length - 1] : "08:00"] })}>+</button>
+                {m.times.map((t, k) => (
+                  <input key={k} type="time" className="settings-input" style={{ width: 118, boxSizing: "border-box" }} value={t} onChange={(e) => { const times = [...m.times]; times[k] = e.target.value; updateSupp(i, { times }); }} />
+                ))}
+              </div>
+            </div>
+          ))}
+          <div className="controls-row" style={{ marginTop: 12 }}>
+            <button type="button" className="pill-btn primary" onClick={() => handleChange("supplements", [...(local.supplements || []), { id: "supp-" + Date.now().toString(36), name: "New supplement", dose: "", times: ["08:00"] }])}>+ Add supplement</button>
           </div>
         </div>
       );
@@ -1613,10 +1660,10 @@
             );
           })}
           {data.doses.map((d, i) => {
-            const [hh, mm] = d.t.split(":").map(Number); const dopa = d.dopaminergic !== false;
+            const [hh, mm] = d.t.split(":").map(Number); const dopa = d.dopaminergic !== false && d.kind !== "supplement"; const supp = d.kind === "supplement";
             return (
               <g key={i}>
-                <line x1={x(hh + mm / 60)} x2={x(hh + mm / 60)} y1={padT} y2={H - padB} stroke={dopa ? "#f8fafc" : "#64748b"} strokeWidth={dopa ? 1.5 : 1} strokeDasharray={dopa ? "2 2" : "1 3"} />
+                <line x1={x(hh + mm / 60)} x2={x(hh + mm / 60)} y1={padT} y2={H - padB} stroke={dopa ? "#f8fafc" : supp ? "#facc15" : "#64748b"} strokeWidth={dopa ? 1.5 : 1} strokeDasharray={dopa ? "2 2" : "1 3"} />
                 {dopa && <text x={x(hh + mm / 60)} y={padT + 9} fontSize="9" fill="#f8fafc" textAnchor="middle">💊</text>}
                 <title>{d.drug} {d.t}</title>
               </g>
@@ -1824,13 +1871,16 @@
       );
     }
     // Supplements are whatever Cronometer entries looked like supplements: one sparkline per supp_* metric.
-    function SupplementTrendsCard() {
+    function SupplementTrendsCard({ settings }) {
       const [metrics] = useJson("/api/metrics", []);
       const palette = ["#fde047", "#f9a8d4", "#99f6e4", "#a5b4fc", "#fdba74", "#86efac", "#67e8f9", "#fca5a5"];
-      const list = (metrics || []).filter((m) => m.source === "cronometer" && m.metric.startsWith("supp_"))
-        .map((m, i) => [m.source + "/" + m.metric, m.metric.slice(5).replace(/_/g, " ").replace(/^\w/, (c) => c.toUpperCase()) + " (amount/day)", palette[i % palette.length], 1]);
-      if (metrics && !list.length) return <div className="card"><div className="card-subtitle">No supplement entries yet. Log your stack in Cronometer (a diary group called "Supplements" is picked up automatically; otherwise names like creatine, vitamin D, omega-3, magnesium are recognised).</div></div>;
-      return <VitalsTrendsCard metrics={list} subtitle="Amount logged per day, summed over entries. Gaps are days you didn't log it." />;
+      const own = (metrics || []).filter((m) => m.source === "derived" && m.metric.startsWith("supp_"))
+        .map((m, i) => ["derived/" + m.metric, suppName(settings || {}, m.metric.slice(5)) + " (logged / day)", palette[i % palette.length], 0]);
+      const cron = (metrics || []).filter((m) => m.source === "cronometer" && m.metric.startsWith("supp_"))
+        .map((m, i) => [m.source + "/" + m.metric, m.metric.slice(5).replace(/_/g, " ").replace(/^\w/, (c) => c.toUpperCase()) + " (Cronometer amount/day)", palette[(i + own.length) % palette.length], 1]);
+      const list = [...own, ...cron];
+      if (metrics && !list.length) return <div className="card"><div className="card-subtitle">No supplements logged yet. Set them up under Settings › Profile › Supplements and log them from the QoL tab; Cronometer entries that look like supplements show here too.</div></div>;
+      return <VitalsTrendsCard metrics={list} subtitle="Times logged per day (PDayMinder) or amount per day (Cronometer). Gaps are days you didn't log it." />;
     }
 
     function WorkoutsCard() {
@@ -3869,6 +3919,7 @@
       "hae/vitamin_c": "Vitamin C (mg)", "hae/vitamin_d": "Vitamin D (µg)", "hae/vitamin_b12": "Vitamin B12 (µg)", "hae/vitamin_b6": "Vitamin B6 (mg)", "hae/folate": "Folate (µg)",
       "cronometer/energy": "Calories (Cronometer)", "cronometer/protein": "Protein (Cronometer)", "cronometer/carbs": "Carbs (Cronometer)", "cronometer/fat": "Fat (Cronometer)", "cronometer/fiber": "Fiber (Cronometer)",
       "cronometer/sugars": "Sugars (Cronometer)", "cronometer/caffeine": "Caffeine (Cronometer)", "cronometer/water": "Water (Cronometer)", "cronometer/omega_3": "Omega-3 (Cronometer)", "cronometer/alcohol": "Alcohol (Cronometer)",
+      "derived/supplements_logged": "Supplements logged / day",
       "derived/events_count": "Symptom events / day", "derived/event_minutes": "Minutes in symptom events / day", "derived/events_dystonia": "Dystonia events / day", "derived/events_dyskinesia": "Involuntary-movement events / day",
       "derived/events_freezing": "Freezing events / day", "derived/events_off": "Off episodes / day", "derived/events_fall": "Falls / day", "derived/events_pain": "Pain events / day", "derived/events_other": "Other events / day",
       "derived/protein_near_dose": "Protein within 90 min of a levodopa dose (g)", "derived/first_meal_hour": "First meal (hour of day)", "derived/last_meal_hour": "Last meal (hour of day)",
@@ -4117,12 +4168,13 @@
         segment: null,
       });
       const [medModalOpen, setMedModalOpen] = useState(false);
+      const [suppModalOpen, setSuppModalOpen] = useState(false);
       const [eventModal, setEventModal] = useState({ open: false, initial: null });
-      const [eventsTick, setEventsTick] = useState(0);
+      const [recentEvents, setRecentEvents] = useState([]);
+      const refreshEvents = () => apiFetch("/api/events?days=21").then((r) => (r.ok ? r.json() : [])).then(setRecentEvents).catch(() => {});
 
       const dateKey = toDateKey(selectedDate);
-      const [dayEvents] = useJson(`/api/day?day=${dateKey}`, [dateKey, eventsTick, days]);
-      const [recentEvents] = useJson("/api/events?days=21", [eventsTick]);
+      const dayEventList = useMemo(() => recentEvents.filter((e) => eventSpanOnDay(e, dateKey)), [recentEvents, dateKey]);
 
       useEffect(() => {
         setDays((prev) => {
@@ -4161,9 +4213,10 @@
               setSettings((prev) => ({ ...prev, ...payload.settings }));
             }
             if (payload.days) {
-              Object.values(payload.days).forEach((d) => { if (d) d.meds = normalizeMeds(d.meds); });
+              Object.values(payload.days).forEach((d) => { if (d) { d.meds = normalizeMeds(d.meds); d.supps = normalizeSupps(d.supps); } });
               setDays((prev) => ({ ...prev, ...payload.days }));
             }
+            if (Array.isArray(payload.events)) setRecentEvents(payload.events);
             // Mark the post-load state as clean on the next render.
             setTimeout(() => { loadedRef.current = true; dirtyDaysRef.current = new Set(); settingsDirtyRef.current = false; }, 0);
           } catch {
@@ -4233,6 +4286,14 @@
       const removeMed = (idx) => {
         setDays((prev) => { const existing = prev[dateKey]; if (!existing) return prev; const dayCopy = { ...existing, meds: normalizeMeds(existing.meds).filter((_, i) => i !== idx) }; return { ...prev, [dateKey]: dayCopy }; });
       };
+      const handleAddSupp = (entry) => {
+        setDays((prev) => { const existing = prev[dateKey] || createEmptyDay(dateKey, settings); const dayCopy = { ...existing, supps: normalizeSupps([...(existing.supps || []), entry]) }; return { ...prev, [dateKey]: dayCopy }; });
+        setSuppModalOpen(false);
+      };
+      const removeSupp = (idx) => {
+        setDays((prev) => { const existing = prev[dateKey]; if (!existing) return prev; const dayCopy = { ...existing, supps: normalizeSupps(existing.supps).filter((_, i) => i !== idx) }; return { ...prev, [dateKey]: dayCopy }; });
+      };
+      const suppList = normalizeSupps(day.supps);
       doseCtxRef.current = { days, settings };
 
       const goToOffsetDay = (offset) => {
@@ -4310,7 +4371,7 @@
               </div>
             </div>
             <div className="ring-container">
-              <DayRing day={day} onSegmentClick={handleSegmentClick} settings={settings} events={dayEvents && dayEvents.events} />
+              <DayRing day={day} onSegmentClick={handleSegmentClick} settings={settings} events={dayEventList} />
               <div className="ring-caption">
                 Red = tougher hours. Green/blue = better QoL. Gray with 😴 = sleep, black = no data/not yet logged.
               </div>
@@ -4323,7 +4384,8 @@
               >
                 💊 Log medication
               </button>
-              <button type="button" className="pill-btn" onClick={() => setEventModal({ open: true, initial: null })}>⚡ Log an event</button>
+              <button type="button" className="pill-btn primary" onClick={() => setEventModal({ open: true, initial: null })}>⚡ Log an event</button>
+              <button type="button" className="pill-btn primary" onClick={() => setSuppModalOpen(true)}>💛 Log supplement</button>
             </div>
             <div className="med-list">
               <span>Doses:</span> {medList.length ? medList.map((m, i) => (
@@ -4333,8 +4395,16 @@
                 </span>
               )) : "none logged yet"}
             </div>
-            <div className="med-list" style={{ marginTop: 6 }}><span>Events:</span> {dayEvents && dayEvents.events && dayEvents.events.length ? "" : "none logged (dystonia, involuntary movement, freezing, off episodes, falls, pain)"}</div>
-            <DayEventsList events={dayEvents && dayEvents.events} onEdit={(e) => setEventModal({ open: true, initial: e })} onDeleted={() => setEventsTick((t) => t + 1)} />
+            <div className="med-list">
+              <span>Supplements:</span> {suppList.length ? suppList.map((x, i) => (
+                <span key={i} style={{ display: "inline-flex", alignItems: "center", gap: 3, marginRight: 8 }}>
+                  <span style={{ color: "#facc15" }}>{x.t} {suppName(settings, x.id)}</span>
+                  <button type="button" onClick={() => removeSupp(i)} title="Remove" style={{ background: "none", border: 0, color: "#64748b", cursor: "pointer", padding: 0, fontSize: 11 }}>✕</button>
+                </span>
+              )) : "none logged yet"}
+            </div>
+            <div className="med-list" style={{ marginTop: 6 }}><span>Events:</span> {dayEventList.length ? "" : "none logged (dystonia, involuntary movement, freezing, off episodes, falls, pain)"}</div>
+            <DayEventsList events={dayEventList} onEdit={(e) => setEventModal({ open: true, initial: e })} onDeleted={refreshEvents} />
           </div>
           </Section>
           <Section title="Recent days" subtitle="A week at a glance; tap any block to rate it." storageKey="qol-summary">
@@ -4390,7 +4460,7 @@
                 <VitalsTrendsCard metrics={[["derived/events_count", "Events / day", "#f472b6", 0], ["derived/event_minutes", "Minutes in events / day", "#fb7185", 0], ["derived/events_dystonia", "Dystonia events / day", "#f472b6", 0], ["derived/events_dyskinesia", "Involuntary-movement events / day", "#c084fc", 0], ["derived/events_off", "Off episodes / day", "#64748b", 0], ["derived/events_freezing", "Freezing events / day", "#38bdf8", 0]]} subtitle="Days with no events read as gaps, not zeros, until the first event is logged." />
               </Section>
               <Section title="Supplement trends" subtitle="One line per supplement found in Cronometer." storageKey="tr-supps" defaultOpen={false}>
-                <SupplementTrendsCard />
+                <SupplementTrendsCard settings={settings} />
               </Section>
               <Section title="Workouts" storageKey="tr-workouts" defaultOpen={false}>
                 <WorkoutsCard />
@@ -4452,7 +4522,8 @@
             onClose={() => setSegmentModalState((s) => ({ ...s, open: false }))}
             onSave={handleSegmentSave}
           />
-          <EventModal open={eventModal.open} initial={eventModal.initial} onClose={() => setEventModal({ open: false, initial: null })} onSaved={() => setEventsTick((t) => t + 1)} />
+          <EventModal open={eventModal.open} initial={eventModal.initial} onClose={() => setEventModal({ open: false, initial: null })} onSaved={refreshEvents} />
+          <MedModal open={suppModalOpen} kind="supp" settings={settings} onClose={() => setSuppModalOpen(false)} onSave={handleAddSupp} />
           <MedModal
             open={medModalOpen}
             settings={settings}

@@ -141,14 +141,18 @@ async function importLegacyJson(userId) {
 // ---------- client payload <-> tables ----------
 // The web app speaks {settings, days: {YYYY-MM-DD: {segments:[{type,rating}x12], meds:["HH:MM"]}}}.
 async function loadClientPayload(userId) {
-  const [s, q, m] = await Promise.all([
+  const [s, q, m, ev] = await Promise.all([
     pool.query("select data from settings where user_id = $1", [userId]),
     pool.query(
       "select to_char(day,'YYYY-MM-DD') as day, seg, type, rating from qol_ratings where user_id = $1 order by day, seg",
       [userId]
     ),
     pool.query(
-      "select to_char(day,'YYYY-MM-DD') as day, to_char(taken_at,'HH24:MI') as t, drug from med_doses where user_id = $1 and source = 'pdayminder' order by day, taken_at",
+      "select to_char(day,'YYYY-MM-DD') as day, to_char(taken_at,'HH24:MI') as t, drug, source from med_doses where user_id = $1 and source in ('pdayminder','supplement') order by day, taken_at",
+      [userId]
+    ),
+    pool.query(
+      `select ts, value as minutes, raw from observations where user_id = $1 and source = 'event' and metric = 'event' and ts >= now() - interval '21 days' order by ts desc`,
       [userId]
     ),
   ]);
@@ -159,13 +163,15 @@ async function loadClientPayload(userId) {
         dateKey: d,
         segments: Array.from({ length: 12 }, () => ({ type: "empty", rating: 3 })),
         meds: [],
+        supps: [],
       };
     }
     return days[d];
   };
   q.rows.forEach((r) => (dayFor(r.day).segments[r.seg] = { type: r.type, rating: r.rating }));
-  m.rows.forEach((r) => dayFor(r.day).meds.push({ t: r.t, drug: r.drug || "sinemet" }));
-  return { settings: s.rows[0] ? s.rows[0].data : null, days };
+  m.rows.forEach((r) => (r.source === "supplement" ? dayFor(r.day).supps.push({ t: r.t, id: r.drug }) : dayFor(r.day).meds.push({ t: r.t, drug: r.drug || "sinemet" })));
+  const events = await annotateDose(userId, ev.rows.map((r) => ({ ts: r.ts, minutes: r.minutes, ...r.raw })));
+  return { settings: s.rows[0] ? s.rows[0].data : null, days, events };
 }
 
 async function saveClientPayload(userId, body) {
@@ -184,7 +190,7 @@ async function saveClientPayload(userId, body) {
       // Browsing the calendar creates placeholder days (sleep/empty segments, no meds). A day with no ratings
       // and no doses is never written and never clears anything: a stale client must not be able to wipe a day.
       // Clearing individual segments still works because the other segments on that day remain ratings.
-      const hasContent = (d.segments || []).some((x) => x && x.type === "rating") || (Array.isArray(d.meds) && d.meds.length > 0);
+      const hasContent = (d.segments || []).some((x) => x && x.type === "rating") || (Array.isArray(d.meds) && d.meds.length > 0) || (Array.isArray(d.supps) && d.supps.length > 0);
       if (!hasContent) continue;
       for (let seg = 0; seg < Math.min(12, (d.segments || []).length); seg++) {
         const s = d.segments[seg];
@@ -209,6 +215,17 @@ async function saveClientPayload(userId, body) {
             `insert into med_doses (user_id, day, taken_at, drug, source) values ($1,$2,$3,$4,'pdayminder')
              on conflict do nothing`,
             [userId, day, t, String(drug).slice(0, 60)]
+          );
+        }
+      }
+      if (Array.isArray(d.supps)) {
+        await client.query("delete from med_doses where user_id = $1 and day = $2 and source = 'supplement'", [userId, day]);
+        for (const x of d.supps) {
+          const t = x && x.t, id = x && x.id;
+          if (!t || !/^\d{2}:\d{2}$/.test(t) || !id) continue;
+          await client.query(
+            `insert into med_doses (user_id, day, taken_at, drug, source) values ($1,$2,$3,$4,'supplement') on conflict do nothing`,
+            [userId, day, t, String(id).slice(0, 60)]
           );
         }
       }
@@ -508,6 +525,14 @@ async function dailySeries(uid, source, metric, days) {
          group by 1 order by 1`, [uid, TZ, days, await dopaDrugs(uid)]);
       return rows.map((r) => [r.day, Number(r.v)]);
     }
+    if (metric === "supplements_logged" || metric.startsWith("supp_")) {
+      const id = metric.startsWith("supp_") ? metric.slice(5) : null;
+      const { rows } = await pool.query(
+        `select to_char(day,'YYYY-MM-DD') as day, count(*)::int as v from med_doses
+         where user_id = $1 and source = 'supplement' and day >= (now() at time zone $2)::date - ($3::int - 1) ${id ? "and drug = $4" : ""}
+         group by day order by day`, id ? [uid, TZ, days, id] : [uid, TZ, days]);
+      return rows.map((r) => [r.day, Number(r.v)]);
+    }
     if (metric === "events_count" || metric === "event_minutes" || metric.startsWith("events_")) {
       const type = metric.startsWith("events_") && metric !== "events_count" ? metric.slice(7) : null;
       const { rows } = await pool.query(
@@ -656,6 +681,11 @@ app.get("/api/metrics", requireAuth, async (req, res) => {
   // Derived nutrition metrics show up once protein / energy rows exist (computed on read, see dailySeries).
   const have = new Set(rows.map((r) => r.source + "/" + r.metric));
   if (have.has("hae/protein") || have.has("cronometer/protein")) rows.push({ source: "derived", metric: "protein_near_dose", rows: (rows.find((r) => (r.source === "cronometer" || r.source === "hae") && r.metric === "protein") || { rows: 0 }).rows, last_ts: null });
+  const supp = await pool.query("select drug, count(*)::int as n from med_doses where user_id = $1 and source = 'supplement' group by drug", [req.user.id]);
+  if (supp.rows.length) {
+    rows.push({ source: "derived", metric: "supplements_logged", rows: supp.rows.reduce((a, r) => a + r.n, 0), last_ts: null });
+    supp.rows.forEach((r) => rows.push({ source: "derived", metric: "supp_" + r.drug, rows: r.n, last_ts: null }));
+  }
   if (have.has("event/event")) {
     const ev = await pool.query("select raw->>'type' as type, count(*)::int as n from observations where user_id = $1 and source = 'event' group by 1", [req.user.id]);
     rows.push({ source: "derived", metric: "events_count", rows: ev.rows.reduce((a, r) => a + r.n, 0), last_ts: null }, { source: "derived", metric: "event_minutes", rows: 0, last_ts: null });
@@ -703,7 +733,7 @@ app.get("/api/day", requireAuth, async (req, res) => {
       [uid, TZ, day]
     ),
     pool.query("select seg, type, rating from qol_ratings where user_id = $1 and day = $2 order by seg", [uid, day]),
-    pool.query("select to_char(taken_at,'HH24:MI') as t, drug from med_doses where user_id = $1 and day = $2 order by taken_at", [uid, day]),
+    pool.query("select to_char(taken_at,'HH24:MI') as t, drug, source from med_doses where user_id = $1 and day = $2 order by taken_at", [uid, day]),
     dopaDrugs(uid),
     pool.query(
       `select metric, value from observations where user_id = $1 and source = 'oura' and (ts at time zone $2)::date = $3::date`,
@@ -738,7 +768,7 @@ app.get("/api/day", requireAuth, async (req, res) => {
   });
   res.json({ day, hourly, daily, oura: Object.fromEntries(oura.rows.map((r) => [r.metric, r.value])), nutrition: Object.fromEntries(cron.rows.map((r) => [r.metric, Number(r.value)])), motor: motor.rows, qol: qol.rows,
     events: await annotateDose(uid, events.rows.map((r) => ({ ts: r.ts, minutes: r.minutes, ...r.raw })).filter((e) => !e.end || new Date(e.end).toLocaleDateString("en-CA", { timeZone: TZ }) >= day)),
-    doses: meds.rows.map((r) => ({ ...r, dopaminergic: dopa.includes(r.drug || "sinemet") })), workouts });
+    doses: meds.rows.map((r) => ({ t: r.t, drug: r.drug, kind: r.source === "supplement" ? "supplement" : "med", dopaminergic: r.source !== "supplement" && dopa.includes(r.drug || "sinemet") })), workouts });
 });
 
 // Several daily metrics at once, pivoted: [{day, "hae/heart_rate_variability": 48.2, ...}]

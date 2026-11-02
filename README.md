@@ -62,6 +62,19 @@ dose; protein competes with levodopa for transport), `derived/first_meal_hour`, 
 non-zero hourly `dietary_energy`). Stats has a Nutrition group; Day vitals shows protein, fiber and caffeine.
 The full Cronometer profile (80+ nutrients, supplements, creatine) needs the Cronometer cron (backlog).
 
+## Supplements
+Settings › Profile › Supplements mirrors the medication editor (`settings.supplements[{id,name,dose,times[]}]`), for
+single-nutrient supplements worth timing (creatine, vitamin D, fiber, CoQ10); multivitamins stay in Cronometer. Logged
+from the QoL tab ("Log supplement"), stored as `days[].supps[{t,id}]` → `med_doses` rows with `source = 'supplement'`,
+yellow rays on the ring and marks on Day vitals. Daily rollups: `derived/supplements_logged`, `derived/supp_<id>`.
+
+## Ring markers
+Dose rays blue (dopaminergic; other meds are dots), supplement rays yellow, events red arcs on the inner edge with
+start/end rays. Time labels sit in bubbles on two rings outside the wheel; placement runs in priority order (dose,
+event, supplement), moving a colliding label to the outer ring and dropping it if both rings are taken (the ray and
+its tooltip stay). Events for the last 21 days come with the initial `/api/pdayminder/data` payload so the ring
+draws in one pass.
+
 ## Symptom events (source = event)
 "Log an event" on the QoL tab records dystonia / cramping / posturing, involuntary movement, freezing, off episodes,
 falls, pain or other: body regions, severity 1–5, start and end (or "still happening"), triggers, free note. Stored
