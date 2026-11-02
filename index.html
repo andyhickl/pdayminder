@@ -1325,6 +1325,7 @@
       const [err, setErr] = useState(null);
       useEffect(() => {
         let alive = true;
+        if (!url) return () => {};
         apiFetch(url).then((r) => (r.ok ? r.json() : Promise.reject(r.status)))
           .then((d) => alive && setData(d)).catch((e) => alive && setErr(String(e)));
         return () => { alive = false; };
@@ -1541,56 +1542,69 @@
     }
 
     // ---------- Vitals trends: small multiples with 7-day rolling mean ----------
-    const VITALS = [
-      ["oura/sleep_score", "Sleep score (Oura)", "#c084fc", 0],
-      ["oura/readiness_score", "Readiness (Oura)", "#f472b6", 0],
-      ["oura/total_sleep_h", "Sleep (h, Oura)", "#a78bfa", 1],
-      ["oura/deep_h", "Deep sleep (h, Oura)", "#8b5cf6", 1],
-      ["oura/avg_hrv", "Night HRV (ms, Oura)", "#a3e635", 0],
-      ["oura/lowest_hr", "Lowest night HR (Oura)", "#38bdf8", 0],
-      ["oura/temperature_deviation", "Temp deviation (°C, Oura)", "#fb7185", 2],
-      ["hae/heart_rate_variability", "Daytime HRV (ms, Watch)", "#84cc16", 1],
-      ["hae/resting_heart_rate", "Resting HR (Watch)", "#0ea5e9", 0],
-      ["hae/step_count", "Steps (Watch)", "#fbbf24", 0],
-      ["hae/walking_speed", "Walking speed", "#34d399", 2],
-      ["hae/walking_step_length", "Step length", "#2dd4bf", 2],
-      ["hae/walking_double_support_percentage", "Double support %", "#f87171", 1],
-      ["hae/walking_asymmetry_percentage", "Asymmetry %", "#fb923c", 1],
-      ["oura/stress_high_min", "Stress (min/day, Oura)", "#f97316", 0],
-      ["motor/tremor_score", "Tremor score (1–5)", "#f472b6", 1],
-      ["motor/tremor_amp_cm", "Tremor amplitude (cm)", "#fb7185", 2],
-      ["motor/tap_rate", "Tapping (taps/s)", "#38bdf8", 2],
-      ["motor/tap_score", "Tapping score (1–5)", "#0ea5e9", 1],
-      ["motor/gait_score", "Gait score (1–5)", "#34d399", 1],
-      ["motor/gait_cadence", "Cadence (steps/min)", "#6ee7b7", 0],
-      ["motor/gait_step_cv", "Step variability (%)", "#5eead4", 1],
-      ["motor/balance_score", "Balance score (1–5)", "#f59e0b", 1],
-      ["motor/balance_sway_rms", "Sway RMS (m/s²)", "#fbbf24", 3],
-      ["motor/voice_score", "Voice score (1–5)", "#c084fc", 1],
-      ["motor/ddk_rate", "Pa-ta-ka (syll/s)", "#e879f9", 2],
-      ["motor/ddk_score", "Pa-ta-ka score (1–5)", "#d946ef", 1],
-      ["motor/read_f0_sd_st", "Reading pitch variability (st)", "#f0abfc", 2],
-      ["motor/read_score", "Reading score (1–5)", "#e879f9", 1],
-      ["motor/voice_hnr", "Voice HNR (dB)", "#c084fc", 1],
-      ["motor/voice_jitter_pct", "Voice jitter (%)", "#a78bfa", 2],
-      ["motor/voice_ppe", "Voice PPE", "#d8b4fe", 3],
-      ["motor/voice_int_slope", "Voice loudness slope (dB/s)", "#e9d5ff", 2],
-      ["motor/voice_mpt", "Max phonation (s)", "#f5d0fe", 1],
-      ["motor/spiral_error_pct", "Spiral deviation (%)", "#fbbf24", 1],
-      ["cronometer/fiber", "Fiber, Cronometer (g)", "#4ade80", 0],
-      ["cronometer/fat", "Fat, Cronometer (g)", "#fed7aa", 0],
-      ["cronometer/omega_3", "Omega-3, Cronometer (g)", "#67e8f9", 1],
-      ["hae/dietary_energy", "Calories (kcal)", "#fb923c", 0],
-      ["hae/protein", "Protein (g)", "#f97316", 0],
-      ["derived/protein_near_dose", "Protein near levodopa (g)", "#ef4444", 0],
-      ["hae/carbohydrates", "Carbohydrates (g)", "#fdba74", 0],
-      ["hae/total_fat", "Fat (g)", "#fed7aa", 0],
-      ["hae/fiber", "Fiber (g)", "#86efac", 0],
-      ["hae/caffeine", "Caffeine (mg)", "#a3e635", 0],
-      ["hae/dietary_water", "Water (mL)", "#38bdf8", 0],
-      ["derived/first_meal_hour", "First meal (h)", "#fcd34d", 1],
-      ["derived/last_meal_hour", "Last meal (h)", "#fde68a", 1],
-    ];
+    // Sparkline groups for the Trends tab. [key, label, color, digits]
+    const VITALS_GROUPS = {
+      vitals: [
+        ["oura/sleep_score", "Sleep score (Oura)", "#c084fc", 0],
+        ["oura/readiness_score", "Readiness (Oura)", "#f472b6", 0],
+        ["oura/total_sleep_h", "Sleep (h, Oura)", "#a78bfa", 1],
+        ["oura/deep_h", "Deep sleep (h, Oura)", "#8b5cf6", 1],
+        ["oura/avg_hrv", "Night HRV (ms, Oura)", "#a3e635", 0],
+        ["oura/lowest_hr", "Lowest night HR (Oura)", "#38bdf8", 0],
+        ["oura/temperature_deviation", "Temp deviation (°C, Oura)", "#fb7185", 2],
+        ["hae/heart_rate_variability", "Daytime HRV (ms, Watch)", "#84cc16", 1],
+        ["hae/resting_heart_rate", "Resting HR (Watch)", "#0ea5e9", 0],
+        ["hae/step_count", "Steps (Watch)", "#fbbf24", 0],
+        ["hae/walking_speed", "Walking speed", "#34d399", 2],
+        ["hae/walking_step_length", "Step length", "#2dd4bf", 2],
+        ["hae/walking_double_support_percentage", "Double support %", "#f87171", 1],
+        ["hae/walking_asymmetry_percentage", "Asymmetry %", "#fb923c", 1],
+        ["oura/stress_high_min", "Stress (min/day, Oura)", "#f97316", 0],
+      ],
+      motor: [
+        ["motor/tremor_score", "Tremor score (1–5)", "#f472b6", 1],
+        ["motor/tremor_amp_cm", "Tremor amplitude (cm)", "#fb7185", 2],
+        ["motor/tap_rate", "Tapping (taps/s)", "#38bdf8", 2],
+        ["motor/tap_score", "Tapping score (1–5)", "#0ea5e9", 1],
+        ["motor/gait_score", "Gait score (1–5)", "#34d399", 1],
+        ["motor/gait_cadence", "Cadence (steps/min)", "#6ee7b7", 0],
+        ["motor/gait_step_cv", "Step variability (%)", "#5eead4", 1],
+        ["motor/balance_score", "Balance score (1–5)", "#f59e0b", 1],
+        ["motor/balance_sway_rms", "Sway RMS (m/s²)", "#fbbf24", 3],
+        ["motor/spiral_error_pct", "Spiral deviation (%)", "#fbbf24", 1],
+      ],
+      voice: [
+        ["motor/voice_score", "Voice score (1–5)", "#c084fc", 1],
+        ["motor/ddk_rate", "Pa-ta-ka (syll/s)", "#e879f9", 2],
+        ["motor/ddk_score", "Pa-ta-ka score (1–5)", "#d946ef", 1],
+        ["motor/read_f0_sd_st", "Reading pitch variability (st)", "#f0abfc", 2],
+        ["motor/read_score", "Reading score (1–5)", "#e879f9", 1],
+        ["motor/voice_hnr", "Voice HNR (dB)", "#c084fc", 1],
+        ["motor/voice_jitter_pct", "Voice jitter (%)", "#a78bfa", 2],
+        ["motor/voice_ppe", "Voice PPE", "#d8b4fe", 3],
+        ["motor/voice_int_slope", "Voice loudness slope (dB/s)", "#e9d5ff", 2],
+        ["motor/voice_mpt", "Max phonation (s)", "#f5d0fe", 1],
+      ],
+      nutrition: [
+        ["cronometer/energy", "Calories (kcal)", "#fb923c", 0],
+        ["cronometer/protein", "Protein (g)", "#f97316", 0],
+        ["derived/protein_near_dose", "Protein near levodopa (g)", "#ef4444", 0],
+        ["cronometer/carbs", "Carbs (g)", "#fdba74", 0],
+        ["cronometer/fat", "Fat (g)", "#fed7aa", 0],
+        ["cronometer/fiber", "Fiber (g)", "#4ade80", 0],
+        ["cronometer/sugars", "Sugars (g)", "#fda4af", 0],
+        ["cronometer/omega_3", "Omega-3 (g)", "#67e8f9", 1],
+        ["cronometer/caffeine", "Caffeine (mg)", "#a3e635", 0],
+        ["cronometer/water", "Water (g)", "#38bdf8", 0],
+        ["cronometer/sodium", "Sodium (mg)", "#e2e8f0", 0],
+        ["cronometer/magnesium", "Magnesium (mg)", "#99f6e4", 0],
+        ["cronometer/vitamin_d", "Vitamin D (IU)", "#fde047", 0],
+        ["cronometer/b12", "Vitamin B12 (µg)", "#f9a8d4", 1],
+        ["derived/first_meal_hour", "First meal (h)", "#fcd34d", 1],
+        ["derived/last_meal_hour", "Last meal (h)", "#fde68a", 1],
+      ],
+    };
+    const VITALS = Object.values(VITALS_GROUPS).flat();
     function rolling(rows, key, n = 7) {
       return rows.map((r, i) => {
         const win = rows.slice(Math.max(0, i - n + 1), i + 1).map((x) => x[key]).filter((v) => v != null);
@@ -1617,15 +1631,16 @@
         </svg>
       );
     }
-    function VitalsTrendsCard() {
+    function VitalsTrendsCard({ metrics, subtitle }) {
       const [span, setSpan] = useState(30);
-      const [rows, err] = useJson(`/api/daily-multi?days=${span}&metrics=${encodeURIComponent(VITALS.map((v) => v[0]).join(","))}`, [span]);
+      const list = metrics || VITALS;
+      const [rows, err] = useJson(list.length ? `/api/daily-multi?days=${span}&metrics=${encodeURIComponent(list.map((v) => v[0]).join(","))}` : null, [span, list.map((v) => v[0]).join(",")]);
+      if (!list.length) return <div className="card"><div className="card-subtitle">Nothing to show yet.</div></div>;
       return (
         <div className="card">
           <div className="card-header">
             <div>
-              <div className="card-title">Vitals trends</div>
-              <div className="card-subtitle">Daily values (dots) with a 7-day rolling mean (line). Latest value at right.</div>
+              <div className="card-subtitle">{subtitle || "Daily values (dots) with a 7-day rolling mean (line). Latest value at right."}</div>
             </div>
           </div>
           <div className="controls-row" style={{ gap: 8 }}>
@@ -1636,7 +1651,7 @@
           {err && <div className="card-subtitle">Couldn't load ({err}).</div>}
           {rows && (
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(170px, 1fr))", gap: 10 }}>
-              {VITALS.map(([k, label, color, digits]) => (
+              {list.map(([k, label, color, digits]) => (
                 <div key={k} style={{ background: "#0f172a", borderRadius: 8, padding: "6px 8px" }}>
                   <div style={{ fontSize: 11, color: "#94a3b8" }}>{label}</div>
                   <Sparkline rows={rows} k={k} color={color} digits={digits} />
@@ -1646,6 +1661,15 @@
           )}
         </div>
       );
+    }
+    // Supplements are whatever Cronometer entries looked like supplements: one sparkline per supp_* metric.
+    function SupplementTrendsCard() {
+      const [metrics] = useJson("/api/metrics", []);
+      const palette = ["#fde047", "#f9a8d4", "#99f6e4", "#a5b4fc", "#fdba74", "#86efac", "#67e8f9", "#fca5a5"];
+      const list = (metrics || []).filter((m) => m.source === "cronometer" && m.metric.startsWith("supp_"))
+        .map((m, i) => [m.source + "/" + m.metric, m.metric.slice(5).replace(/_/g, " ").replace(/^\w/, (c) => c.toUpperCase()) + " (amount/day)", palette[i % palette.length], 1]);
+      if (metrics && !list.length) return <div className="card"><div className="card-subtitle">No supplement entries yet. Log your stack in Cronometer (a diary group called "Supplements" is picked up automatically; otherwise names like creatine, vitamin D, omega-3, magnesium are recognised).</div></div>;
+      return <VitalsTrendsCard metrics={list} subtitle="Amount logged per day, summed over entries. Gaps are days you didn't log it." />;
     }
 
     function WorkoutsCard() {
@@ -4177,8 +4201,20 @@
               <Section title="QoL correlations" subtitle="Daily QoL against doses and any synced metric, with lag." storageKey="tr-corr">
                 <TrendsCard settings={settings} />
               </Section>
-              <Section title="Vitals and test trends" subtitle="Sparklines, 7-day smoothed, for every synced measure." storageKey="tr-vitals" defaultOpen={false}>
-                <VitalsTrendsCard />
+              <Section title="Vitals trends" subtitle="Sleep, HRV, heart rate, steps and watch gait." storageKey="tr-vitals" defaultOpen={false}>
+                <VitalsTrendsCard metrics={VITALS_GROUPS.vitals} />
+              </Section>
+              <Section title="Motor test trends" subtitle="Tremor, tapping, gait, balance, spiral." storageKey="tr-motor" defaultOpen={false}>
+                <VitalsTrendsCard metrics={VITALS_GROUPS.motor} />
+              </Section>
+              <Section title="Voice test trends" subtitle="Pa-ta-ka, reading, sustained vowel, max phonation." storageKey="tr-voice" defaultOpen={false}>
+                <VitalsTrendsCard metrics={VITALS_GROUPS.voice} />
+              </Section>
+              <Section title="Nutrition trends" subtitle="Cronometer daily totals; protein near levodopa from the hourly Apple Health relay." storageKey="tr-nutrition" defaultOpen={false}>
+                <VitalsTrendsCard metrics={VITALS_GROUPS.nutrition} />
+              </Section>
+              <Section title="Supplement trends" subtitle="One line per supplement found in Cronometer." storageKey="tr-supps" defaultOpen={false}>
+                <SupplementTrendsCard />
               </Section>
               <Section title="Workouts" storageKey="tr-workouts" defaultOpen={false}>
                 <WorkoutsCard />
