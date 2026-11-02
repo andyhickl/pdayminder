@@ -92,13 +92,18 @@ async function exportToken(jar, userId) {
   if (!t) throw new Error("no export token: " + text.slice(0, 200));
   return t[1];
 }
-async function exportCsv(jar, token, generate, start, end) {
-  const u = new URL(`${BASE}/export`);
-  u.searchParams.set("nonce", token); u.searchParams.set("generate", generate); u.searchParams.set("start", start); u.searchParams.set("end", end);
-  const res = await req(jar, u, { headers: { "sec-fetch-dest": "document", "sec-fetch-mode": "navigate", "sec-fetch-site": "same-origin" } });
-  const text = await res.text();
-  if (!res.ok) throw new Error(`export ${generate} ${res.status}: ${text.slice(0, 200)}`);
-  return text;
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+// Cronometer rate-limits the export endpoint (HTTP 429). Back off and retry a few times; each attempt needs a fresh nonce.
+async function exportCsv(jar, mintToken, generate, start, end) {
+  for (let attempt = 0; ; attempt++) {
+    const u = new URL(`${BASE}/export`);
+    u.searchParams.set("nonce", await mintToken()); u.searchParams.set("generate", generate); u.searchParams.set("start", start); u.searchParams.set("end", end);
+    const res = await req(jar, u, { headers: { "sec-fetch-dest": "document", "sec-fetch-mode": "navigate", "sec-fetch-site": "same-origin" } });
+    const text = await res.text();
+    if (res.ok) return text;
+    if (res.status === 429 && attempt < 3) { const wait = 30000 * (attempt + 1); console.warn(`export ${generate}: rate limited, retrying in ${wait / 1000}s`); await sleep(wait); continue; }
+    const err = new Error(`export ${generate} ${res.status}: ${text.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").slice(0, 160)}`); err.status = res.status; throw err;
+  }
 }
 
 // ---------- CSV ----------
@@ -176,13 +181,15 @@ async function main() {
   // Two exports: servings (entry names, times, amounts; nutrients per entry only on accounts whose export includes
   // them) and the daily summary (every nutrient, one row per day). Nutrients come from servings per hour when
   // present, otherwise from the daily summary keyed to local midnight; never both.
-  const csv = await exportCsv(jar, token, "servings", start, end);
+  let spare = token; // the session-check token is still unused: spend it on the first export
+  const mint = async () => { if (spare) { const t = spare; spare = null; return t; } return exportToken(jar, cronUser); };
+  const csv = await exportCsv(jar, mint, "servings", start, end);
   const rows = parseCsv(csv);
   const cols = rows.length ? Object.keys(rows[0]) : [];
   const servingsHasNutrients = cols.some((c) => !META.has(c) && rows.some((r) => r[c] !== "" && isFinite(Number(r[c]))));
   console.log(`cronometer servings ${start}..${end}: ${rows.length} entries, ${cols.length} columns${servingsHasNutrients ? " (with nutrients)" : ""}`);
-  // The export nonce is single-use: mint a fresh one for the second export.
-  const dailyCsv = await exportCsv(jar, await exportToken(jar, cronUser), "dailySummary", start, end);
+  await sleep(3000); // be polite between the two exports
+  const dailyCsv = await exportCsv(jar, mint, "dailySummary", start, end);
   const daily = parseCsv(dailyCsv);
   console.log(`cronometer daily summary: ${daily.length} days, ${daily.length ? Object.keys(daily[0]).length : 0} columns`);
 
@@ -259,8 +266,10 @@ async function main() {
 if (require.main === module) {
   main().then(() => pool.end()).catch(async (e) => {
     console.error("cronometer sync failed:", e.message);
-    try { await pool.query("insert into ingest_log (route, status, rows, bytes, summary) values ('cronometer-sync', 500, 0, 0, $1)", [{ error: e.message }]); } catch {}
-    await pool.end(); process.exit(1);
+    try { await pool.query("insert into ingest_log (route, status, rows, bytes, summary) values ('cronometer-sync', $2, 0, 0, $1)", [{ error: e.message }, e.status === 429 ? 429 : 500]); } catch {}
+    await pool.end();
+    // A rate limit is not a broken job: exit cleanly so the next scheduled run just tries again.
+    process.exit(e.status === 429 ? 0 : 1);
   });
 }
 module.exports = { parseCsv, metricName, hourKey, isSupplement };
