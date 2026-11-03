@@ -1578,6 +1578,7 @@
       );
     }
     // ---------- Hypotheses ----------
+    const FK_LABEL = (k) => ({ sleep_h: "sleep", deep_h: "deep sleep", rem_h: "REM sleep", sleep_score: "Oura sleep score", latency_min: "time to fall asleep", hrv: "night HRV", lowest_hr: "lowest night HR", readiness: "readiness", temp_dev: "temp deviation", steps: "steps", walk_speed: "walking speed", dbl_support: "double support", asymmetry: "asymmetry", resting_hr: "resting HR", energy: "calories", protein: "protein", protein_near_dose: "protein near dose", carbs: "carbs", fiber: "fiber", caffeine: "caffeine", water: "water", first_meal: "first meal", last_meal: "last meal", supps: "supplements", doses: "doses", first_dose_h: "first dose", dose_gap_max: "longest dose gap", min_home: "min at home", min_work: "min at work", min_driving: "min driving", events: "events", event_min: "event minutes", dystonia: "dystonia", qol: "QoL", qol_am: "morning QoL", qol_pm: "afternoon QoL", qol_eve: "evening QoL", tremor: "tremor score", tap: "tapping score", tap_rate: "tap rate", gait: "gait score", balance: "balance score", ddk: "pa-ta-ka rate", tap_delta: "tapping delta", tremor_delta: "tremor delta", batteries: "batteries" }[k] || k);
     function HypothesesCard({ view = "hypotheses" }) {
       const [data, setData] = useState(null);
       const [busy, setBusy] = useState(null);
@@ -1591,6 +1592,29 @@
       const discard = async (f) => { if (!window.confirm("Discard this finding? It won't be shown or proposed again.")) return; await post("/api/hypotheses/discard", { id: f.id, spec: f.spec, text: f.text }); load(); };
       const gradeColor = { "no data": "#64748b", "too early": "#94a3b8", mixed: "#fbbf24", "supported so far": "#a3e635", "not holding up": "#f87171" };
       const pct = (v) => (v == null ? "–" : Math.round(v * 100) + "%");
+      const [openWork, setOpenWork] = useState({});
+      const fmtV = (v, unit) => (v == null ? "–" : (Math.abs(v) >= 100 ? Math.round(v) : Number(Number(v).toFixed(1))) + (unit ? " " + unit : ""));
+      const Work = ({ h }) => {
+        const rows = (h.days || []).filter((d) => d.exposure != null || d.outcome != null);
+        if (!openWork[h.id]) return <button type="button" className="pill-btn" style={{ padding: "2px 8px", marginTop: 6, fontSize: 11 }} onClick={() => setOpenWork((o) => ({ ...o, [h.id]: true }))}>Show the days ({rows.length})</button>;
+        return (
+          <div style={{ marginTop: 6 }}>
+            <button type="button" className="pill-btn" style={{ padding: "2px 8px", fontSize: 11 }} onClick={() => setOpenWork((o) => ({ ...o, [h.id]: false }))}>Hide the days</button>
+            <div style={{ display: "grid", gridTemplateColumns: "auto 1fr 1fr auto", gap: "2px 10px", fontSize: 11, marginTop: 6, alignItems: "center" }}>
+              <div style={{ color: "#64748b" }}>day</div><div style={{ color: "#64748b" }}>{h.exposure}</div><div style={{ color: "#64748b" }}>{h.outcome}{h.lag ? " (next day)" : ""}</div><div />
+              {rows.map((d) => (
+                <React.Fragment key={d.day}>
+                  <a href="#" onClick={(e) => { e.preventDefault(); window.dispatchEvent(new CustomEvent("pdm-goto-day", { detail: d.day })); }} style={{ color: "#38bdf8", textDecoration: "none" }}>{d.day.slice(5)}</a>
+                  <div style={{ color: d.exposure == null ? "#475569" : d.exposure ? "#e2e8f0" : "#94a3b8" }}>{fmtV(d.xValue, h.xUnit)}{d.exposure == null ? "" : d.exposure ? " ✓" : " ✗"}</div>
+                  <div style={{ color: d.outcome == null ? "#475569" : d.outcome ? "#e2e8f0" : "#94a3b8" }}>{fmtV(d.yValue, h.yUnit)}{d.outcome == null ? "" : d.outcome ? " ✓" : " ✗"}</div>
+                  <div style={{ color: d.verdict === "support" ? "#a3e635" : d.verdict === "refute" ? "#f87171" : "#475569" }}>{d.verdict === "na" ? "–" : d.verdict}</div>
+                </React.Fragment>
+              ))}
+            </div>
+            <div style={{ fontSize: 10, color: "#64748b", marginTop: 4 }}>✓ = the condition held that day, ✗ = it didn't. A day supports the hypothesis when both columns agree (✓✓ or ✗✗), refutes it when they disagree. Tap a date to open that day.</div>
+          </div>
+        );
+      };
       const Strip = ({ h }) => (
         <div style={{ display: "flex", gap: 3, marginTop: 6, alignItems: "center", flexWrap: "wrap" }}>
           {h.days.slice(-28).map((d) => <span key={d.day} title={`${d.day}: ${d.verdict}${d.exposure != null ? ` · if ${d.exposure ? "yes" : "no"}` : ""}${d.outcome != null ? ` · then ${d.outcome ? "yes" : "no"}` : ""}`} style={{ width: 14, height: 14, borderRadius: 3, background: d.verdict === "support" ? "#a3e635" : d.verdict === "refute" ? "#f87171" : "#1e293b", boxShadow: "inset 0 0 0 1px #334155" }} />)}
@@ -1600,7 +1624,7 @@
       );
       const TwoByTwo = ({ h }) => (
         <div style={{ fontSize: 11, color: "#94a3b8", marginTop: 4 }}>
-          When the "if" held: {h.twoByTwo.withExposure.yes}/{h.twoByTwo.withExposure.yes + h.twoByTwo.withExposure.no} days had the "then" ({pct(h.rateWith)}). When it didn't: {h.twoByTwo.without.yes}/{h.twoByTwo.without.yes + h.twoByTwo.without.no} ({pct(h.rateWithout)}).
+          Days when the condition held: {h.twoByTwo.withExposure.yes} of {h.twoByTwo.withExposure.yes + h.twoByTwo.withExposure.no} showed the effect ({pct(h.rateWith)}). Days when it didn't: {h.twoByTwo.without.yes} of {h.twoByTwo.without.yes + h.twoByTwo.without.no} ({pct(h.rateWithout)}).
           {h.posterior != null && <> Chance the effect is real: <strong style={{ color: gradeColor[h.grade] }}>{pct(h.posterior)}</strong>.</>}
         </div>
       );
@@ -1615,17 +1639,20 @@
                   <div style={{ fontSize: 13, fontWeight: 600 }}>{h.text}</div>
                   <button type="button" className="pill-btn" style={{ padding: "2px 8px", flexShrink: 0 }} onClick={() => discard(h)} title="Discard this finding">✕</button>
                 </div>
-                <div style={{ fontSize: 11, color: "#94a3b8", marginTop: 2 }}>Held over its {h.period}-day period from {h.started}; still being scored{h.grade !== "supported so far" ? ` — currently ${h.grade}` : ""}.</div>
-                <Strip h={h} /><TwoByTwo h={h} />
+                <div style={{ fontSize: 11, color: "#cbd5e1", marginTop: 3 }}>Why: {h.rationale}</div>
+                <div style={{ fontSize: 11, color: "#94a3b8", marginTop: 2 }}>Held over its {h.period}-day period from {h.started}; still scored daily ({h.dayIndex} days so far){h.grade !== "supported so far" ? ` — currently ${h.grade}` : ""}.</div>
+                <Strip h={h} /><TwoByTwo h={h} /><Work h={h} />
               </div>
             ))}
             {data && data.generatorFindings.map((f) => (
-              <div key={f.id} style={{ background: "#0f172a", borderRadius: 10, padding: "8px 10px", marginTop: 8, borderLeft: "3px solid #94a3b8" }}>
+              <div key={f.id} style={{ background: "#0f172a", borderRadius: 10, padding: "8px 10px", marginTop: 8, borderLeft: `3px solid ${f.weakened ? "#475569" : "#94a3b8"}`, opacity: f.weakened ? 0.75 : 1 }}>
                 <div style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "flex-start" }}>
                   <div style={{ fontSize: 13, fontWeight: 600 }}>{f.text}</div>
                   <button type="button" className="pill-btn" style={{ padding: "2px 8px", flexShrink: 0 }} onClick={() => discard(f)} title="Discard">✕</button>
                 </div>
-                <div style={{ fontSize: 11, color: "#94a3b8", marginTop: 2 }}>From history, not tracked prospectively: {pct(f.rateWith)} on "if" days ({f.nE}) vs {pct(f.rateWithout)} otherwise ({f.nC}); chance it's real {pct(f.posterior)}. Treat as a lead; it hasn't been through a watching period.</div>
+                <div style={{ fontSize: 11, color: "#cbd5e1", marginTop: 3 }}>Why: {f.rationale}</div>
+                <div style={{ fontSize: 11, color: "#94a3b8", marginTop: 2 }}>A lead from your history (first seen {f.firstSeen}), re-scored every day over the last 45: {pct(f.rateWith)} of days with the condition ({f.nE}) vs {pct(f.rateWithout)} without ({f.nC}); chance it's real {pct(f.posterior)}.{f.weakened ? " It has weakened since it was first seen." : ""} It hasn't been through a watching period.</div>
+                <Work h={{ id: f.id, days: f.days, exposure: FK_LABEL(f.spec.x), outcome: FK_LABEL(f.spec.y), lag: f.spec.lag, xUnit: f.xUnit, yUnit: f.yUnit }} />
               </div>
             ))}
           </div>
@@ -1646,8 +1673,9 @@
                     <button type="button" className="pill-btn" style={{ padding: "2px 8px", opacity: h.pinned ? 0.35 : 1 }} disabled={h.pinned} onClick={() => refresh(h.id, "refresh")} title={h.pinned ? "Unpin first" : "Swap for the next candidate (no vote)"}>↻</button>
                   </div>
                 </div>
-                <div style={{ fontSize: 11, color: "#94a3b8", marginTop: 2 }}>{h.pinned ? "Pinned · " : ""}Watching since {h.started}{h.pinned ? "" : ` for ${h.period} days`}{h.controllable ? " · the \"if\" is something you control" : ""}.</div>
-                <Strip h={h} /><TwoByTwo h={h} />
+                <div style={{ fontSize: 11, color: "#cbd5e1", marginTop: 3 }}>Why: {h.rationale}</div>
+                <div style={{ fontSize: 11, color: "#94a3b8", marginTop: 2 }}>{h.pinned ? "Pinned · " : ""}Day {h.dayIndex} of {h.pinned ? "open-ended" : h.period} · started {h.started}{h.controllable ? " · the condition is something you control" : ""}.</div>
+                <Strip h={h} /><TwoByTwo h={h} /><Work h={h} />
                 {h.retro && h.retro.scored >= 6 && <div style={{ fontSize: 10, color: "#64748b", marginTop: 2 }}>Before activation (history, {h.retro.scored} days): {pct(h.retro.rateWith)} vs {pct(h.retro.rateWithout)}; that is why it was picked, and it doesn't count toward the grade.</div>}
               </div>
             ))}
@@ -4661,6 +4689,7 @@
       };
 
       const handleCalendarSelect = (d) => setSelectedDate(d);
+      useEffect(() => { const h = (e) => { const d = new Date(e.detail + "T12:00:00"); if (!isNaN(d)) { setSelectedDate(d); setTab("qol"); window.scrollTo({ top: 0, behavior: "smooth" }); } }; window.addEventListener("pdm-goto-day", h); return () => window.removeEventListener("pdm-goto-day", h); }, []);
 
       const medList = normalizeMeds(day.meds);
 

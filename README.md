@@ -90,8 +90,11 @@ the same kind of "then" and cool its family), `POST /api/hypotheses/pin` (pinned
 and can't be swapped), `POST /api/hypotheses/count` (1–8 under consideration, `settings.hypothesis_count`),
 `POST /api/hypotheses/discard`, `GET /api/features`. `settle()` runs on every read: a hypothesis still "supported so
 far" at the end of its period becomes a finding (status `finding`, evaluated over all days since activation);
-expired or refuted ones retire. The Findings card also lists generator findings: retrospective effects with
-posterior ≥ 0.95 and ≥ 5 days per arm that nobody has tracked or discarded. Ranking caps the queue at two per
+expired or refuted ones retire. The Findings card also lists leads: retrospective effects with posterior ≥ 0.95 and
+≥ 5 days per arm, persisted as status `lead` the first time they are seen (so they don't flicker as the data
+shifts), re-scored over the last 45 days on every read and flagged when they weaken below 0.8. Every hypothesis,
+finding and lead carries a plain-language sentence, a rationale from the family-pair table (`RATIONALE`), a day index,
+and a "show the days" table of per-day values and verdicts with links into that day. Ranking caps the queue at two per
 outcome family and two per "if" feature, with a growing penalty on repeated outcome features.
 
 ## Location context (source = context)

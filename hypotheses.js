@@ -130,15 +130,34 @@ module.exports = function init({ pool, dailySeries, dopaDrugs, TZ, localDayOf })
 
   // A hypothesis spec: {x, xdir: "above"|"below", thr: {type: "median"|"lit"|"any", value}, lag: 0|1, y, ydir: "up"|"down", period}
   // exposure(day) = x above/below thr; outcome(day+lag) = y above/below its median (or > 0 for counts with ydir "up").
+  const RATIONALE = {
+    "nutrition>tapping": "Dietary protein competes with levodopa for absorption and transport, so what you eat near a dose can change how well it works.",
+    "nutrition>qol": "Meal timing and composition change how levodopa is absorbed, and blood sugar and hydration shape how a day feels.",
+    "nutrition>tremor": "Caffeine and protein timing both plausibly move tremor through dopamine signalling and levodopa absorption.",
+    "nutrition>events": "Dystonia and dyskinesia track the levodopa curve, and meals change that curve.",
+    "nutrition>sleep": "Late meals, caffeine and alcohol are the usual dietary suspects for sleep quality.",
+    "sleep>qol": "Poor sleep worsens almost every PD symptom the next day; it is the best-documented day-to-day driver.",
+    "sleep>events": "Sleep loss lowers the threshold for off periods and dystonia.",
+    "sleep>tremor": "Fatigue and sleep loss amplify tremor.", "sleep>tapping": "Sleep loss slows fine motor speed.", "sleep>gait": "Fatigue affects gait rhythm and step length.", "sleep>balance": "Sleep loss degrades postural control.",
+    "hrv>qol": "Night HRV tracks recovery and autonomic state, which in PD colours the whole next day.",
+    "hrv>events": "Autonomic strain and poor recovery may precede worse motor days.", "hrv>tapping": "Recovery state may show up in motor speed.", "hrv>tremor": "Autonomic arousal can amplify tremor.",
+    "activity>qol": "Exercise is the best-evidenced lever for how PD days feel.", "activity>sleep": "Daytime activity improves sleep quality.", "activity>gait": "Movement during the day keeps gait rhythm up.", "activity>events": "Activity level may shift the timing or odds of off periods.", "activity>balance": "Activity supports postural control.",
+    "doses>events": "Dystonia and dyskinesia are tied to the levodopa cycle: too little, or the ramp and wearing-off phases.",
+    "doses>qol": "How many doses, and when, sets the shape of the day.", "doses>tapping": "Tapping speed is one of the most dose-responsive measures.", "doses>tremor": "Tremor responds directly to levodopa level.", "doses>gait": "Gait rhythm improves on levodopa.",
+    "context>qol": "Where the day is spent (work, commute, home) changes demands, stress and dose timing.", "context>events": "Driving and work days change posture, stress and when doses get taken.",
+    "supplements>qol": "The stack is being tried for exactly this; the data decides.", "supplements>sleep": "Melatonin and magnesium are taken for sleep; creatine and NAC may also affect it.", "supplements>tapping": "Creatine and NAC are candidates for motor effects.", "supplements>tremor": "A candidate effect, not an established one.", "supplements>events": "A candidate effect, not an established one.",
+    "events>qol": "A dystonia or off episode often leaves a worse day behind it.", "events>sleep": "Evening symptoms disturb sleep.", "qol>events": "A bad afternoon may be the lead-in to an episode.", "qol>sleep": "Good days tend to end in better sleep.",
+  };
+  function rationale(spec) { const x = FK[spec.x], y = FK[spec.y]; return RATIONALE[`${x.fam}>${y.fam}`] || "No specific mechanism in the literature; this came up because your own history showed a pattern."; }
   function describe(spec, refs) {
     const x = FK[spec.x], y = FK[spec.y];
     const tv = spec.thr.type === "median" ? (spec.thr.value != null ? spec.thr.value : refs.med[spec.x]) : spec.thr.value;
     const thrTxt = spec.thr.type === "any" ? "" : spec.thr.type === "median" ? ` (your median, ${x.unit === "h" && /time/.test(x.label) ? fmtHour(tv) : fmtNum(tv, x.unit)})` : ` (${x.unit === "h" && /time/.test(x.label) ? fmtHour(tv) : fmtNum(tv, x.unit)})`;
-    const xTxt = spec.thr.type === "any" ? (spec.xdir === "above" ? `any ${x.label}` : `no ${x.label}`) : `${x.label} ${spec.xdir === "above" ? (/time/.test(x.label) ? "later than" : "above") : (/time/.test(x.label) ? "earlier than" : "below")}${thrTxt}`;
+    const xTxt = spec.thr.type === "any" ? (spec.xdir === "above" ? `there are ${x.label}` : `there are no ${x.label}`) : `${x.label} is ${spec.xdir === "above" ? (/time/.test(x.label) ? "later than" : "above") : (/time/.test(x.label) ? "earlier than" : "below")}${thrTxt}`;
     const isCount = ["events", "dystonia", "event_min"].includes(spec.y);
-    const yTxt = isCount ? (spec.ydir === "up" ? `${y.label} more likely` : `${y.label} less likely`) : `${y.label} ${spec.ydir === "up" ? "higher" : "lower"} than usual`;
-    const when = spec.lag ? " the next day" : spec.lag === 0 && ["sleep_h", "deep_h", "rem_h", "sleep_score", "latency_min", "hrv", "lowest_hr", "readiness"].includes(spec.y) ? " that night" : " that day";
-    return `${xTxt[0].toUpperCase() + xTxt.slice(1)} → ${yTxt}${when}`;
+    const yTxt = isCount ? (spec.ydir === "up" ? `${y.label} are more likely` : `${y.label} are less likely`) : `${y.label} tends to be ${spec.ydir === "up" ? "higher" : "lower"} than usual`;
+    const when = spec.lag ? " the next day" : ["sleep_h", "deep_h", "rem_h", "sleep_score", "latency_min", "hrv", "lowest_hr", "readiness"].includes(spec.y) ? " that night" : " that day";
+    return `When ${xTxt}, ${yTxt}${when}.`;
   }
   function exposureOf(spec, r, refs) {
     const v = r && r[spec.x]; if (v == null) return null;
@@ -160,7 +179,8 @@ module.exports = function init({ pool, dailySeries, dopaDrugs, TZ, localDayOf })
       const e = exposureOf(spec, table[day], refs); const o = outcomeOf(spec, table[spec.lag ? nextDay(day) : day], refs);
       let verdict = "na";
       if (e != null && o != null) { if (e) { o ? a++ : b++; } else { o ? c++ : d++; } verdict = e === o ? "support" : "refute"; }
-      perDay.push({ day, exposure: e, outcome: o, verdict });
+      const od = spec.lag ? nextDay(day) : day;
+      perDay.push({ day, outcomeDay: od, exposure: e, outcome: o, verdict, xValue: table[day] ? table[day][spec.x] ?? null : null, yValue: table[od] ? table[od][spec.y] ?? null : null });
     }
     const nE = a + b, nC = c + d;
     const rE = nE ? a / nE : null, rC = nC ? c / nC : null;
@@ -262,7 +282,7 @@ module.exports = function init({ pool, dailySeries, dopaDrugs, TZ, localDayOf })
       diverse.push({ ...r, score: r.score - penalty });
     }
     diverse.sort((p, q) => q.score - p.score);
-    return { ranked: diverse, refs };
+    return { ranked: diverse, all: ranked, refs };
   }
 
   // ---------- persistence ----------
@@ -295,7 +315,7 @@ module.exports = function init({ pool, dailySeries, dopaDrugs, TZ, localDayOf })
       act = await listActive(uid);
     }
     if (act.length >= want) return act;
-    const seen = new Set((await pool.query("select id from hypotheses where user_id = $1", [uid])).rows.map((r) => r.id));
+    const seen = new Set((await pool.query("select id from hypotheses where user_id = $1 and status <> 'lead'", [uid])).rows.map((r) => r.id));
     const { ranked, refs } = rank(table, seen, await voted(uid));
     const usedX = new Set(act.map((h) => h.spec.x)), usedPair = new Set(act.map((h) => `${FK[h.spec.x].fam}>${FK[h.spec.y].fam}`)), usedY = new Set(act.map((h) => h.spec.y));
     let n = act.length;
@@ -332,7 +352,7 @@ module.exports = function init({ pool, dailySeries, dopaDrugs, TZ, localDayOf })
       const sc = score(spec, table, refs, win);
       const retro = score(spec, table, refs, days.filter((d) => d < start).slice(-45));
       const x = FK[spec.x], y = FK[spec.y];
-      return { id: h.id, text: describe(spec, refs), spec, exposure: x.label, outcome: y.label, lag: spec.lag, started: start, period, vote: h.vote, pinned: Boolean(h.pinned), status: h.status, reason: h.reason,
+      return { id: h.id, text: describe(spec, refs), rationale: rationale(spec), spec, exposure: x.label, outcome: y.label, xUnit: x.unit, yUnit: y.unit, lag: spec.lag, started: start, period, dayIndex: win.length, vote: h.vote, pinned: Boolean(h.pinned), status: h.status, reason: h.reason,
         days: sc.perDay, support: sc.perDay.filter((p) => p.verdict === "support").length, refute: sc.perDay.filter((p) => p.verdict === "refute").length, na: sc.perDay.filter((p) => p.verdict === "na").length,
         twoByTwo: { withExposure: { yes: sc.a, no: sc.b }, without: { yes: sc.c, no: sc.d } }, rateWith: sc.rE, rateWithout: sc.rC, diff: sc.diff, posterior: sc.post, grade: grade(sc),
         retro: { scored: retro.scored, rateWith: retro.rE, rateWithout: retro.rC, posterior: retro.post }, controllable: x.ctrl, families: [x.fam, y.fam] };
@@ -347,11 +367,16 @@ module.exports = function init({ pool, dailySeries, dopaDrugs, TZ, localDayOf })
       await fillActive(uid, table, localDayOf(new Date()));
       const active = await evaluateActive(uid, table);
       const findings = await evaluateActive(uid, table, ["finding"]);
-      const seen = new Set((await pool.query("select id from hypotheses where user_id = $1", [uid])).rows.map((r) => r.id));
-      const { ranked } = rank(table, seen, await voted(uid));
-      // Findings straight from history: strong, well-populated retrospective effects nobody has tracked or discarded.
-      const generatorFindings = ranked.filter((r) => r.retro.post != null && r.retro.post >= 0.95 && r.retro.nE >= 5 && r.retro.nC >= 5)
-        .slice(0, 6).map((r) => ({ id: r.id, text: r.text, rateWith: r.retro.rE, rateWithout: r.retro.rC, posterior: r.retro.post, nE: r.retro.nE, nC: r.retro.nC, spec: r.spec }));
+      const seen = new Set((await pool.query("select id from hypotheses where user_id = $1 and status <> 'lead'", [uid])).rows.map((r) => r.id));
+      const { ranked, all } = rank(table, seen, await voted(uid));
+      // Leads straight from history: strong, well-populated retrospective effects. Persisted as status 'lead' the first
+      // time they are seen so they don't flicker as the data shifts; re-scored every read and marked when they weaken.
+      const strong = all.filter((r) => r.retro.post != null && r.retro.post >= 0.95 && r.retro.nE >= 5 && r.retro.nC >= 5).slice(0, 8);
+      for (const r of strong) await pool.query("insert into hypotheses (id, user_id, spec, text, status, reason, started) values ($1,$2,$3,$4,'lead','seen in history',$5) on conflict (user_id, id) do nothing", [r.id, uid, r.spec, r.text, localDayOf(new Date())]);
+      const leadRows = (await pool.query("select * from hypotheses where user_id = $1 and status = 'lead' order by created_at", [uid])).rows;
+      const daysAll = Object.keys(table).sort();
+      const refsAll = { med: Object.fromEntries(F.map((f) => [f.key, med(daysAll.map((d) => table[d][f.key]))])) };
+      const generatorFindings = leadRows.map((lr) => { const sc = score(lr.spec, table, refsAll, daysAll.slice(-45)); return { id: lr.id, text: describe(lr.spec, refsAll), rationale: rationale(lr.spec), spec: lr.spec, firstSeen: lr.started ? new Date(lr.started).toISOString().slice(0, 10) : null, rateWith: sc.rE, rateWithout: sc.rC, posterior: sc.post, nE: sc.nE, nC: sc.nC, days: sc.perDay.filter((d) => d.verdict !== "na"), weakened: sc.post == null || sc.post < 0.8, xUnit: FK[lr.spec.x].unit, yUnit: FK[lr.spec.y].unit }; });
       const history = (await pool.query("select id, text, status, started, period, vote, reason, updated_at from hypotheses where user_id = $1 and status in ('retired') order by updated_at desc limit 20", [uid])).rows;
       res.json({ active, findings, generatorFindings, queue: ranked.slice(0, 5).map((r) => ({ id: r.id, text: r.text, coverage: r.coverage, prior: r.prior, hint: r.hint })), history, candidates: ranked.length, features: Object.keys(table).length, count: await wantCount(uid) });
     });
