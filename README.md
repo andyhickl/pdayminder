@@ -72,13 +72,19 @@ banner; `apiFetch` tags each test save with `raw.battery` (pre/post) and `raw.se
 (ad hoc tests of another kind don't advance it). Completion posts `/api/sessions` (observation `session/battery`),
 which drives the Mon–Fri pre/post grid and `derived/batteries_pre|post`.
 
-Hypotheses: a server-side catalog (`HYPOTHESES` in server.js) of day-level if/then statements over `dayFeatures()`
-(Oura, nutrition, context, events, doses, QoL, pre/post tapping). Three are active (`settings.hypotheses`); each day
-in a hypothesis's period is scored support / refute / n/a against the predicted direction, with a grade (no data, too
-early, mixed, supported so far, not holding up). `GET /api/hypotheses` also returns the ranked queue; `POST /api/hypotheses/vote {id, vote}` stores 👍 (+1) /
-✕ (−1) in `settings.hypothesis_votes`; `POST /api/hypotheses/refresh {id}` swaps in the best-ranked unused one
-(`rankCandidates`: 14-day data coverage + votes on the same exposure/outcome families) and restarts its period.
-The Mon–Sun grid on the Run tests card counts batteries only (ad hoc tests don't count).
+Hypotheses (`hypotheses.js`): a feature store (`buildFeatures`: ~45 day-level features from Oura, HAE, Cronometer,
+context, events, doses, batteries, QoL by period, pre/post deltas; cached 20 min, invalidated on writes) feeds a
+generator that enumerates `exposure × threshold (personal median or literature value) × lag (0/1) → outcome ×
+direction` over the registry `F`, keeping only coherent directions (bad→bad, good→good via the `better` hints).
+Candidates are ranked by 14-day coverage, arm balance, a literature plausibility prior per family pair (`PRIOR`), a
+retrospective effect hint, controllability, and a vote model (online logistic regression over family/feature
+attributes trained on 👍/✕). Three are active in the `hypotheses` table (thresholds frozen at activation; one per
+"if" feature and per family pair). Grading is prospective only: on days after activation, a 2×2 of "if" × "then",
+rates, and the posterior P(rate_with > rate_without) under Beta(1,1) priors by Monte Carlo; grades no data / too
+early (< 3 days per arm) / mixed / supported so far (≥ 0.9) / not holding up (≤ 0.1). The retrospective hint is
+shown but never counts. `GET /api/hypotheses` (active, queue, history), `POST /api/hypotheses/vote`,
+`POST /api/hypotheses/refresh {id, reason}` (retire + activate the best unseen; dismissals block the same "if" with
+the same kind of "then" and cool its family), `GET /api/features`.
 
 ## Location context (source = context)
 Overland (iOS, free) posts GeoJSON batches to `/api/ingest/overland?api_key=…`; points land in `locations`. Per local

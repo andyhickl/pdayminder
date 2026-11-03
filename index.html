@@ -1563,36 +1563,43 @@
     // ---------- Hypotheses ----------
     function HypothesesCard() {
       const [data, setData] = useState(null);
-      const [seen, setSeen] = useState([]);
+      const [busy, setBusy] = useState(null);
       const load = () => apiFetch("/api/hypotheses").then((r) => (r.ok ? r.json() : null)).then(setData).catch(() => {});
       useEffect(() => { load(); }, []);
-      const refresh = async (id) => { const r = await apiFetch("/api/hypotheses/refresh", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id, seen }) }); if (r.ok) { setSeen((x) => [...x, id]); load(); } };
-      const vote = async (id, v) => { await apiFetch("/api/hypotheses/vote", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id, vote: v }) }); if (v < 0) refresh(id); else load(); };
+      const refresh = async (id, reason) => { setBusy(id); const r = await apiFetch("/api/hypotheses/refresh", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id, reason }) }); setBusy(null); if (r.ok) load(); };
+      const vote = async (id, v) => { await apiFetch("/api/hypotheses/vote", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id, vote: v }) }); if (v < 0) refresh(id, "dismissed"); else load(); };
       const gradeColor = { "no data": "#64748b", "too early": "#94a3b8", mixed: "#fbbf24", "supported so far": "#a3e635", "not holding up": "#f87171" };
+      const pct = (v) => (v == null ? "–" : Math.round(v * 100) + "%");
       return (
         <div className="card">
-          <div className="card-header"><div><div className="card-title">Hypotheses</div><div className="card-subtitle">Three things the data could show. Each runs for its period; every day is scored as supporting, refuting, or no data. Refresh one to swap in a different hypothesis and restart.</div></div></div>
+          <div className="card-header"><div><div className="card-title">Hypotheses</div><div className="card-subtitle">Generated from your own data: each is an if/then over daily features, picked from the candidates that are scorable, balanced, plausible, and shaped by your votes. It is graded only on days after it was activated.</div></div></div>
           {!data && <div className="card-subtitle">Loading…</div>}
           {data && data.active.map((h) => (
-            <div key={h.id} style={{ background: "#0f172a", borderRadius: 10, padding: "8px 10px", marginTop: 8 }}>
+            <div key={h.id} style={{ background: "#0f172a", borderRadius: 10, padding: "8px 10px", marginTop: 8, opacity: busy === h.id ? 0.5 : 1 }}>
               <div style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "flex-start" }}>
                 <div style={{ fontSize: 13, fontWeight: 600 }}>{h.text}</div>
                 <div style={{ display: "flex", gap: 4, flexShrink: 0 }}>
                   <button type="button" className="pill-btn" style={{ padding: "2px 8px", background: h.vote > 0 ? "#1d4ed8" : undefined, color: h.vote > 0 ? "#fff" : undefined }} onClick={() => vote(h.id, h.vote > 0 ? 0 : 1)} title="Interesting: keep it and favour hypotheses like it">👍</button>
-                  <button type="button" className="pill-btn" style={{ padding: "2px 8px" }} onClick={() => vote(h.id, -1)} title="Not useful: swap it out and show fewer like it">✕</button>
+                  <button type="button" className="pill-btn" style={{ padding: "2px 8px" }} onClick={() => vote(h.id, -1)} title="Not useful: retire it and show fewer like it">✕</button>
+                  <button type="button" className="pill-btn" style={{ padding: "2px 8px" }} onClick={() => refresh(h.id, "refresh")} title="Swap for the next candidate (no vote)">↻</button>
                 </div>
               </div>
-              <div style={{ fontSize: 11, color: "#94a3b8", marginTop: 2 }}>If: {h.exposure}. Then: {h.outcome}{h.lag ? " (next day)" : ""}. Period: {h.period} days from {h.started}.</div>
-              <div style={{ display: "flex", gap: 3, marginTop: 6, alignItems: "center" }}>
-                {h.days.map((d) => <span key={d.day} title={`${d.day}: ${d.verdict}${d.exposure != null ? ` · exposure ${d.exposure ? "yes" : "no"}` : ""}${d.outcome != null ? ` · outcome ${d.outcome ? "yes" : "no"}` : ""}`} style={{ width: 14, height: 14, borderRadius: 3, background: d.verdict === "support" ? "#a3e635" : d.verdict === "refute" ? "#f87171" : "#1e293b", boxShadow: "inset 0 0 0 1px #334155" }} />)}
-                {Array.from({ length: Math.max(0, h.period - h.days.length) }).map((_, i) => <span key={"f" + i} style={{ width: 14, height: 14, borderRadius: 3, background: "transparent", boxShadow: "inset 0 0 0 1px #1e293b" }} />)}
+              <div style={{ fontSize: 11, color: "#94a3b8", marginTop: 2 }}>Watching since {h.started} for {h.period} days{h.controllable ? " · the \"if\" is something you control" : ""}.</div>
+              <div style={{ display: "flex", gap: 3, marginTop: 6, alignItems: "center", flexWrap: "wrap" }}>
+                {h.days.map((d) => <span key={d.day} title={`${d.day}: ${d.verdict}${d.exposure != null ? ` · if ${d.exposure ? "yes" : "no"}` : ""}${d.outcome != null ? ` · then ${d.outcome ? "yes" : "no"}` : ""}`} style={{ width: 14, height: 14, borderRadius: 3, background: d.verdict === "support" ? "#a3e635" : d.verdict === "refute" ? "#f87171" : "#1e293b", boxShadow: "inset 0 0 0 1px #334155" }} />)}
+                {Array.from({ length: Math.max(0, h.period - h.days.length) }).map((_, i) => <span key={"f" + i} style={{ width: 14, height: 14, borderRadius: 3, boxShadow: "inset 0 0 0 1px #1e293b" }} />)}
                 <span style={{ fontSize: 11, marginLeft: 6, color: gradeColor[h.grade] || "#94a3b8", fontWeight: 600 }}>{h.grade}</span>
               </div>
-              <div style={{ fontSize: 11, color: "#94a3b8", marginTop: 4 }}><span style={{ color: "#a3e635" }}>{h.support}</span> supporting · <span style={{ color: "#f87171" }}>{h.refute}</span> refuting · {h.na} no data</div>
+              <div style={{ fontSize: 11, color: "#94a3b8", marginTop: 4 }}>
+                When the "if" held: {h.twoByTwo.withExposure.yes}/{h.twoByTwo.withExposure.yes + h.twoByTwo.withExposure.no} days had the "then" ({pct(h.rateWith)}). When it didn't: {h.twoByTwo.without.yes}/{h.twoByTwo.without.yes + h.twoByTwo.without.no} ({pct(h.rateWithout)}).
+                {h.posterior != null && <> Chance the effect is real: <strong style={{ color: gradeColor[h.grade] }}>{pct(h.posterior)}</strong>.</>}
+              </div>
+              {h.retro && h.retro.scored >= 6 && <div style={{ fontSize: 10, color: "#64748b", marginTop: 2 }}>Before it was activated (history, {h.retro.scored} days): {pct(h.retro.rateWith)} vs {pct(h.retro.rateWithout)}; that history is why it was picked, and it doesn't count toward the grade.</div>}
             </div>
           ))}
-          {data && data.queue && data.queue.length > 0 && <div style={{ fontSize: 11, color: "#94a3b8", marginTop: 8 }}>Up next: {data.queue.slice(0, 3).map((q) => q.text).join(" · ")}</div>}
-          <div style={{ fontSize: 10, color: "#64748b", marginTop: 8 }}>A day supports a hypothesis when the "if" and the "then" agree with its direction, refutes it when they disagree. "Supported so far" needs 5+ scored days and a 70% majority; it's a reason to test, not a conclusion. 👍 keeps one and favours hypotheses about the same things; ✕ swaps it out and shows fewer like it.</div>
+          {data && data.queue && data.queue.length > 0 && <div style={{ fontSize: 11, color: "#94a3b8", marginTop: 8 }}>Up next ({data.candidates} candidates scorable): {data.queue.slice(0, 3).map((q) => q.text).join(" · ")}</div>}
+          {data && data.history && data.history.length > 0 && <div style={{ fontSize: 10, color: "#64748b", marginTop: 4 }}>Retired: {data.history.slice(0, 4).map((x) => x.text).join(" · ")}</div>}
+          <div style={{ fontSize: 10, color: "#64748b", marginTop: 8 }}>"Chance the effect is real" is the posterior probability that the "then" is more frequent on "if" days than on other days (flat priors). Supported so far = 90%+ with at least 3 days on each side; not holding up = 10% or less. 👍 teaches the ranker what you find useful; ✕ retires one and teaches it the opposite; ↻ just swaps.</div>
         </div>
       );
     }
