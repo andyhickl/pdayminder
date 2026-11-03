@@ -320,6 +320,7 @@ app.post("/logout", async (req, res) => {
 app.get("/api/me", requireAuth, (req, res) => res.json(req.user));
 
 app.get("/api/pdayminder/data", requireAuth, async (req, res) => {
+  fillContextGaps(req.user.id).catch((e) => console.error("context gaps", e.message));
   res.json(await loadClientPayload(req.user.id));
 });
 
@@ -627,17 +628,22 @@ async function rebuildContextDay(userId, day) {
   if (manual.rows.length) return 0; // manual segments own this day
   const { rows: pts } = await pool.query(
     `select ts, lat, lon, speed, motion from locations where user_id = $1 and (ts at time zone $2)::date = $3::date order by ts`, [userId, TZ, day]);
-  if (!pts.length) return 0;
   const dayStart = new Date(localMidnightIso(day + "T12:00:00Z")); // local midnight of `day`
   const dayEnd = new Date(dayStart.getTime() + 86400000);
   const now = new Date();
+  if (dayStart > now) return 0;
+  // Where were we at midnight? The last point before the day (a phone that doesn't move sends nothing), up to 7 days back.
+  const prev = await pool.query(`select ts, lat, lon, speed, motion from locations where user_id = $1 and ts < $2 and ts > $2::timestamptz - interval '7 days' order by ts desc limit 1`, [userId, dayStart.toISOString()]);
+  const carried = prev.rows[0] ? classifyPoint(prev.rows[0], places) : null;
   const labelled = pts.map((p) => ({ ts: new Date(p.ts), place: classifyPoint(p, places) }));
   // merge runs
   const runs = [];
+  if (carried && carried !== "driving") runs.push({ place: carried, start: dayStart, end: dayStart, n: 0, inferred: true });
   for (const p of labelled) { const last = runs[runs.length - 1]; if (last && last.place === p.place) { last.end = p.ts; last.n++; } else runs.push({ place: p.place, start: p.ts, end: p.ts, n: 1 }); }
+  if (!runs.length) return 0;
   // extend each run to the next run's start; last to end of day / now
   for (let i = 0; i < runs.length; i++) runs[i].end = i + 1 < runs.length ? runs[i + 1].start : (dayEnd < now ? dayEnd : now);
-  runs[0].start = dayStart < runs[0].start ? (runs[0].place === "driving" ? runs[0].start : dayStart) : runs[0].start;
+  if (runs[0].start > dayStart && runs[0].place !== "driving") runs[0].start = dayStart;
   // absorb short driving blips
   const cleaned = [];
   for (const r of runs) {
@@ -651,9 +657,19 @@ async function rebuildContextDay(userId, day) {
     await pool.query(
       `insert into observations (user_id, ts, source, metric, value, raw) values ($1,$2,'context','place',$3,$4)
        on conflict (user_id, source, metric, ts) do update set value = excluded.value, raw = excluded.raw`,
-      [userId, r.start.toISOString(), Math.round((r.end - r.start) / 60000), { place: r.place, start: r.start.toISOString(), end: r.end.toISOString(), source: "overland", points: r.n }]); n++;
+      [userId, r.start.toISOString(), Math.round((r.end - r.start) / 60000), { place: r.place, start: r.start.toISOString(), end: r.end.toISOString(), source: "overland", points: r.n, inferred: r.inferred || r.n === 0 }]); n++;
   }
   return n;
+}
+// Days with no points at all (phone never moved) get carried-forward segments. Called on ingest and on app load.
+async function fillContextGaps(userId) {
+  const today = localDayOf(new Date());
+  for (let i = 0; i < 7; i++) {
+    const d = new Date(Date.now() - i * 86400000).toLocaleDateString("en-CA", { timeZone: TZ });
+    const has = await pool.query(`select 1 from observations where user_id = $1 and source = 'context' and metric = 'place' and (ts at time zone $2)::date = $3::date limit 1`, [userId, TZ, d]);
+    if (has.rows.length && d !== today) continue;
+    await rebuildContextDay(userId, d);
+  }
 }
 app.post("/api/ingest/overland", requireAuth, async (req, res) => {
   const body = req.body || {};
@@ -671,6 +687,7 @@ app.post("/api/ingest/overland", requireAuth, async (req, res) => {
     n++; days.add(localDayOf(ts));
   }
   let segs = 0; for (const d of days) segs += await rebuildContextDay(req.user.id, d);
+  await fillContextGaps(req.user.id);
   await logIngest(req.user.id, "overland", 200, n, { points: n, days: [...days], segments: segs, trip: body.trip ? 1 : 0 });
   res.json({ result: "ok", points: n, segments: segs });
 });
