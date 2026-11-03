@@ -1103,7 +1103,7 @@
               const placeFill = here ? (here.place === "out" ? "#334155" : PLACE_COLORS[here.place]) : null;
               return (
                 <g>
-                  <text x={cx} y={cy - 22} textAnchor="middle" fontSize="13" fill="#94a3b8">{top}</text>
+                  <text x={cx} y={cy - 22} textAnchor="middle" fontSize="11" fill="#64748b">{top}</text>
                   <text x={cx} y={cy + 9} textAnchor="middle" fontSize="30" fontWeight="700" fill={mean == null ? "#475569" : ratingColor(Math.max(1, Math.min(5, Math.round(mean))))}>{mean == null ? "–" : mean.toFixed(1)}</text>
                   {here && <g>
                     <rect x={cx - 24} y={cy + 20} width={48} height={16} rx="8" fill={placeFill} />
@@ -1181,7 +1181,7 @@
                   {markers.map((m) => {
                     if (m.kind === "othermed") { const [rx, ry] = p(rOuter + 6, m.angle); return <g key={m.key}><circle cx={rx} cy={ry} r="3" fill="#94a3b8" opacity="0.9"><title>{m.title}</title></circle></g>; }
                     if (m.kind === "event") return null; // rays drawn with the arc
-                    const [x1, y1] = p(m.kind === "supp" ? rInner * 0.6 : rInner * 0.4, m.angle), [x2, y2] = p(rOuter * 1.05, m.angle);
+                    const [x1, y1] = p(rInner - 6, m.angle), [x2, y2] = p(rOuter * 1.05, m.angle);
                     return <line key={m.key} x1={x1} y1={y1} x2={x2} y2={y2} stroke={m.color} strokeWidth={m.kind === "supp" ? 1.5 : 2} strokeLinecap="round" opacity="0.9"><title>{m.title}</title></line>;
                   })}
                   {markers.map((m) => {
@@ -4459,6 +4459,20 @@
       );
     }
 
+    // Home-screen web apps have no reload button: poll the server build id and offer a reload when it changes.
+    function UpdateBanner() {
+      const [stale, setStale] = useState(false);
+      useEffect(() => {
+        let loaded = null;
+        const check = async () => { try { const r = await apiFetch("/api/version"); if (!r.ok) return; const v = (await r.json()).version; if (loaded == null) loaded = v; else if (v !== loaded) setStale(true); } catch {} };
+        check(); const t = setInterval(check, 10 * 60000);
+        const onVis = () => { if (document.visibilityState === "visible") check(); };
+        document.addEventListener("visibilitychange", onVis);
+        return () => { clearInterval(t); document.removeEventListener("visibilitychange", onVis); };
+      }, []);
+      if (!stale) return null;
+      return <div style={{ position: "fixed", top: 8, left: 8, right: 8, zIndex: 50, background: "#1d4ed8", color: "#fff", borderRadius: 10, padding: "10px 14px", fontSize: 13, display: "flex", justifyContent: "space-between", alignItems: "center", boxShadow: "0 4px 16px rgba(0,0,0,.4)" }}><span>A newer version of PDayMinder is live.</span><button type="button" className="pill-btn" style={{ background: "#fff", color: "#1d4ed8", border: 0 }} onClick={() => window.location.reload()}>Reload</button></div>;
+    }
     function App() {
       const [settings, setSettings] = useState(loadSettingsFromLocal);
       const [days, setDays] = useState(loadDaysFromLocal);
@@ -4851,6 +4865,7 @@
                   <a className="pill-btn" href="/bibliography" style={{ textDecoration: "none" }}>Annotated bibliography</a>
                   <a className="pill-btn" href="https://github.com/andyhickl/pdayminder" style={{ textDecoration: "none" }}>Source code</a>
                   <a className="pill-btn" href="/privacy" style={{ textDecoration: "none" }}>Privacy</a>
+                  <button type="button" className="pill-btn" onClick={() => window.location.reload()}>Reload app</button>
                 </div>
               </div>
               <div className="card">
@@ -4861,6 +4876,7 @@
             </>
           )}
 
+          <UpdateBanner />
           <nav className="tabbar" aria-label="Sections">
             {TABS.map(([id, label, icon]) => (
               <button key={id} type="button" className={"tab" + (tab === id ? " active" : "")} onClick={() => setTab(id)} aria-current={tab === id ? "page" : undefined}>

@@ -261,6 +261,8 @@ async function dopaDrugs(userId) {
 }
 
 // ---------- public routes ----------
+const APP_VERSION = process.env.RENDER_GIT_COMMIT || String(Date.now());
+app.get("/api/version", (req, res) => res.json({ version: APP_VERSION }));
 app.get("/api/health", async (req, res) => {
   try {
     const { rows } = await pool.query("select count(distinct day)::int as days from qol_ratings");
