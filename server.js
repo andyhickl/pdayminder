@@ -674,6 +674,13 @@ app.post("/api/ingest/overland", requireAuth, async (req, res) => {
   await logIngest(req.user.id, "overland", 200, n, { points: n, days: [...days], segments: segs, trip: body.trip ? 1 : 0 });
   res.json({ result: "ok", points: n, segments: segs });
 });
+// Raw points for a day with the label each would get (for checking Overland and tuning radii).
+app.get("/api/context/points", requireAuth, async (req, res) => {
+  const day = String(req.query.day || localDayOf(new Date()));
+  const places = await userPlaces(req.user.id);
+  const { rows } = await pool.query(`select ts, lat, lon, speed, motion, raw from locations where user_id = $1 and (ts at time zone $2)::date = $3::date order by ts`, [req.user.id, TZ, day]);
+  res.json({ day, places, points: rows.map((p) => ({ ts: p.ts, lat: p.lat, lon: p.lon, speed: p.speed, motion: p.motion, label: classifyPoint(p, places), dist_home: places[0] ? Math.round(haversineM(p.lat, p.lon, places[0].lat, places[0].lon)) : null, dist_work: places[1] ? Math.round(haversineM(p.lat, p.lon, places[1].lat, places[1].lon)) : null, battery: p.raw && p.raw.battery_level })) });
+});
 app.get("/api/context", requireAuth, async (req, res) => {
   const days = Math.min(365, Number(req.query.days) || 30);
   const { rows } = await pool.query(
