@@ -249,9 +249,19 @@ module.exports = function init({ pool, dailySeries, dopaDrugs, TZ, localDayOf })
       ranked.push({ id, spec, text: describe(spec, refs), score: s, coverage: Number(coverage.toFixed(2)), prior: pr, hint: Number(hint.toFixed(2)), votePred: Number(v.toFixed(2)), retro: { nE: sc.nE, nC: sc.nC, rE: sc.rE, rC: sc.rC, post: sc.post } });
     }
     ranked.sort((p, q) => q.score - p.score);
-    // diversity: no two in the top list sharing both x and y family
-    const seen = new Set(), diverse = [];
-    for (const r of ranked) { const k = `${FK[r.spec.x].fam}>${FK[r.spec.y].fam}`; if (seen.has(k)) continue; seen.add(k); diverse.push(r); }
+    // diversity: no two sharing both families; at most 2 per outcome family in the queue, and the same outcome feature
+    // pays a growing penalty so the right-hand side varies (QoL would otherwise dominate because it is rated daily).
+    const seenPair = new Set(), yFamCount = {}, yKeyCount = {}, xKeyCount = {}, diverse = [];
+    for (const r of ranked) {
+      const yf = FK[r.spec.y].fam, k = `${FK[r.spec.x].fam}>${yf}`;
+      if (seenPair.has(k)) continue;
+      if ((yFamCount[yf] || 0) >= 2 || (xKeyCount[r.spec.x] || 0) >= 2) continue;
+      xKeyCount[r.spec.x] = (xKeyCount[r.spec.x] || 0) + 1;
+      const penalty = 0.06 * (yKeyCount[r.spec.y] || 0);
+      seenPair.add(k); yFamCount[yf] = (yFamCount[yf] || 0) + 1; yKeyCount[r.spec.y] = (yKeyCount[r.spec.y] || 0) + 1;
+      diverse.push({ ...r, score: r.score - penalty });
+    }
+    diverse.sort((p, q) => q.score - p.score);
     return { ranked: diverse, refs };
   }
 
@@ -259,8 +269,9 @@ module.exports = function init({ pool, dailySeries, dopaDrugs, TZ, localDayOf })
   async function ensureTables() {
     await pool.query(`create table if not exists hypotheses (
       id text not null, user_id int not null references users(id) on delete cascade, spec jsonb not null, text text not null,
-      status text not null default 'active', started date, period int, vote int default 0, reason text,
+      status text not null default 'active', started date, period int, vote int default 0, reason text, pinned boolean default false,
       created_at timestamptz not null default now(), updated_at timestamptz not null default now(), primary key (user_id, id))`);
+    await pool.query("alter table hypotheses add column if not exists pinned boolean default false");
   }
   async function listActive(uid) { return (await pool.query("select * from hypotheses where user_id = $1 and status = 'active' order by created_at", [uid])).rows; }
   async function voted(uid) { return (await pool.query("select spec, vote from hypotheses where user_id = $1 and vote <> 0", [uid])).rows.map((r) => ({ spec: r.spec, vote: r.vote })); }
@@ -271,34 +282,57 @@ module.exports = function init({ pool, dailySeries, dopaDrugs, TZ, localDayOf })
       on conflict (user_id, id) do update set status = 'active', started = excluded.started, period = excluded.period, text = excluded.text, updated_at = now()`,
       [cand.id, uid, cand.spec, cand.text, today, cand.spec.period]);
   }
-  async function fillActive(uid, table, today, want = 3) {
-    const act = await listActive(uid); if (act.length >= want) return act;
+  async function wantCount(uid) {
+    const { rows } = await pool.query("select (data->>'hypothesis_count')::int as n from settings where user_id = $1", [uid]);
+    return Math.max(1, Math.min(8, (rows[0] && rows[0].n) || 3));
+  }
+  async function fillActive(uid, table, today) {
+    const want = await wantCount(uid);
+    let act = await listActive(uid);
+    if (act.length > want) { // trimmed: retire the unpinned ones with the weakest evidence first
+      const extra = act.filter((h) => !h.pinned).slice(0, act.length - want);
+      for (const h of extra) await pool.query("update hypotheses set status = 'retired', reason = 'trimmed', updated_at = now() where user_id = $1 and id = $2", [uid, h.id]);
+      act = await listActive(uid);
+    }
+    if (act.length >= want) return act;
     const seen = new Set((await pool.query("select id from hypotheses where user_id = $1", [uid])).rows.map((r) => r.id));
     const { ranked, refs } = rank(table, seen, await voted(uid));
-    const usedX = new Set(act.map((h) => h.spec.x)), usedPair = new Set(act.map((h) => `${FK[h.spec.x].fam}>${FK[h.spec.y].fam}`));
+    const usedX = new Set(act.map((h) => h.spec.x)), usedPair = new Set(act.map((h) => `${FK[h.spec.x].fam}>${FK[h.spec.y].fam}`)), usedY = new Set(act.map((h) => h.spec.y));
     let n = act.length;
-    for (const cand of ranked) {
-      if (n >= want) break;
+    const tryFill = (strict) => async () => { for (const cand of ranked) {
+      if (n >= want) break; if (seen.has(cand.id)) continue;
       const pair = `${FK[cand.spec.x].fam}>${FK[cand.spec.y].fam}`;
-      if (usedX.has(cand.spec.x) || usedPair.has(pair)) continue;
-      await activate(uid, cand, today, refs); usedX.add(cand.spec.x); usedPair.add(pair); n++;
-    }
-    if (n < want) for (const cand of ranked) { if (n >= want) break; if (usedX.has(cand.spec.x) && usedPair.has(`${FK[cand.spec.x].fam}>${FK[cand.spec.y].fam}`)) continue; await activate(uid, cand, today, refs); n++; }
+      if (strict && (usedX.has(cand.spec.x) || usedPair.has(pair) || usedY.has(cand.spec.y))) continue;
+      if (!strict && usedPair.has(pair)) continue;
+      await activate(uid, cand, today, refs); seen.add(cand.id); usedX.add(cand.spec.x); usedPair.add(pair); usedY.add(cand.spec.y); n++;
+    } };
+    await tryFill(true)(); if (n < want) await tryFill(false)();
     return listActive(uid);
   }
-  async function evaluateActive(uid, table) {
-    const act = await listActive(uid);
+  // End-of-period bookkeeping: supported → finding; expired without support → retired (pinned ones never expire).
+  async function settle(uid, table) {
+    const evald = await evaluateActive(uid, table);
+    const today = localDayOf(new Date());
+    for (const h of evald) {
+      const ended = !h.pinned && h.days.length >= h.period && h.days[h.days.length - 1].day < today;
+      if (h.grade === "supported so far" && h.days.length >= h.period) await pool.query("update hypotheses set status = 'finding', reason = 'supported over its period', updated_at = now() where user_id = $1 and id = $2", [uid, h.id]);
+      else if (ended) await pool.query("update hypotheses set status = 'retired', reason = $3, updated_at = now() where user_id = $1 and id = $2", [uid, h.id, h.grade === "not holding up" ? "refuted" : "expired"]);
+    }
+  }
+  async function evaluateActive(uid, table, statusList = ["active"]) {
+    const act = (await pool.query("select * from hypotheses where user_id = $1 and status = any($2) order by created_at", [uid, statusList])).rows;
     const days = Object.keys(table).sort();
     const refs = { med: Object.fromEntries(F.map((f) => [f.key, med(days.map((d) => table[d][f.key]))])) };
     const today = localDayOf(new Date());
     return act.map((h) => {
       const spec = h.spec; const start = h.started ? new Date(h.started).toISOString().slice(0, 10) : today;
       const period = h.period || spec.period || 7;
-      const win = []; for (let i = 0; i < period; i++) { const d = new Date(new Date(start + "T12:00:00Z").getTime() + i * 86400000).toISOString().slice(0, 10); if (d > today) break; win.push(d); }
+      const open = h.pinned || h.status === "finding"; // pinned and findings keep accumulating days past the period
+      const win = []; for (let i = 0; i < (open ? 400 : period); i++) { const d = new Date(new Date(start + "T12:00:00Z").getTime() + i * 86400000).toISOString().slice(0, 10); if (d > today) break; win.push(d); }
       const sc = score(spec, table, refs, win);
       const retro = score(spec, table, refs, days.filter((d) => d < start).slice(-45));
       const x = FK[spec.x], y = FK[spec.y];
-      return { id: h.id, text: describe(spec, refs), spec, exposure: x.label, outcome: y.label, lag: spec.lag, started: start, period, vote: h.vote,
+      return { id: h.id, text: describe(spec, refs), spec, exposure: x.label, outcome: y.label, lag: spec.lag, started: start, period, vote: h.vote, pinned: Boolean(h.pinned), status: h.status, reason: h.reason,
         days: sc.perDay, support: sc.perDay.filter((p) => p.verdict === "support").length, refute: sc.perDay.filter((p) => p.verdict === "refute").length, na: sc.perDay.filter((p) => p.verdict === "na").length,
         twoByTwo: { withExposure: { yes: sc.a, no: sc.b }, without: { yes: sc.c, no: sc.d } }, rateWith: sc.rE, rateWithout: sc.rC, diff: sc.diff, posterior: sc.post, grade: grade(sc),
         retro: { scored: retro.scored, rateWith: retro.rE, rateWithout: retro.rC, posterior: retro.post }, controllable: x.ctrl, families: [x.fam, y.fam] };
@@ -309,12 +343,33 @@ module.exports = function init({ pool, dailySeries, dopaDrugs, TZ, localDayOf })
   function routes(app, requireAuth) {
     app.get("/api/hypotheses", requireAuth, async (req, res) => {
       const uid = req.user.id; const table = await buildFeatures(uid, 60);
+      await settle(uid, table);
       await fillActive(uid, table, localDayOf(new Date()));
       const active = await evaluateActive(uid, table);
+      const findings = await evaluateActive(uid, table, ["finding"]);
       const seen = new Set((await pool.query("select id from hypotheses where user_id = $1", [uid])).rows.map((r) => r.id));
       const { ranked } = rank(table, seen, await voted(uid));
-      const history = (await pool.query("select id, text, status, started, period, vote, reason, updated_at from hypotheses where user_id = $1 and status <> 'active' order by updated_at desc limit 20", [uid])).rows;
-      res.json({ active, queue: ranked.slice(0, 5).map((r) => ({ id: r.id, text: r.text, coverage: r.coverage, prior: r.prior, hint: r.hint })), history, candidates: ranked.length, features: Object.keys(table).length });
+      // Findings straight from history: strong, well-populated retrospective effects nobody has tracked or discarded.
+      const generatorFindings = ranked.filter((r) => r.retro.post != null && r.retro.post >= 0.95 && r.retro.nE >= 5 && r.retro.nC >= 5)
+        .slice(0, 6).map((r) => ({ id: r.id, text: r.text, rateWith: r.retro.rE, rateWithout: r.retro.rC, posterior: r.retro.post, nE: r.retro.nE, nC: r.retro.nC, spec: r.spec }));
+      const history = (await pool.query("select id, text, status, started, period, vote, reason, updated_at from hypotheses where user_id = $1 and status in ('retired') order by updated_at desc limit 20", [uid])).rows;
+      res.json({ active, findings, generatorFindings, queue: ranked.slice(0, 5).map((r) => ({ id: r.id, text: r.text, coverage: r.coverage, prior: r.prior, hint: r.hint })), history, candidates: ranked.length, features: Object.keys(table).length, count: await wantCount(uid) });
+    });
+    app.post("/api/hypotheses/pin", requireAuth, async (req, res) => {
+      await pool.query("update hypotheses set pinned = $3, updated_at = now() where user_id = $1 and id = $2", [req.user.id, String(req.body.id || ""), Boolean(req.body.pinned)]);
+      res.json({ ok: true });
+    });
+    app.post("/api/hypotheses/count", requireAuth, async (req, res) => {
+      const n = Math.max(1, Math.min(8, Number(req.body.count) || 3));
+      await pool.query(`insert into settings (user_id, data) values ($1, jsonb_build_object('hypothesis_count', $2::int)) on conflict (user_id) do update set data = settings.data || jsonb_build_object('hypothesis_count', $2::int)`, [req.user.id, n]);
+      res.json({ ok: true, count: n });
+    });
+    // Discard a finding (tracked or generator-only): it stays hidden and is never re-proposed.
+    app.post("/api/hypotheses/discard", requireAuth, async (req, res) => {
+      const id = String(req.body.id || ""); const spec = req.body.spec || null; const text = String(req.body.text || "");
+      const r = await pool.query("update hypotheses set status = 'discarded', reason = 'discarded finding', updated_at = now() where user_id = $1 and id = $2", [req.user.id, id]);
+      if (!r.rowCount && spec) await pool.query("insert into hypotheses (id, user_id, spec, text, status, reason) values ($1,$2,$3,$4,'discarded','discarded finding') on conflict (user_id, id) do update set status = 'discarded', updated_at = now()", [id, req.user.id, spec, text]);
+      res.json({ ok: true });
     });
     app.post("/api/hypotheses/vote", requireAuth, async (req, res) => {
       const v = Math.max(-1, Math.min(1, Number(req.body.vote) || 0));
@@ -324,6 +379,8 @@ module.exports = function init({ pool, dailySeries, dopaDrugs, TZ, localDayOf })
     // Retire one active hypothesis (reason: dismissed | refresh) and activate the best-ranked unseen candidate.
     app.post("/api/hypotheses/refresh", requireAuth, async (req, res) => {
       const uid = req.user.id; const id = String(req.body.id || "");
+      const pinned = await pool.query("select pinned from hypotheses where user_id = $1 and id = $2", [uid, id]);
+      if (pinned.rows[0] && pinned.rows[0].pinned) return res.status(400).json({ error: "pinned" });
       await pool.query("update hypotheses set status = 'retired', reason = $3, updated_at = now() where user_id = $1 and id = $2 and status = 'active'", [uid, id, req.body.reason || "refresh"]);
       const table = await buildFeatures(uid, 60);
       await fillActive(uid, table, localDayOf(new Date()));

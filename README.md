@@ -84,7 +84,13 @@ rates, and the posterior P(rate_with > rate_without) under Beta(1,1) priors by M
 early (< 3 days per arm) / mixed / supported so far (≥ 0.9) / not holding up (≤ 0.1). The retrospective hint is
 shown but never counts. `GET /api/hypotheses` (active, queue, history), `POST /api/hypotheses/vote`,
 `POST /api/hypotheses/refresh {id, reason}` (retire + activate the best unseen; dismissals block the same "if" with
-the same kind of "then" and cool its family), `GET /api/features`.
+the same kind of "then" and cool its family), `POST /api/hypotheses/pin` (pinned ones keep scoring past their period
+and can't be swapped), `POST /api/hypotheses/count` (1–8 under consideration, `settings.hypothesis_count`),
+`POST /api/hypotheses/discard`, `GET /api/features`. `settle()` runs on every read: a hypothesis still "supported so
+far" at the end of its period becomes a finding (status `finding`, evaluated over all days since activation);
+expired or refuted ones retire. The Findings card also lists generator findings: retrospective effects with
+posterior ≥ 0.95 and ≥ 5 days per arm that nobody has tracked or discarded. Ranking caps the queue at two per
+outcome family and two per "if" feature, with a growing penalty on repeated outcome features.
 
 ## Location context (source = context)
 Overland (iOS, free) posts GeoJSON batches to `/api/ingest/overland?api_key=…`; points land in `locations`. Per local
