@@ -279,6 +279,9 @@
       color: var(--muted);
       text-align: center;
     }
+    .ring-legend { display: flex; flex-wrap: wrap; justify-content: center; gap: 6px 16px; margin: 8px 0 4px; font-size: 11px; color: var(--muted); }
+    .ring-legend span { display: inline-flex; align-items: center; gap: 6px; }
+    .ring-legend i { display: inline-block; width: 12px; height: 12px; border-radius: 3px; }
 
     .controls-row {
       display: flex;
@@ -4461,9 +4464,12 @@
             </div>
             <div className="ring-container">
               <DayRing day={day} onSegmentClick={handleSegmentClick} settings={settings} events={dayEventList} context={dayContext} />
-              <div className="ring-caption" style={{ display: "flex", gap: 16, justifyContent: "center", alignItems: "center" }}>
-                <span><span style={{ display: "inline-block", width: 12, height: 12, background: PLACE_COLORS.home, borderRadius: 3, verticalAlign: "-2px", marginRight: 5 }} />🏠</span>
-                <span><span style={{ display: "inline-block", width: 12, height: 12, background: PLACE_COLORS.work, borderRadius: 3, verticalAlign: "-2px", marginRight: 5 }} />💼</span>
+              <div className="ring-legend">
+                <span><i style={{ background: PLACE_COLORS.home }} />Home</span>
+                <span><i style={{ background: PLACE_COLORS.work }} />Work</span>
+                <span><i style={{ background: "#4b5563" }} />Sleep</span>
+                <span><i style={{ background: "#1f2933", boxShadow: "inset 0 0 0 1px #334155" }} />No data</span>
+                <span><i style={{ background: "#ef4444", height: 4, borderRadius: 2 }} />Event</span>
               </div>
             </div>
             <div className="controls-row">
