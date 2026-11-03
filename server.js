@@ -141,7 +141,7 @@ async function importLegacyJson(userId) {
 // ---------- client payload <-> tables ----------
 // The web app speaks {settings, days: {YYYY-MM-DD: {segments:[{type,rating}x12], meds:["HH:MM"]}}}.
 async function loadClientPayload(userId) {
-  const [s, q, m, ev] = await Promise.all([
+  const [s, q, m, ev, ctx] = await Promise.all([
     pool.query("select data from settings where user_id = $1", [userId]),
     pool.query(
       "select to_char(day,'YYYY-MM-DD') as day, seg, type, rating from qol_ratings where user_id = $1 order by day, seg",
@@ -153,6 +153,10 @@ async function loadClientPayload(userId) {
     ),
     pool.query(
       `select ts, value as minutes, raw from observations where user_id = $1 and source = 'event' and metric = 'event' and ts >= now() - interval '21 days' order by ts desc`,
+      [userId]
+    ),
+    pool.query(
+      `select raw from observations where user_id = $1 and source = 'context' and metric = 'place' and ts >= now() - interval '22 days' order by ts`,
       [userId]
     ),
   ]);
@@ -171,7 +175,7 @@ async function loadClientPayload(userId) {
   q.rows.forEach((r) => (dayFor(r.day).segments[r.seg] = { type: r.type, rating: r.rating }));
   m.rows.forEach((r) => (r.source === "supplement" ? dayFor(r.day).supps.push({ t: r.t, id: r.drug }) : dayFor(r.day).meds.push({ t: r.t, drug: r.drug || "sinemet" })));
   const events = await annotateDose(userId, ev.rows.map((r) => ({ ts: r.ts, minutes: r.minutes, ...r.raw })));
-  return { settings: s.rows[0] ? s.rows[0].data : null, days, events };
+  return { settings: s.rows[0] ? s.rows[0].data : null, days, events, context: ctx.rows.map((r) => r.raw) };
 }
 
 async function saveClientPayload(userId, body) {
@@ -525,6 +529,13 @@ async function dailySeries(uid, source, metric, days) {
          group by 1 order by 1`, [uid, TZ, days, await dopaDrugs(uid)]);
       return rows.map((r) => [r.day, Number(r.v)]);
     }
+    if (metric.startsWith("minutes_") && PLACE_COLORS[metric.slice(8)]) {
+      const { rows } = await pool.query(
+        `select to_char((ts at time zone $2)::date,'YYYY-MM-DD') as day, sum(coalesce(value, 0)) as v from observations
+         where user_id = $1 and source = 'context' and metric = 'place' and raw->>'place' = $4
+           and (ts at time zone $2)::date >= (now() at time zone $2)::date - ($3::int - 1) group by 1 order by 1`, [uid, TZ, days, metric.slice(8)]);
+      return rows.map((r) => [r.day, Number(r.v)]);
+    }
     if (metric === "supplements_logged" || metric.startsWith("supp_")) {
       const id = metric.startsWith("supp_") ? metric.slice(5) : null;
       const { rows } = await pool.query(
@@ -582,6 +593,140 @@ function localMidnightIso(tsIso) {
   const offsetMin = (new Date(guess.toLocaleString("en-US", { timeZone: TZ })) - new Date(guess.toLocaleString("en-US", { timeZone: "UTC" }))) / 60000;
   return new Date(guess.getTime() - offsetMin * 60000).toISOString();
 }
+
+// ---------- Location context (home / work / driving / out) ----------
+// Points come from Overland (GeoJSON batches) or any logger; segments are rebuilt per local day from the points,
+// classified with the places in settings (home/work lat/lon/radius), driving from the motion array or speed.
+// Manual segments (test data, corrections) are stored with raw.source = 'manual' and take precedence for their day.
+const PLACE_COLORS = { home: "#22c55e", work: "#60a5fa", driving: "#f59e0b", out: "#a78bfa" };
+function haversineM(lat1, lon1, lat2, lon2) {
+  const R = 6371000, toR = (d) => (d * Math.PI) / 180;
+  const dLat = toR(lat2 - lat1), dLon = toR(lon2 - lon1);
+  const a = Math.sin(dLat / 2) ** 2 + Math.cos(toR(lat1)) * Math.cos(toR(lat2)) * Math.sin(dLon / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(a));
+}
+function localDayOf(ts) { return new Date(ts).toLocaleDateString("en-CA", { timeZone: TZ }); }
+async function userPlaces(userId) {
+  const { rows } = await pool.query("select data->'places' as places from settings where user_id = $1", [userId]);
+  const p = (rows[0] && rows[0].places) || {};
+  return ["home", "work"].filter((k) => p[k] && isFinite(p[k].lat) && isFinite(p[k].lon)).map((k) => ({ name: k, lat: Number(p[k].lat), lon: Number(p[k].lon), radius: Number(p[k].radius) || 250 }));
+}
+function classifyPoint(pt, places) {
+  const motion = pt.motion || [];
+  if (motion.includes("driving") || (pt.speed != null && pt.speed > 6)) return "driving";
+  for (const pl of places) if (haversineM(pt.lat, pt.lon, pl.lat, pl.lon) <= pl.radius) return pl.name;
+  return "out";
+}
+// Rebuild context segments for one local day from stored points. A state persists until the next point; the last
+// state runs to end of day (or now for today). Driving blips under 2 minutes are absorbed into the surrounding state.
+async function rebuildContextDay(userId, day) {
+  const places = await userPlaces(userId);
+  const manual = await pool.query(
+    `select 1 from observations where user_id = $1 and source = 'context' and metric = 'place' and raw->>'source' = 'manual' and (ts at time zone $2)::date = $3::date limit 1`, [userId, TZ, day]);
+  await pool.query(`delete from observations where user_id = $1 and source = 'context' and metric = 'place' and raw->>'source' = 'overland' and (ts at time zone $2)::date = $3::date`, [userId, TZ, day]);
+  if (manual.rows.length) return 0; // manual segments own this day
+  const { rows: pts } = await pool.query(
+    `select ts, lat, lon, speed, motion from locations where user_id = $1 and (ts at time zone $2)::date = $3::date order by ts`, [userId, TZ, day]);
+  if (!pts.length) return 0;
+  const dayStart = new Date(localMidnightIso(day + "T12:00:00Z")); // local midnight of `day`
+  const dayEnd = new Date(dayStart.getTime() + 86400000);
+  const now = new Date();
+  const labelled = pts.map((p) => ({ ts: new Date(p.ts), place: classifyPoint(p, places) }));
+  // merge runs
+  const runs = [];
+  for (const p of labelled) { const last = runs[runs.length - 1]; if (last && last.place === p.place) { last.end = p.ts; last.n++; } else runs.push({ place: p.place, start: p.ts, end: p.ts, n: 1 }); }
+  // extend each run to the next run's start; last to end of day / now
+  for (let i = 0; i < runs.length; i++) runs[i].end = i + 1 < runs.length ? runs[i + 1].start : (dayEnd < now ? dayEnd : now);
+  runs[0].start = dayStart < runs[0].start ? (runs[0].place === "driving" ? runs[0].start : dayStart) : runs[0].start;
+  // absorb short driving blips
+  const cleaned = [];
+  for (const r of runs) {
+    const mins = (r.end - r.start) / 60000; const last = cleaned[cleaned.length - 1];
+    if (r.place === "driving" && mins < 2 && last) { last.end = r.end; continue; }
+    if (last && last.place === r.place) { last.end = r.end; continue; }
+    cleaned.push({ ...r });
+  }
+  let n = 0;
+  for (const r of cleaned) {
+    await pool.query(
+      `insert into observations (user_id, ts, source, metric, value, raw) values ($1,$2,'context','place',$3,$4)
+       on conflict (user_id, source, metric, ts) do update set value = excluded.value, raw = excluded.raw`,
+      [userId, r.start.toISOString(), Math.round((r.end - r.start) / 60000), { place: r.place, start: r.start.toISOString(), end: r.end.toISOString(), source: "overland", points: r.n }]); n++;
+  }
+  return n;
+}
+app.post("/api/ingest/overland", requireAuth, async (req, res) => {
+  const body = req.body || {};
+  const locs = Array.isArray(body.locations) ? body.locations : [];
+  const days = new Set(); let n = 0;
+  for (const f of locs) {
+    const g = f && f.geometry, pr = (f && f.properties) || {};
+    if (!g || !Array.isArray(g.coordinates) || !pr.timestamp) continue;
+    const ts = new Date(pr.timestamp); if (isNaN(ts)) continue;
+    await pool.query(
+      `insert into locations (user_id, ts, lat, lon, speed, motion, raw) values ($1,$2,$3,$4,$5,$6,$7)
+       on conflict (user_id, ts) do update set lat = excluded.lat, lon = excluded.lon, speed = excluded.speed, motion = excluded.motion, raw = excluded.raw`,
+      [req.user.id, ts.toISOString(), Number(g.coordinates[1]), Number(g.coordinates[0]), pr.speed == null ? null : Number(pr.speed), Array.isArray(pr.motion) ? pr.motion.map(String) : [],
+       { battery_level: pr.battery_level, battery_state: pr.battery_state, wifi: pr.wifi, activity: pr.activity, horizontal_accuracy: pr.horizontal_accuracy }]);
+    n++; days.add(localDayOf(ts));
+  }
+  let segs = 0; for (const d of days) segs += await rebuildContextDay(req.user.id, d);
+  await logIngest(req.user.id, "overland", 200, n, { points: n, days: [...days], segments: segs, trip: body.trip ? 1 : 0 });
+  res.json({ result: "ok", points: n, segments: segs });
+});
+app.get("/api/context", requireAuth, async (req, res) => {
+  const days = Math.min(365, Number(req.query.days) || 30);
+  const { rows } = await pool.query(
+    `select ts, value as minutes, raw from observations where user_id = $1 and source = 'context' and metric = 'place'
+       and ts >= (now() at time zone $2)::date - ($3::int - 1) order by ts`, [req.user.id, TZ, days]);
+  res.json(rows.map((r) => ({ ts: r.ts, minutes: r.minutes, ...r.raw })));
+});
+// Manual segments: [{start, end, place}] — stored as source 'manual'; replaces manual segments overlapping the same days.
+app.post("/api/context/manual", requireAuth, async (req, res) => {
+  const segs = Array.isArray(req.body && req.body.segments) ? req.body.segments : [];
+  const days = new Set(); let n = 0;
+  const valid = segs.map((s) => ({ start: new Date(s.start), end: new Date(s.end), place: PLACE_COLORS[s.place] ? s.place : "out" })).filter((s) => !isNaN(s.start) && !isNaN(s.end) && s.end > s.start);
+  valid.forEach((s) => days.add(localDayOf(s.start)));
+  if (req.body.replace_days !== false) for (const d of days)
+    await pool.query(`delete from observations where user_id = $1 and source = 'context' and metric = 'place' and (ts at time zone $2)::date = $3::date`, [req.user.id, TZ, d]);
+  for (const s of valid) {
+    await pool.query(
+      `insert into observations (user_id, ts, source, metric, value, raw) values ($1,$2,'context','place',$3,$4)
+       on conflict (user_id, source, metric, ts) do update set value = excluded.value, raw = excluded.raw`,
+      [req.user.id, s.start.toISOString(), Math.round((s.end - s.start) / 60000), { place: s.place, start: s.start.toISOString(), end: s.end.toISOString(), source: "manual" }]); n++;
+  }
+  res.json({ ok: true, segments: n, days: [...days] });
+});
+// Geocode an address (OpenStreetMap Nominatim; one request per second, user-agent required).
+app.get("/api/geocode", requireAuth, async (req, res) => {
+  const q = String(req.query.q || "").trim(); if (!q) return res.status(400).json({ error: "q" });
+  try {
+    const r = await fetch("https://nominatim.openstreetmap.org/search?format=json&limit=1&q=" + encodeURIComponent(q), { headers: { "user-agent": "pdayminder/1.0 (personal health tracker)" } });
+    const j = await r.json(); const hit = j[0];
+    if (!hit) return res.json({ found: false });
+    res.json({ found: true, lat: Number(hit.lat), lon: Number(hit.lon), display: hit.display_name });
+  } catch (e) { res.status(502).json({ error: "geocoder unavailable" }); }
+});
+// QoL by context: mean rating of 2-hour blocks weighted by the minutes each place overlaps them.
+app.get("/api/context/qol", requireAuth, async (req, res) => {
+  const days = Math.min(365, Number(req.query.days) || 30);
+  const segs = (await pool.query(
+    `select ts, value as minutes, raw from observations where user_id = $1 and source = 'context' and metric = 'place' and ts >= (now() at time zone $2)::date - ($3::int - 1)`, [req.user.id, TZ, days])).rows;
+  const q = (await pool.query(
+    `select to_char(day,'YYYY-MM-DD') as day, seg, rating from qol_ratings where user_id = $1 and type = 'rating' and day >= (now() at time zone $2)::date - ($3::int - 1)`, [req.user.id, TZ, days])).rows;
+  const acc = {};
+  for (const s of segs) {
+    const start = new Date(s.raw.start), end = new Date(s.raw.end); const day = localDayOf(start);
+    for (const r of q) {
+      if (r.day !== day) continue;
+      const b0 = new Date(localMidnightIso(day + "T12:00:00Z")).getTime() + r.seg * 7200000, b1 = b0 + 7200000;
+      const ov = Math.max(0, Math.min(end, b1) - Math.max(start, b0)) / 60000; if (ov <= 0) continue;
+      const a = (acc[s.raw.place] = acc[s.raw.place] || { minutes: 0, weighted: 0, blocks: 0 }); a.minutes += ov; a.weighted += ov * r.rating; a.blocks++;
+    }
+  }
+  const totals = {}; segs.forEach((s) => (totals[s.raw.place] = (totals[s.raw.place] || 0) + (s.minutes || 0)));
+  res.json(Object.keys(PLACE_COLORS).map((place) => ({ place, minutes: totals[place] || 0, qol: acc[place] ? acc[place].weighted / acc[place].minutes : null, rated_minutes: acc[place] ? acc[place].minutes : 0 })));
+});
 
 app.post("/api/ingest/hae", requireAuth, async (req, res) => {
   const body = req.body || {};
@@ -681,6 +826,7 @@ app.get("/api/metrics", requireAuth, async (req, res) => {
   // Derived nutrition metrics show up once protein / energy rows exist (computed on read, see dailySeries).
   const have = new Set(rows.map((r) => r.source + "/" + r.metric));
   if (have.has("hae/protein") || have.has("cronometer/protein")) rows.push({ source: "derived", metric: "protein_near_dose", rows: (rows.find((r) => (r.source === "cronometer" || r.source === "hae") && r.metric === "protein") || { rows: 0 }).rows, last_ts: null });
+  if (have.has("context/place")) Object.keys(PLACE_COLORS).forEach((p) => rows.push({ source: "derived", metric: "minutes_" + p, rows: 0, last_ts: null }));
   const supp = await pool.query("select drug, count(*)::int as n from med_doses where user_id = $1 and source = 'supplement' group by drug", [req.user.id]);
   if (supp.rows.length) {
     rows.push({ source: "derived", metric: "supplements_logged", rows: supp.rows.reduce((a, r) => a + r.n, 0), last_ts: null });
@@ -726,7 +872,7 @@ app.get("/api/day", requireAuth, async (req, res) => {
   const day = String(req.query.day || "");
   if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) return res.status(400).json({ error: "day=YYYY-MM-DD" });
   const uid = req.user.id;
-  const [obs, qol, meds, dopa, oura, motor, cron, events] = await Promise.all([
+  const [obs, qol, meds, dopa, oura, motor, cron, events, ctx] = await Promise.all([
     pool.query(
       `select ts, metric, value, raw from observations
        where user_id = $1 and source = 'hae' and (ts at time zone $2)::date = $3::date order by ts`,
@@ -756,6 +902,11 @@ app.get("/api/day", requireAuth, async (req, res) => {
          and (ts at time zone $2)::date between $3::date - 1 and $3::date order by ts`,
       [uid, TZ, day]
     ),
+    pool.query(
+      `select raw from observations where user_id = $1 and source = 'context' and metric = 'place'
+         and (ts at time zone $2)::date between $3::date - 1 and $3::date order by ts`,
+      [uid, TZ, day]
+    ),
   ]);
   const hourly = {}, daily = {}, workouts = [];
   const counts = {};
@@ -767,6 +918,7 @@ app.get("/api/day", requireAuth, async (req, res) => {
     else daily[r.metric] = r.value;
   });
   res.json({ day, hourly, daily, oura: Object.fromEntries(oura.rows.map((r) => [r.metric, r.value])), nutrition: Object.fromEntries(cron.rows.map((r) => [r.metric, Number(r.value)])), motor: motor.rows, qol: qol.rows,
+    context: ctx.rows.map((r) => r.raw),
     events: await annotateDose(uid, events.rows.map((r) => ({ ts: r.ts, minutes: r.minutes, ...r.raw })).filter((e) => !e.end || new Date(e.end).toLocaleDateString("en-CA", { timeZone: TZ }) >= day)),
     doses: meds.rows.map((r) => ({ t: r.t, drug: r.drug, kind: r.source === "supplement" ? "supplement" : "med", dopaminergic: r.source !== "supplement" && dopa.includes(r.drug || "sinemet") })), workouts });
 });

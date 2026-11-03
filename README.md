@@ -62,6 +62,16 @@ dose; protein competes with levodopa for transport), `derived/first_meal_hour`, 
 non-zero hourly `dietary_energy`). Stats has a Nutrition group; Day vitals shows protein, fiber and caffeine.
 The full Cronometer profile (80+ nutrients, supplements, creatine) needs the Cronometer cron (backlog).
 
+## Location context (source = context)
+Overland (iOS, free) posts GeoJSON batches to `/api/ingest/overland?api_key=…`; points land in `locations`. Per local
+day the server rebuilds segments: a point is `driving` if its motion array says so or speed > 6 m/s, else `home` /
+`work` if within that place's radius (Settings › Profile › Places: address geocoded via Nominatim at `/api/geocode`,
+or the phone's position; default 250 m), else `out`. A state lasts until the next point; driving blips < 2 min are
+absorbed. Segments are observations (`metric = place`, `ts = start`, `value = minutes`, raw `{place,start,end,
+source}`); `POST /api/context/manual {segments:[{start,end,place}]}` writes manual segments that own their days.
+`/api/context?days=`, `/api/context/qol?days=` (minutes and overlap-weighted QoL per place), derived
+`minutes_<place>` daily metrics, a Location section in Stats, and the outer band on the ring.
+
 ## Supplements
 Settings › Profile › Supplements mirrors the medication editor (`settings.supplements[{id,name,dose,times[]}]`), for
 single-nutrient supplements worth timing (creatine, vitamin D, fiber, CoQ10); multivitamins stay in Cronometer. Logged

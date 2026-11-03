@@ -984,7 +984,7 @@
       );
     }
 
-    function DayRing({ day, onSegmentClick, settings: ringSettings, events }) {
+    function DayRing({ day, onSegmentClick, settings: ringSettings, events, context }) {
       const width = 300;
       const height = 300;
       const cx = width / 2;
@@ -1077,6 +1077,14 @@
               tap a segment to rate QoL
             </text>
 
+            {(context || []).map((seg, i) => {
+              // Context band just outside the wheel: where you were (home / work / driving / out).
+              const span = contextSpanOnDay(seg, day.dateKey); if (!span || span[1] - span[0] < 3) return null;
+              const a0 = (span[0] / 1440) * Math.PI * 2 - Math.PI / 2, a1 = (span[1] / 1440) * Math.PI * 2 - Math.PI / 2;
+              const r = rOuter + 3; const p = (a) => [cx + r * Math.cos(a), cy + r * Math.sin(a)];
+              const [x0, y0] = p(a0), [x1, y1] = p(a1);
+              return <path key={"ctx" + i} d={`M ${x0.toFixed(1)} ${y0.toFixed(1)} A ${r} ${r} 0 ${a1 - a0 > Math.PI ? 1 : 0} 1 ${x1.toFixed(1)} ${y1.toFixed(1)}`} fill="none" stroke={PLACE_COLORS[seg.place] || "#64748b"} strokeWidth="3" opacity={seg.place === "driving" ? 0.9 : 0.45}><title>{PLACE_LABELS[seg.place] || seg.place} {fmtEventTime(seg.start)}–{fmtEventTime(seg.end)}</title></path>;
+            })}
             {(() => {
               // Markers: dose rays (blue), supplement rays (yellow), event arcs + rays (red). Labels sit in bubbles on two
               // rings outside the wheel; when two labels would collide, the lower-priority one moves out, then is dropped.
@@ -1281,6 +1289,11 @@
         </div>
       );
     }
+
+    // ---------- Location context ----------
+    const PLACE_COLORS = { home: "#22c55e", work: "#60a5fa", driving: "#f59e0b", out: "#a78bfa" };
+    const PLACE_LABELS = { home: "Home", work: "Work", driving: "Driving", out: "Out" };
+    function contextSpanOnDay(seg, key) { return eventSpanOnDay({ start: seg.start, end: seg.end }, key); }
 
     // ---------- Symptom events ----------
     const EVENT_TYPES = [
@@ -1496,6 +1509,25 @@
           <div className="controls-row" style={{ marginTop: 12 }}>
             <button type="button" className="pill-btn primary" onClick={() => handleChange("medications", [...(local.medications || []), { id: "med-" + Date.now().toString(36), name: "New medication", dose: "", dopaminergic: false, times: ["08:00"] }])}>+ Add medication</button>
           </div>
+          <div style={{ marginTop: 16, fontSize: 13, fontWeight: 600 }}>Places</div>
+          <div className="card-subtitle">Home and work, used to label location points from Overland as home / work / driving / out. Type an address and Locate, or use your phone's position while you're there. Radius is how close counts as "there".</div>
+          {["home", "work"].map((k) => {
+            const pl = (local.places || {})[k] || {};
+            const setPl = (patch) => handleChange("places", { ...(local.places || {}), [k]: { ...pl, ...patch } });
+            return (
+              <div key={k} style={{ background: "#0f172a", borderRadius: 10, padding: "8px 10px", marginTop: 8 }}>
+                <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) 72px", gap: 6, alignItems: "end" }}>
+                  <label style={{ fontSize: 11, color: "var(--muted)", display: "flex", flexDirection: "column", gap: 2, minWidth: 0 }}>{PLACE_LABELS[k]} address<input className="settings-input" style={{ width: "100%", height: 28, boxSizing: "border-box" }} value={pl.address || ""} placeholder="street, city" onChange={(e) => setPl({ address: e.target.value })} /></label>
+                  <label style={{ fontSize: 11, color: "var(--muted)", display: "flex", flexDirection: "column", gap: 2 }}>Radius m<input className="settings-input" type="number" style={{ width: "100%", height: 28, boxSizing: "border-box" }} value={pl.radius || 250} onChange={(e) => setPl({ radius: Number(e.target.value) || 250 })} /></label>
+                </div>
+                <div className="controls-row" style={{ gap: 6, marginTop: 6, flexWrap: "wrap" }}>
+                  <button type="button" className="pill-btn" onClick={async () => { if (!pl.address) return alert("Type an address first."); const r = await apiFetch("/api/geocode?q=" + encodeURIComponent(pl.address)); const j = r.ok ? await r.json() : {}; if (j.found) setPl({ lat: j.lat, lon: j.lon, display: j.display }); else alert("Couldn't find that address."); }}>Locate</button>
+                  <button type="button" className="pill-btn" onClick={() => { if (!navigator.geolocation) return alert("No geolocation here."); navigator.geolocation.getCurrentPosition((pos) => setPl({ lat: pos.coords.latitude, lon: pos.coords.longitude, display: "phone position" }), () => alert("Location permission denied."), { enableHighAccuracy: true, timeout: 15000 }); }}>Use my location</button>
+                  <span style={{ fontSize: 11, color: pl.lat ? "#a3e635" : "#fbbf24" }}>{pl.lat ? `${Number(pl.lat).toFixed(5)}, ${Number(pl.lon).toFixed(5)}` : "not located yet"}</span>
+                </div>
+              </div>
+            );
+          })}
           <div style={{ marginTop: 16, fontSize: 13, fontWeight: 600 }}>Supplements</div>
           <div className="card-subtitle">Single-nutrient supplements you want to time (creatine, vitamin D, fiber, CoQ10…). Logged from the QoL tab; yellow rays on the ring. Multivitamins and anything you want broken into nutrients belong in Cronometer.</div>
           {(local.supplements || []).map((m, i) => (
@@ -3657,6 +3689,12 @@
                 : <a className="pill-btn primary" href="/oauth/oura/start" style={{ textDecoration: "none" }}>Connect Oura</a>)}
             </div>
           )}
+          {info && (
+            <div className="med-list" style={{ marginTop: 6 }}>
+              <strong>Overland</strong> (location context){" "}
+              <div style={{ fontSize: 11, color: "#94a3b8" }}>Install Overland (App Store, free). Receiver URL: <code>{location.origin}/api/ingest/overland?api_key=YOUR_KEY</code> (make a key below). Tracking: Significant Location + Visits, send every 10–15 min, min 50 m. Then set Home and Work under Profile › Places.</div>
+            </div>
+          )}
           {info && info.cronometer && (
             <div className="med-list" style={{ marginTop: 6 }}>
               <strong>Cronometer</strong>{" "}
@@ -3919,6 +3957,7 @@
       "hae/vitamin_c": "Vitamin C (mg)", "hae/vitamin_d": "Vitamin D (µg)", "hae/vitamin_b12": "Vitamin B12 (µg)", "hae/vitamin_b6": "Vitamin B6 (mg)", "hae/folate": "Folate (µg)",
       "cronometer/energy": "Calories (Cronometer)", "cronometer/protein": "Protein (Cronometer)", "cronometer/carbs": "Carbs (Cronometer)", "cronometer/fat": "Fat (Cronometer)", "cronometer/fiber": "Fiber (Cronometer)",
       "cronometer/sugars": "Sugars (Cronometer)", "cronometer/caffeine": "Caffeine (Cronometer)", "cronometer/water": "Water (Cronometer)", "cronometer/omega_3": "Omega-3 (Cronometer)", "cronometer/alcohol": "Alcohol (Cronometer)",
+      "derived/minutes_home": "Minutes at home / day", "derived/minutes_work": "Minutes at work / day", "derived/minutes_driving": "Minutes driving / day", "derived/minutes_out": "Minutes out / day",
       "derived/supplements_logged": "Supplements logged / day",
       "derived/events_count": "Symptom events / day", "derived/event_minutes": "Minutes in symptom events / day", "derived/events_dystonia": "Dystonia events / day", "derived/events_dyskinesia": "Involuntary-movement events / day",
       "derived/events_freezing": "Freezing events / day", "derived/events_off": "Off episodes / day", "derived/events_fall": "Falls / day", "derived/events_pain": "Pain events / day", "derived/events_other": "Other events / day",
@@ -4062,6 +4101,7 @@
       ["Motor measures", [["motor/tremor_amp_cm", "Tremor amplitude (cm)", 2, -1], ["motor/tap_rate", "Taps / s", 2, 1], ["motor/tap_cv", "Tapping rhythm CV", 2, -1], ["motor/gait_cadence", "Cadence (steps/min)", 0, 1], ["motor/gait_step_cv", "Step variability (%)", 1, -1], ["motor/gait_stride_regularity", "Stride regularity", 2, 1], ["motor/gait_asymmetry", "Gait asymmetry", 2, -1], ["motor/balance_sway_rms", "Sway RMS (m/s²)", 3, -1], ["motor/balance_jerk", "Sway jerk (m/s³)", 2, -1], ["motor/balance_path", "Sway path (/s)", 2, -1], ["motor/spiral_error_pct", "Spiral deviation (%)", 1, -1], ["motor/spiral_tremor_share", "Spiral tremor share", 2, -1]]],
       ["Voice measures", [["motor/ddk_rate", "Pa-ta-ka syll / s", 2, 1], ["motor/ddk_cv", "Pa-ta-ka rhythm CV", 2, -1], ["motor/voice_hnr", "Voice HNR (dB)", 1, 1], ["motor/voice_jitter_pct", "Voice jitter (%)", 2, -1], ["motor/voice_ppe", "Voice PPE", 3, -1], ["motor/voice_int_slope", "Voice loudness slope (dB/s)", 2, 1], ["motor/read_f0_sd_st", "Reading pitch var. (st)", 2, 1], ["motor/read_rate", "Reading rate (/s)", 2, 1], ["motor/voice_mpt", "Max phonation (s)", 1, 1]]],
       ["Oura", [["oura/sleep_score", "Sleep score", 0, 1], ["oura/readiness_score", "Readiness", 0, 1], ["oura/total_sleep_h", "Sleep (h)", 1, 1], ["oura/deep_h", "Deep (h)", 1, 1], ["oura/avg_hrv", "Night HRV (ms)", 0, 1], ["oura/lowest_hr", "Lowest HR", 0, -1], ["oura/temperature_deviation", "Temp dev (°C)", 2, 0]]],
+      ["Location (minutes / day)", [["derived/minutes_home", "Home", 0, 0], ["derived/minutes_work", "Work", 0, 0], ["derived/minutes_driving", "Driving", 0, -1], ["derived/minutes_out", "Out", 0, 0]]],
       ["Symptom events", [["derived/events_count", "Events / day", 1, -1], ["derived/event_minutes", "Minutes in events / day", 0, -1], ["derived/events_dystonia", "Dystonia / day", 1, -1], ["derived/events_dyskinesia", "Involuntary movement / day", 1, -1], ["derived/events_off", "Off episodes / day", 1, -1], ["derived/events_freezing", "Freezing / day", 1, -1]]],
       ["Nutrition (Cronometer)", [["cronometer/energy", "Calories (kcal)", 0, 0], ["cronometer/protein", "Protein (g)", 0, 0], ["derived/protein_near_dose", "Protein near levodopa (g)", 0, -1], ["cronometer/carbs", "Carbs (g)", 0, 0], ["cronometer/fat", "Fat (g)", 0, 0], ["cronometer/fiber", "Fiber (g)", 0, 1], ["cronometer/sugars", "Sugars (g)", 0, -1], ["cronometer/caffeine", "Caffeine (mg)", 0, 0], ["cronometer/water", "Water (g)", 0, 1], ["cronometer/omega_3", "Omega-3 (g)", 1, 1], ["cronometer/sodium", "Sodium (mg)", 0, -1], ["cronometer/magnesium", "Magnesium (mg)", 0, 1], ["cronometer/vitamin_d", "Vitamin D", 0, 1], ["cronometer/b12", "Vitamin B12 (µg)", 1, 1], ["derived/first_meal_hour", "First meal (h)", 1, 0], ["derived/last_meal_hour", "Last meal (h)", 1, 0]]],
       ["Nutrition (Apple Health)", [["hae/dietary_energy", "Calories (kcal)", 0, 0], ["hae/protein", "Protein (g)", 0, 0], ["derived/protein_near_dose", "Protein near levodopa (g)", 0, -1], ["hae/carbohydrates", "Carbohydrates (g)", 0, 0], ["hae/total_fat", "Fat (g)", 0, 0], ["hae/fiber", "Fiber (g)", 0, 1], ["hae/sugar", "Sugar (g)", 0, -1], ["hae/caffeine", "Caffeine (mg)", 0, 0], ["hae/dietary_water", "Water (mL)", 0, 1], ["hae/sodium", "Sodium (mg)", 0, -1], ["hae/magnesium", "Magnesium (mg)", 0, 1], ["hae/vitamin_d", "Vitamin D (µg)", 1, 1], ["hae/vitamin_b12", "Vitamin B12 (µg)", 1, 1]]],
@@ -4103,6 +4143,33 @@
       Object.entries(OVERALL).forEach(([k, parts]) => { d[k] = buildRollup(d, parts); });
       return d;
     }
+    function LocationStatsCard() {
+      const [span, setSpan] = useState(30);
+      const [rows] = useJson(`/api/context/qol?days=${span}`, [span]);
+      const [daily] = useJson(`/api/daily-multi?days=${span}&metrics=derived/minutes_home,derived/minutes_work,derived/minutes_driving,derived/minutes_out`, [span]);
+      const h = (m) => (m / 60).toFixed(1) + " h";
+      const daysWith = daily ? daily.filter((d) => ["home", "work", "driving", "out"].some((p) => d["derived/minutes_" + p] != null)).length : 0;
+      return (
+        <div className="card">
+          <div className="card-header"><div><div className="card-title">Location</div><div className="card-subtitle">Time at home, at work, driving and out, and how you rate your hours in each. From Overland (or manual segments).</div></div></div>
+          <div className="controls-row" style={{ gap: 8 }}>{[7, 30, 90].map((n) => <button key={n} type="button" className={"pill-btn" + (span === n ? " primary" : "")} onClick={() => setSpan(n)}>{n}d</button>)}</div>
+          {rows && !rows.some((r) => r.minutes > 0) && <div className="card-subtitle">No location data yet. Set Home and Work under Settings › Profile › Places and point Overland at the hub (Settings › Connections).</div>}
+          {rows && rows.some((r) => r.minutes > 0) && (
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 8 }}>
+              {rows.map((r) => (
+                <div key={r.place} style={{ background: "#0f172a", borderRadius: 8, padding: "8px 10px", borderLeft: `3px solid ${PLACE_COLORS[r.place]}` }}>
+                  <div style={{ fontSize: 11, color: "#94a3b8" }}>{PLACE_LABELS[r.place]}</div>
+                  <div style={{ fontSize: 16, fontWeight: 600 }}>{h(r.minutes)} <span style={{ fontSize: 11, fontWeight: 400, color: "#94a3b8" }}>· {daysWith ? h(r.minutes / daysWith) + "/day" : ""}</span></div>
+                  <div style={{ fontSize: 12, color: r.qol == null ? "#64748b" : ratingColor(Math.max(1, Math.min(5, Math.round(r.qol)))) }}>{r.qol == null ? "QoL: not rated there yet" : `QoL ${r.qol.toFixed(2)} over ${h(r.rated_minutes)} rated`}</div>
+                </div>
+              ))}
+            </div>
+          )}
+          <div style={{ fontSize: 10, color: "#64748b", marginTop: 8 }}>QoL per place weights each 2-hour rating by the minutes that place overlaps it. Driving minutes are short, so its QoL is the noisiest.</div>
+        </div>
+      );
+    }
+
     function StatsTab() {
       const keys = STAT_GROUPS.flatMap(([, rows]) => rows.map((r) => r[0])).filter((k) => !k.startsWith("rollup:"));
       const [raw, err] = useJson(`/api/stats?metrics=${encodeURIComponent(keys.join(","))}`, []);
@@ -4171,10 +4238,12 @@
       const [suppModalOpen, setSuppModalOpen] = useState(false);
       const [eventModal, setEventModal] = useState({ open: false, initial: null });
       const [recentEvents, setRecentEvents] = useState([]);
+      const [recentContext, setRecentContext] = useState([]);
       const refreshEvents = () => apiFetch("/api/events?days=21").then((r) => (r.ok ? r.json() : [])).then(setRecentEvents).catch(() => {});
 
       const dateKey = toDateKey(selectedDate);
       const dayEventList = useMemo(() => recentEvents.filter((e) => eventSpanOnDay(e, dateKey)), [recentEvents, dateKey]);
+      const dayContext = useMemo(() => recentContext.filter((c) => contextSpanOnDay(c, dateKey)), [recentContext, dateKey]);
 
       useEffect(() => {
         setDays((prev) => {
@@ -4217,6 +4286,7 @@
               setDays((prev) => ({ ...prev, ...payload.days }));
             }
             if (Array.isArray(payload.events)) setRecentEvents(payload.events);
+            if (Array.isArray(payload.context)) setRecentContext(payload.context);
             // Mark the post-load state as clean on the next render.
             setTimeout(() => { loadedRef.current = true; dirtyDaysRef.current = new Set(); settingsDirtyRef.current = false; }, 0);
           } catch {
@@ -4371,9 +4441,10 @@
               </div>
             </div>
             <div className="ring-container">
-              <DayRing day={day} onSegmentClick={handleSegmentClick} settings={settings} events={dayEventList} />
+              <DayRing day={day} onSegmentClick={handleSegmentClick} settings={settings} events={dayEventList} context={dayContext} />
               <div className="ring-caption">
                 Red = tougher hours. Green/blue = better QoL. Gray with 😴 = sleep, black = no data/not yet logged.
+                {dayContext.length > 0 && <> Outer band: <span style={{ color: PLACE_COLORS.home }}>home</span> · <span style={{ color: PLACE_COLORS.work }}>work</span> · <span style={{ color: PLACE_COLORS.driving }}>driving</span> · <span style={{ color: PLACE_COLORS.out }}>out</span>.</>}
               </div>
             </div>
             <div className="controls-row">
@@ -4468,7 +4539,7 @@
             </>
           )}
 
-          {tab === "stats" && <><StatusCard /><StatsTab /></>}
+          {tab === "stats" && <><StatusCard /><Section title="Location" subtitle="Home, work, driving, out: hours and QoL in each." storageKey="st-location" defaultOpen={false}><LocationStatsCard /></Section><StatsTab /></>}
 
           {tab === "settings" && (
             <>

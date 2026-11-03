@@ -96,6 +96,18 @@ create table if not exists ingest_log (
   summary    jsonb
 );
 
+-- Raw location points (Overland or any GPS logger). Segments are derived into observations (source = 'context').
+create table if not exists locations (
+  user_id  int not null references users(id) on delete cascade,
+  ts       timestamptz not null,
+  lat      double precision not null,
+  lon      double precision not null,
+  speed    double precision,
+  motion   text[],
+  raw      jsonb,
+  primary key (user_id, ts)
+);
+
 create index if not exists observations_user_ts on observations (user_id, ts);
 create index if not exists observations_user_source_metric on observations (user_id, source, metric, ts);
 `;
