@@ -3671,7 +3671,7 @@
           })}
           <div style={{ marginTop: 10, fontSize: 12, fontWeight: 600 }}>Recent uploads</div>
           <div className="card-subtitle">Each HAE or sync run: status, rows written, and which metrics the payload carried (name:points).</div>
-          {log && log.slice(0, 12).map((l, i) => (
+          {log && log.filter((l) => !(l.status === 404 && /^GET /.test(l.route))).slice(0, 12).map((l, i) => (
             <div key={i} style={{ fontSize: 11, color: l.status === 200 ? "#cbd5e1" : "#f87171", marginTop: 6, wordBreak: "break-word" }}>
               <strong>{new Date(l.ts).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}</strong> · {l.route} · {l.status} · {l.rows} rows · {Math.round((l.bytes || 0) / 1024)} KB
               {l.summary && Array.isArray(l.summary.metrics) && typeof l.summary.metrics[0] === "string" && <div style={{ color: "#94a3b8" }}>{l.summary.metrics.join(", ")}{l.summary.workouts ? ` · workouts: ${l.summary.workouts}` : ""}</div>}
