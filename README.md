@@ -75,8 +75,10 @@ which drives the Mon–Fri pre/post grid and `derived/batteries_pre|post`.
 Hypotheses: a server-side catalog (`HYPOTHESES` in server.js) of day-level if/then statements over `dayFeatures()`
 (Oura, nutrition, context, events, doses, QoL, pre/post tapping). Three are active (`settings.hypotheses`); each day
 in a hypothesis's period is scored support / refute / n/a against the predicted direction, with a grade (no data, too
-early, mixed, supported so far, not holding up). `GET /api/hypotheses`, `POST /api/hypotheses/refresh {id}` swaps in
-the next unused one and restarts the period.
+early, mixed, supported so far, not holding up). `GET /api/hypotheses` also returns the ranked queue; `POST /api/hypotheses/vote {id, vote}` stores 👍 (+1) /
+✕ (−1) in `settings.hypothesis_votes`; `POST /api/hypotheses/refresh {id}` swaps in the best-ranked unused one
+(`rankCandidates`: 14-day data coverage + votes on the same exposure/outcome families) and restarts its period.
+The Mon–Sun grid on the Run tests card counts batteries only (ad hoc tests don't count).
 
 ## Location context (source = context)
 Overland (iOS, free) posts GeoJSON batches to `/api/ingest/overland?api_key=…`; points land in `locations`. Per local

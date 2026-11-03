@@ -629,38 +629,51 @@ app.get("/api/sessions", requireAuth, async (req, res) => {
 // day features; a day "supports" the hypothesis when exposure and outcome agree with the predicted direction, "refutes"
 // it when they disagree, and is "n/a" when either side is missing. Active hypotheses live in settings.hypotheses.
 const HYPOTHESES = [
-  { id: "hrv_events", text: "Lower night HRV → more symptom events the next day", period: 7, exposure: "Night HRV below your 30-day median", outcome: "Any symptom event the next day", lag: 1,
+  { id: "hrv_events", fam: ["hrv", "events"], text: "Lower night HRV → more symptom events the next day", period: 7, exposure: "Night HRV below your 30-day median", outcome: "Any symptom event the next day", lag: 1,
     exp: (d, ref) => d.avg_hrv == null || ref.avg_hrv_median == null ? null : d.avg_hrv < ref.avg_hrv_median, out: (n) => n.events_count == null ? null : n.events_count > 0 },
-  { id: "sleep_afternoon", text: "Short sleep (< 6.5 h) → worse afternoon QoL", period: 7, exposure: "Oura sleep under 6.5 h", outcome: "14:00–20:00 QoL below your median", lag: 0,
+  { id: "sleep_afternoon", fam: ["sleep", "qol"], text: "Short sleep (< 6.5 h) → worse afternoon QoL", period: 7, exposure: "Oura sleep under 6.5 h", outcome: "14:00–20:00 QoL below your median", lag: 0,
     exp: (d) => d.total_sleep_h == null ? null : d.total_sleep_h < 6.5, out: (d, ref) => d.qol_pm == null || ref.qol_pm_median == null ? null : d.qol_pm < ref.qol_pm_median },
-  { id: "protein_dose", text: "Protein near a levodopa dose (> 20 g within 90 min) → worse QoL that day", period: 7, exposure: "> 20 g protein within 90 min of a dose", outcome: "Daily QoL below your median", lag: 0,
+  { id: "protein_dose", fam: ["nutrition", "qol"], text: "Protein near a levodopa dose (> 20 g within 90 min) → worse QoL that day", period: 7, exposure: "> 20 g protein within 90 min of a dose", outcome: "Daily QoL below your median", lag: 0,
     exp: (d) => d.protein_near_dose == null ? null : d.protein_near_dose > 20, out: (d, ref) => d.qol == null || ref.qol_median == null ? null : d.qol < ref.qol_median },
-  { id: "caffeine_tremor", text: "More caffeine (> 100 mg) → worse tremor score that day", period: 7, exposure: "Caffeine over 100 mg", outcome: "Tremor score below 4", lag: 0,
+  { id: "caffeine_tremor", fam: ["nutrition", "tremor"], text: "More caffeine (> 100 mg) → worse tremor score that day", period: 7, exposure: "Caffeine over 100 mg", outcome: "Tremor score below 4", lag: 0,
     exp: (d) => d.caffeine == null ? null : d.caffeine > 100, out: (d) => d.tremor_score == null ? null : d.tremor_score < 4 },
-  { id: "driving_events", text: "Days with more than an hour of driving → more symptom events", period: 7, exposure: "Driving > 60 min", outcome: "Any symptom event that day", lag: 0,
+  { id: "driving_events", fam: ["context", "events"], text: "Days with more than an hour of driving → more symptom events", period: 7, exposure: "Driving > 60 min", outcome: "Any symptom event that day", lag: 0,
     exp: (d) => d.minutes_driving == null ? null : d.minutes_driving > 60, out: (d) => d.events_count == null ? null : d.events_count > 0 },
-  { id: "steps_qol", text: "More movement (steps above your median) → better QoL that day", period: 7, exposure: "Steps above your 30-day median", outcome: "Daily QoL above your median", lag: 0,
+  { id: "steps_qol", fam: ["activity", "qol"], text: "More movement (steps above your median) → better QoL that day", period: 7, exposure: "Steps above your 30-day median", outcome: "Daily QoL above your median", lag: 0,
     exp: (d, ref) => d.steps == null || ref.steps_median == null ? null : d.steps > ref.steps_median, out: (d, ref) => d.qol == null || ref.qol_median == null ? null : d.qol > ref.qol_median },
-  { id: "readiness_tapping", text: "Low Oura readiness → slower tapping that day", period: 7, exposure: "Readiness below your 30-day median", outcome: "Tapping score below 4", lag: 0,
+  { id: "readiness_tapping", fam: ["hrv", "tapping"], text: "Low Oura readiness → slower tapping that day", period: 7, exposure: "Readiness below your 30-day median", outcome: "Tapping score below 4", lag: 0,
     exp: (d, ref) => d.readiness == null || ref.readiness_median == null ? null : d.readiness < ref.readiness_median, out: (d) => d.tap_score == null ? null : d.tap_score < 4 },
-  { id: "late_meal_sleep", text: "A late last meal (after 19:30) → worse sleep that night", period: 7, exposure: "Last meal after 19:30", outcome: "Next night's sleep score below your median", lag: 1,
+  { id: "late_meal_sleep", fam: ["nutrition", "sleep"], text: "A late last meal (after 19:30) → worse sleep that night", period: 7, exposure: "Last meal after 19:30", outcome: "Next night's sleep score below your median", lag: 1,
     exp: (d) => d.last_meal_hour == null ? null : d.last_meal_hour > 19.5, out: (n, ref) => n.sleep_score == null || ref.sleep_score_median == null ? null : n.sleep_score < ref.sleep_score_median },
-  { id: "supps_qol", text: "Taking the supplement stack → better QoL the next day", period: 14, exposure: "≥ 3 supplements logged", outcome: "Next day's QoL above your median", lag: 1,
+  { id: "supps_qol", fam: ["supplements", "qol"], text: "Taking the supplement stack → better QoL the next day", period: 14, exposure: "≥ 3 supplements logged", outcome: "Next day's QoL above your median", lag: 1,
     exp: (d) => d.supplements_logged == null ? false : d.supplements_logged >= 3, out: (n, ref) => n.qol == null || ref.qol_median == null ? null : n.qol > ref.qol_median },
-  { id: "doses_events", text: "Fewer than 3 levodopa doses → more symptom events that day", period: 7, exposure: "Fewer than 3 doses logged", outcome: "Any symptom event that day", lag: 0,
+  { id: "doses_events", fam: ["doses", "events"], text: "Fewer than 3 levodopa doses → more symptom events that day", period: 7, exposure: "Fewer than 3 doses logged", outcome: "Any symptom event that day", lag: 0,
     exp: (d) => d.doses == null ? null : d.doses < 3, out: (d) => d.events_count == null ? null : d.events_count > 0 },
-  { id: "work_qol", text: "Work days → lower afternoon QoL than home days", period: 7, exposure: "> 3 h at work", outcome: "14:00–20:00 QoL below your median", lag: 0,
+  { id: "work_qol", fam: ["context", "qol"], text: "Work days → lower afternoon QoL than home days", period: 7, exposure: "> 3 h at work", outcome: "14:00–20:00 QoL below your median", lag: 0,
     exp: (d) => d.minutes_work == null ? null : d.minutes_work > 180, out: (d, ref) => d.qol_pm == null || ref.qol_pm_median == null ? null : d.qol_pm < ref.qol_pm_median },
-  { id: "post_pre_tapping", text: "Post-dose tapping is faster than pre-dose on the same day", period: 7, exposure: "A pre/post battery pair that day", outcome: "Post-dose tap rate higher than pre-dose", lag: 0,
+  { id: "post_pre_tapping", fam: ["doses", "tapping"], text: "Post-dose tapping is faster than pre-dose on the same day", period: 7, exposure: "A pre/post battery pair that day", outcome: "Post-dose tap rate higher than pre-dose", lag: 0,
     exp: (d) => d.tap_pre == null || d.tap_post == null ? null : true, out: (d) => d.tap_pre == null || d.tap_post == null ? null : d.tap_post > d.tap_pre },
+  { id: "deep_tremor", fam: ["sleep", "tremor"], text: "Less deep sleep (< 1 h) → worse tremor score the next day", period: 7, exposure: "Deep sleep under 1 h", outcome: "Tremor score below 4 the next day", lag: 1,
+    exp: (d) => d.deep_h == null ? null : d.deep_h < 1, out: (n) => n.tremor_score == null ? null : n.tremor_score < 4 },
+  { id: "events_next_qol", fam: ["events", "qol"], text: "A symptom event today → lower QoL tomorrow (hangover effect)", period: 14, exposure: "Any symptom event", outcome: "Next day's QoL below your median", lag: 1,
+    exp: (d) => d.events_count == null ? false : d.events_count > 0, out: (n, ref) => n.qol == null || ref.qol_median == null ? null : n.qol < ref.qol_median },
+  { id: "steps_sleep", fam: ["activity", "sleep"], text: "More movement in the day → better sleep that night", period: 7, exposure: "Steps above your 30-day median", outcome: "Next night's sleep score above your median", lag: 1,
+    exp: (d, ref) => d.steps == null || ref.steps_median == null ? null : d.steps > ref.steps_median, out: (n, ref) => n.sleep_score == null || ref.sleep_score_median == null ? null : n.sleep_score > ref.sleep_score_median },
+  { id: "caffeine_sleep", fam: ["nutrition", "sleep"], text: "Caffeine over 150 mg → longer time to fall asleep", period: 7, exposure: "Caffeine over 150 mg", outcome: "Next night's sleep latency above your median", lag: 1,
+    exp: (d) => d.caffeine == null ? null : d.caffeine > 150, out: (n, ref) => n.latency_min == null || ref.latency_median == null ? null : n.latency_min > ref.latency_median },
+  { id: "water_qol", fam: ["nutrition", "qol"], text: "Drinking more (water above your median) → better QoL that day", period: 7, exposure: "Water logged above your median", outcome: "Daily QoL above your median", lag: 0,
+    exp: (d, ref) => d.water == null || ref.water_median == null ? null : d.water > ref.water_median, out: (d, ref) => d.qol == null || ref.qol_median == null ? null : d.qol > ref.qol_median },
+  { id: "pm_qol_events", fam: ["qol", "events"], text: "A bad afternoon (QoL below median) → a symptom event that evening or the next day", period: 7, exposure: "14:00–20:00 QoL below your median", outcome: "An event today or tomorrow", lag: 0,
+    exp: (d, ref) => d.qol_pm == null || ref.qol_pm_median == null ? null : d.qol_pm < ref.qol_pm_median, out: (d) => d.events_count == null && d.events_next == null ? null : (d.events_count || 0) + (d.events_next || 0) > 0 },
 ];
 const median = (arr) => { const a = arr.filter((v) => v != null).sort((x, y) => x - y); return a.length ? a[Math.floor(a.length / 2)] : null; };
 async function dayFeatures(uid, days) {
-  const keys = ["oura/avg_hrv", "oura/total_sleep_h", "oura/readiness_score", "oura/sleep_score", "derived/protein_near_dose", "cronometer/caffeine", "hae/caffeine", "derived/minutes_driving", "derived/minutes_work", "derived/supplements_logged", "derived/events_count", "hae/step_count", "derived/last_meal_hour", "motor/tremor_score", "motor/tap_score"];
+  const keys = ["oura/avg_hrv", "oura/total_sleep_h", "oura/readiness_score", "oura/sleep_score", "oura/deep_h", "oura/latency_min", "cronometer/water", "derived/protein_near_dose", "cronometer/caffeine", "hae/caffeine", "derived/minutes_driving", "derived/minutes_work", "derived/supplements_logged", "derived/events_count", "hae/step_count", "derived/last_meal_hour", "motor/tremor_score", "motor/tap_score"];
   const f = {};
   const day = (k) => (f[k] = f[k] || {});
   for (const k of keys) { const [src, m] = k.split("/"); (await dailySeries(uid, src, m, days)).forEach(([d, v]) => (day(d)[m] = v)); }
   for (const d of Object.keys(f)) { if (f[d].caffeine == null && f[d].dietary_caffeine != null) f[d].caffeine = f[d].dietary_caffeine; if (f[d].steps == null && f[d].step_count != null) f[d].steps = f[d].step_count; if (f[d].readiness == null && f[d].readiness_score != null) f[d].readiness = f[d].readiness_score; }
+  for (const d of Object.keys(f)) { const next = new Date(new Date(d + "T12:00:00Z").getTime() + 86400000).toISOString().slice(0, 10); if (f[next]) f[d].events_next = f[next].events_count; }
   const q = await pool.query(
     `select to_char(day,'YYYY-MM-DD') as day, avg(rating) as qol, avg(rating) filter (where seg between 7 and 9) as qol_pm
      from qol_ratings where user_id = $1 and type = 'rating' and day >= (now() at time zone $2)::date - ($3::int - 1) group by day`, [uid, TZ, days]);
@@ -674,12 +687,14 @@ async function dayFeatures(uid, days) {
   t.rows.forEach((r) => (day(r.day)["tap_" + r.phase] = Number(r.v)));
   return f;
 }
-async function evaluateHypotheses(uid, active) {
-  const f = await dayFeatures(uid, 45);
+async function evaluateHypotheses(uid, active, pre) {
+  const f = pre ? pre.f : await dayFeatures(uid, 45);
   const allDays = Object.keys(f).sort();
   const ref = { avg_hrv_median: median(allDays.map((d) => f[d].avg_hrv)), qol_median: median(allDays.map((d) => f[d].qol)), qol_pm_median: median(allDays.map((d) => f[d].qol_pm)),
-    steps_median: median(allDays.map((d) => f[d].steps)), readiness_median: median(allDays.map((d) => f[d].readiness)), sleep_score_median: median(allDays.map((d) => f[d].sleep_score)) };
+    steps_median: median(allDays.map((d) => f[d].steps)), readiness_median: median(allDays.map((d) => f[d].readiness)), sleep_score_median: median(allDays.map((d) => f[d].sleep_score)),
+    latency_median: median(allDays.map((d) => f[d].latency_min)), water_median: median(allDays.map((d) => f[d].water)) };
   const today = localDayOf(new Date());
+  if (pre) pre.ref = ref;
   return active.map((a) => {
     const h = HYPOTHESES.find((x) => x.id === a.id); if (!h) return null;
     const start = a.started || today; const period = a.period || h.period;
@@ -697,6 +712,23 @@ async function evaluateHypotheses(uid, active) {
     return { id: h.id, text: h.text, exposure: h.exposure, outcome: h.outcome, lag: h.lag, started: start, period, days: evals, support, refute, na: evals.length - n, grade };
   }).filter(Boolean);
 }
+async function hypothesisVotes(uid) {
+  const { rows } = await pool.query("select data->'hypothesis_votes' as v from settings where user_id = $1", [uid]);
+  return (rows[0] && rows[0].v && typeof rows[0].v === "object") ? rows[0].v : {};
+}
+// Rank candidates: how much of the last 14 days each could score (coverage), plus votes on the same families
+// (an upvoted hypothesis makes its exposure/outcome families more likely to come up; a downvote the reverse).
+function rankCandidates(f, ref, votes, exclude) {
+  const days = Object.keys(f).sort().slice(-14);
+  const fam = {}; Object.entries(votes).forEach(([id, v]) => { const h = HYPOTHESES.find((x) => x.id === id); if (h) h.fam.forEach((k) => (fam[k] = (fam[k] || 0) + Number(v))); });
+  return HYPOTHESES.filter((h) => !exclude.has(h.id)).map((h) => {
+    let scored = 0;
+    for (const d of days) { const next = new Date(new Date(d + "T12:00:00Z").getTime() + 86400000).toISOString().slice(0, 10); const e = h.exp(f[d] || {}, ref), o = h.out(h.lag ? (f[next] || {}) : (f[d] || {}), ref); if (e != null && o != null) scored++; }
+    const coverage = days.length ? scored / days.length : 0;
+    const voteBoost = h.fam.reduce((a, k) => a + (fam[k] || 0), 0) * 0.15 + (Number(votes[h.id]) || 0) * 0.5;
+    return { h, score: coverage + voteBoost, coverage };
+  }).sort((a, b) => b.score - a.score);
+}
 async function activeHypotheses(uid) {
   const { rows } = await pool.query("select data->'hypotheses' as h from settings where user_id = $1", [uid]);
   let act = (rows[0] && Array.isArray(rows[0].h)) ? rows[0].h : [];
@@ -708,15 +740,33 @@ async function saveHypotheses(uid, act) {
 }
 app.get("/api/hypotheses", requireAuth, async (req, res) => {
   const act = await activeHypotheses(req.user.id);
-  res.json({ active: await evaluateHypotheses(req.user.id, act), catalog: HYPOTHESES.map((h) => ({ id: h.id, text: h.text, period: h.period })) });
+  const votes = await hypothesisVotes(req.user.id);
+  const pre = { f: await dayFeatures(req.user.id, 45) };
+  const active = await evaluateHypotheses(req.user.id, act, pre);
+  active.forEach((h) => (h.vote = Number(votes[h.id]) || 0));
+  const queue = rankCandidates(pre.f, pre.ref, votes, new Set(act.map((a) => a.id))).slice(0, 5).map((c) => ({ id: c.h.id, text: c.h.text, coverage: Number(c.coverage.toFixed(2)) }));
+  res.json({ active, queue, catalog_size: HYPOTHESES.length });
 });
-// Swap one active hypothesis for the next unused one in the catalog (or a chosen id); restarts its period today.
+// Vote: +1 keeps it and favours its families; -1 (the ✕) swaps it out and disfavours them. Refresh without a vote just swaps.
+app.post("/api/hypotheses/vote", requireAuth, async (req, res) => {
+  const votes = await hypothesisVotes(req.user.id);
+  const id = String(req.body.id || ""); const v = Number(req.body.vote) || 0;
+  if (!HYPOTHESES.find((h) => h.id === id)) return res.status(404).json({ error: "unknown" });
+  votes[id] = v;
+  await pool.query(`insert into settings (user_id, data) values ($1, jsonb_build_object('hypothesis_votes', $2::jsonb)) on conflict (user_id) do update set data = settings.data || jsonb_build_object('hypothesis_votes', $2::jsonb)`, [req.user.id, JSON.stringify(votes)]);
+  res.json({ ok: true, votes });
+});
+// Swap one active hypothesis for the best-ranked unused one; restarts its period today.
 app.post("/api/hypotheses/refresh", requireAuth, async (req, res) => {
   const act = await activeHypotheses(req.user.id);
   const idx = act.findIndex((a) => a.id === req.body.id); if (idx < 0) return res.status(404).json({ error: "not active" });
-  const used = new Set([...act.map((a) => a.id), ...(req.body.seen || [])]);
-  const next = req.body.next && HYPOTHESES.find((h) => h.id === req.body.next && !act.some((a) => a.id === h.id)) || HYPOTHESES.find((h) => !used.has(h.id)) || HYPOTHESES.find((h) => !act.some((a) => a.id === h.id));
-  if (!next) return res.status(400).json({ error: "no more hypotheses" });
+  const votes = await hypothesisVotes(req.user.id);
+  const pre = { f: await dayFeatures(req.user.id, 45) }; await evaluateHypotheses(req.user.id, act, pre);
+  const exclude = new Set([...act.map((a) => a.id), ...(req.body.seen || [])]);
+  let ranked = rankCandidates(pre.f, pre.ref, votes, exclude);
+  if (!ranked.length) ranked = rankCandidates(pre.f, pre.ref, votes, new Set(act.map((a) => a.id)));
+  if (!ranked.length) return res.status(400).json({ error: "no more hypotheses" });
+  const next = ranked[0].h;
   act[idx] = { id: next.id, started: localDayOf(new Date()), period: next.period };
   await saveHypotheses(req.user.id, act);
   res.json({ active: await evaluateHypotheses(req.user.id, act) });

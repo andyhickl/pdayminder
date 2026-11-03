@@ -1508,9 +1508,9 @@
         if (w.pre) return w.since == null ? "no dose yet today" : w.nextSched != null && w.nextSched - (now.getHours() * 60 + now.getMinutes()) <= PRE_BEFORE_SCHEDULED ? `before the ${minutesToTimeString(w.nextSched)} dose` : `${fmtMin(w.since)} since last dose`;
         return w.preIn != null ? `unlocks in ${fmtMin(w.preIn)}` : "after the dose wears off";
       };
-      // Mon–Fri this week
+      // Mon–Sun this week
       const monday = new Date(now); monday.setDate(now.getDate() - ((now.getDay() + 6) % 7)); monday.setHours(0, 0, 0, 0);
-      const week = Array.from({ length: 5 }, (_, i) => { const d = new Date(monday); d.setDate(monday.getDate() + i); const k = toDateKey(d); return { k, label: d.toLocaleDateString(undefined, { weekday: "short" }).slice(0, 2), pre: (sessions || []).some((s) => s.day === k && s.phase === "pre"), post: (sessions || []).some((s) => s.day === k && s.phase === "post"), future: d > now }; });
+      const week = Array.from({ length: 7 }, (_, i) => { const d = new Date(monday); d.setDate(monday.getDate() + i); const k = toDateKey(d); return { k, label: d.toLocaleDateString(undefined, { weekday: "short" }).slice(0, 2), pre: (sessions || []).some((s) => s.day === k && s.phase === "pre"), post: (sessions || []).some((s) => s.day === k && s.phase === "post"), future: d > now }; });
       const Btn = ({ phase }) => { const ok = (phase === "pre" ? w.pre : w.post) && !done[phase]; return (
         <button type="button" className={"pill-btn" + (ok ? " primary" : "")} disabled={!ok} style={{ opacity: ok ? 1 : 0.45, flex: 1, flexDirection: "column", display: "flex", alignItems: "center", padding: "8px 10px" }} onClick={() => onStart(phase, tests)}>
           <span style={{ fontWeight: 600 }}>{done[phase] ? "✓ " : ""}{phase === "pre" ? "Pre-dose battery" : "Post-dose battery"}</span>
@@ -1561,6 +1561,7 @@
       const load = () => apiFetch("/api/hypotheses").then((r) => (r.ok ? r.json() : null)).then(setData).catch(() => {});
       useEffect(() => { load(); }, []);
       const refresh = async (id) => { const r = await apiFetch("/api/hypotheses/refresh", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id, seen }) }); if (r.ok) { setSeen((x) => [...x, id]); load(); } };
+      const vote = async (id, v) => { await apiFetch("/api/hypotheses/vote", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id, vote: v }) }); if (v < 0) refresh(id); else load(); };
       const gradeColor = { "no data": "#64748b", "too early": "#94a3b8", mixed: "#fbbf24", "supported so far": "#a3e635", "not holding up": "#f87171" };
       return (
         <div className="card">
@@ -1570,7 +1571,10 @@
             <div key={h.id} style={{ background: "#0f172a", borderRadius: 10, padding: "8px 10px", marginTop: 8 }}>
               <div style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "flex-start" }}>
                 <div style={{ fontSize: 13, fontWeight: 600 }}>{h.text}</div>
-                <button type="button" className="pill-btn" style={{ padding: "2px 8px", flexShrink: 0 }} onClick={() => refresh(h.id)} title="Swap for another hypothesis">↻</button>
+                <div style={{ display: "flex", gap: 4, flexShrink: 0 }}>
+                  <button type="button" className="pill-btn" style={{ padding: "2px 8px", background: h.vote > 0 ? "#1d4ed8" : undefined, color: h.vote > 0 ? "#fff" : undefined }} onClick={() => vote(h.id, h.vote > 0 ? 0 : 1)} title="Interesting: keep it and favour hypotheses like it">👍</button>
+                  <button type="button" className="pill-btn" style={{ padding: "2px 8px" }} onClick={() => vote(h.id, -1)} title="Not useful: swap it out and show fewer like it">✕</button>
+                </div>
               </div>
               <div style={{ fontSize: 11, color: "#94a3b8", marginTop: 2 }}>If: {h.exposure}. Then: {h.outcome}{h.lag ? " (next day)" : ""}. Period: {h.period} days from {h.started}.</div>
               <div style={{ display: "flex", gap: 3, marginTop: 6, alignItems: "center" }}>
@@ -1581,7 +1585,8 @@
               <div style={{ fontSize: 11, color: "#94a3b8", marginTop: 4 }}><span style={{ color: "#a3e635" }}>{h.support}</span> supporting · <span style={{ color: "#f87171" }}>{h.refute}</span> refuting · {h.na} no data</div>
             </div>
           ))}
-          <div style={{ fontSize: 10, color: "#64748b", marginTop: 8 }}>A day supports a hypothesis when the "if" and the "then" agree with its direction, refutes it when they disagree. "Supported so far" needs 5+ scored days and a 70% majority; it's a reason to test, not a conclusion.</div>
+          {data && data.queue && data.queue.length > 0 && <div style={{ fontSize: 11, color: "#94a3b8", marginTop: 8 }}>Up next: {data.queue.slice(0, 3).map((q) => q.text).join(" · ")}</div>}
+          <div style={{ fontSize: 10, color: "#64748b", marginTop: 8 }}>A day supports a hypothesis when the "if" and the "then" agree with its direction, refutes it when they disagree. "Supported so far" needs 5+ scored days and a 70% majority; it's a reason to test, not a conclusion. 👍 keeps one and favours hypotheses about the same things; ✕ swaps it out and shows fewer like it.</div>
         </div>
       );
     }
