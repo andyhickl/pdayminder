@@ -1005,6 +1005,8 @@
     }
 
     function DayRing({ day, onSegmentClick, settings: ringSettings, events, context }) {
+      const [hubNow, setHubNow] = useState(() => new Date());
+      useEffect(() => { const t = setInterval(() => setHubNow(new Date()), 30000); return () => clearInterval(t); }, []);
       const width = 300;
       const height = 300;
       const cx = width / 2;
@@ -1090,12 +1092,27 @@
             })}
 
             <circle cx={cx} cy={cy} r={rInner - 10} fill="#020617" />
-            <text x={cx} y={cy - 4} textAnchor="middle" fontSize="11" fill="#9ca3af">
-              QoL 1–5
-            </text>
-            <text x={cx} y={cy + 10} textAnchor="middle" fontSize="10" fill="#6b7280">
-              tap a segment to rate QoL
-            </text>
+            {(() => {
+              // Hub: time (today) or date, the day's mean QoL dead centre, and where you are now.
+              const isToday = day.dateKey === toDateKey(hubNow);
+              const top = isToday ? hubNow.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) : new Date(day.dateKey + "T12:00:00").toLocaleDateString(undefined, { month: "short", day: "numeric" });
+              const rated = (day.segments || []).filter((sg) => sg.type === "rating").map((sg) => sg.rating);
+              const mean = rated.length ? rated.reduce((a, b) => a + b, 0) / rated.length : null;
+              const nowMin = isToday ? hubNow.getHours() * 60 + hubNow.getMinutes() : null;
+              const here = isToday ? (context || []).find((c) => { const sp = contextSpanOnDay(c, day.dateKey); return sp && c.place !== "driving" && sp[0] <= nowMin && nowMin < sp[1]; }) : null;
+              const placeFill = here ? (here.place === "out" ? "#334155" : PLACE_COLORS[here.place]) : null;
+              return (
+                <g>
+                  <text x={cx} y={cy - 22} textAnchor="middle" fontSize="13" fill="#94a3b8">{top}</text>
+                  <text x={cx} y={cy + 9} textAnchor="middle" fontSize="30" fontWeight="700" fill={mean == null ? "#475569" : ratingColor(Math.max(1, Math.min(5, Math.round(mean))))}>{mean == null ? "–" : mean.toFixed(1)}</text>
+                  {here && <g>
+                    <rect x={cx - 24} y={cy + 20} width={48} height={16} rx="8" fill={placeFill} />
+                    <text x={cx} y={cy + 31.5} textAnchor="middle" fontSize="10" fontWeight="600" fill="#f8fafc">{PLACE_LABELS[here.place] || here.place}</text>
+                  </g>}
+                  {!here && <text x={cx} y={cy + 31} textAnchor="middle" fontSize="9" fill="#475569">{isToday ? "tap a segment to rate" : `${rated.length} of 12 rated`}</text>}
+                </g>
+              );
+            })()}
 
             <defs>
               <pattern id="ctx-driving" patternUnits="userSpaceOnUse" width="6" height="6" patternTransform="rotate(45)">
