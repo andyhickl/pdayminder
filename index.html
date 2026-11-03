@@ -279,6 +279,7 @@
       color: var(--muted);
       text-align: center;
     }
+    .card.battery-active { box-shadow: 0 0 0 2px #fbbf24; }
     .ring-legend { display: flex; flex-wrap: wrap; justify-content: center; gap: 6px 16px; margin: 8px 0 4px; font-size: 11px; color: var(--muted); }
     .ring-legend span { display: inline-flex; align-items: center; gap: 6px; }
     .ring-legend i { display: inline-block; width: 12px; height: 12px; border-radius: 3px; }
@@ -1476,28 +1477,27 @@
       4: ["tremor", "tap", "gait", "voice"], 5: ["tremor", "tap", "ddk", "balance"], 6: ["tremor", "tap", "spiral", "mpt"],
     };
     const TEST_META = { tremor: ["Tremor", "Tremor test"], tap: ["Tapping", "Finger tapping test"], ddk: ["Pa-ta-ka", "Pa-ta-ka test (DDK)"], gait: ["Gait", "Gait test"], balance: ["Balance", "Balance test"], spiral: ["Spiral", "Spiral test"], voice: ["Sustained vowel", "Voice test"], mpt: ["Max phonation", "Voice test"], read: ["Reading", "Reading test"] };
-    const PRE_MIN_SINCE_DOSE = 180, POST_MIN = 45, POST_MAX = 120, PRE_BEFORE_SCHEDULED = 60;
-    // Availability of the two batteries right now, from today's logged doses and the medication schedule.
+    const PRE_MIN_SINCE_DOSE = 180, POST_MIN = 45, POST_MAX = 120;
+    // Availability from logged levodopa doses only. Expected doses/day = number of scheduled times for dopaminergic meds.
+    //   pre-dose: no dose yet today, or the last dose was 3 h+ ago and another dose is still expected today.
+    //   post-dose: 45–120 min after any logged dose.
+    // Each battery once per day; after the last expected dose, pre-dose waits for tomorrow.
     function batteryWindows(day, settings, now) {
       const mins = now.getHours() * 60 + now.getMinutes();
       const dopa = normalizeMeds(day && day.meds).filter((m) => isDopa(settings, m.drug)).map((m) => parseTimeToMinutes(m.t)).filter((t) => t <= mins);
       const last = dopa.length ? Math.max(...dopa) : null;
       const since = last == null ? null : mins - last;
-      const sched = normalizeMedications(settings).filter((m) => m.dopaminergic).flatMap((m) => m.times).map(parseTimeToMinutes).filter((t) => t > mins).sort((a, b) => a - b);
-      const nextSched = sched.length ? sched[0] : null;
+      const expected = Math.max(1, normalizeMedications(settings).filter((m) => m.dopaminergic).reduce((a, m) => a + m.times.length, 0) || 3);
+      const taken = dopa.length;
+      const moreExpected = taken < expected;
       const post = since != null && since >= POST_MIN && since <= POST_MAX;
       const postIn = since != null && since < POST_MIN ? POST_MIN - since : null;
-      // Pre-dose means "before a dose that is still coming today": a scheduled dose ahead, or no dose logged yet.
-      // Once the last scheduled dose is behind you (taken or passed), pre-dose waits for tomorrow.
-      const schedAll = normalizeMedications(settings).filter((m) => m.dopaminergic).flatMap((m) => m.times).map(parseTimeToMinutes);
-      const doseAhead = nextSched != null || (since == null && (schedAll.length === 0 || mins <= Math.max(...schedAll)));
-      const dayDone = !doseAhead && (since != null || (schedAll.length > 0 && mins > Math.max(...schedAll)));
-      const preBySinceDose = doseAhead && (since == null || since >= PRE_MIN_SINCE_DOSE);
-      const preBySched = nextSched != null && nextSched - mins <= PRE_BEFORE_SCHEDULED;
-      const pre = !dayDone && (preBySinceDose || preBySched);
-      const preIn = pre || dayDone ? null : Math.min(since != null ? PRE_MIN_SINCE_DOSE - since : Infinity, nextSched != null ? nextSched - mins - PRE_BEFORE_SCHEDULED : Infinity);
-      return { pre, post, preIn: isFinite(preIn) ? preIn : null, postIn, since, nextSched, last, dayDone };
+      const pre = since == null || (moreExpected && since >= PRE_MIN_SINCE_DOSE);
+      const preIn = !pre && moreExpected ? PRE_MIN_SINCE_DOSE - since : null;
+      const dayDone = since != null && !moreExpected;
+      return { pre, post, preIn, postIn, since, last, taken, expected, dayDone };
     }
+    window.__pdm.batteryWindows = (...a) => batteryWindows(...a);
     function RunTestsCard({ day, settings, onStart, sessions }) {
       const [, tick] = useState(0);
       useEffect(() => { const t = setInterval(() => tick((x) => x + 1), 30000); return () => clearInterval(t); }, []);
@@ -1509,10 +1509,10 @@
       const fmtMin = (m) => (m >= 60 ? `${Math.floor(m / 60)} h ${m % 60} min` : `${m} min`);
       const reason = (phase) => {
         if (done[phase]) return "done today";
-        if (phase === "post") { if (w.post) return `${w.since} min after the ${minutesToTimeString(w.last)} dose`; if (w.postIn != null) return `unlocks in ${fmtMin(w.postIn)}`; if (w.since == null) return "log a dose first"; return "window passed; next dose"; }
-        if (w.pre) return w.since == null ? "no dose yet today" : w.nextSched != null && w.nextSched - (now.getHours() * 60 + now.getMinutes()) <= PRE_BEFORE_SCHEDULED ? `before the ${minutesToTimeString(w.nextSched)} dose` : `${fmtMin(w.since)} since last dose`;
-        if (w.dayDone) return "last dose of the day taken; tomorrow";
-        return w.preIn != null ? `unlocks in ${fmtMin(w.preIn)}` : "after the dose wears off";
+        if (phase === "post") { if (w.post) return `${w.since} min after the ${minutesToTimeString(w.last)} dose`; if (w.postIn != null) return `unlocks in ${fmtMin(w.postIn)}`; if (w.since == null) return "log a dose first"; return "window passed; after your next dose"; }
+        if (w.pre) return w.since == null ? "before your first dose" : `${fmtMin(w.since)} since the ${minutesToTimeString(w.last)} dose · dose ${w.taken + 1} of ${w.expected} still to come`;
+        if (w.dayDone) return `all ${w.expected} doses taken; tomorrow`;
+        return w.preIn != null ? `unlocks in ${fmtMin(w.preIn)} (3 h after the ${minutesToTimeString(w.last)} dose)` : "after the dose wears off";
       };
       // Mon–Sun this week
       const monday = new Date(now); monday.setDate(now.getDate() - ((now.getDay() + 6) % 7)); monday.setHours(0, 0, 0, 0);
@@ -1525,7 +1525,7 @@
       ); };
       return (
         <div className="card">
-          <div className="card-header"><div><div className="card-title">Run tests</div><div className="card-subtitle">One pre-dose and one post-dose battery a day (any dose). Pre-dose: before a scheduled dose or 3 h+ after the last one. Post-dose: 45–120 min after a logged dose. Four tests, about four minutes.</div></div></div>
+          <div className="card-header"><div><div className="card-title">Run tests</div><div className="card-subtitle">One pre-dose and one post-dose battery a day, driven by the doses you log. Pre-dose: before your first dose, or 3 h+ after a dose when another is still expected (the count comes from your medication schedule). Post-dose: 45–120 min after any logged dose. Four tests, about four minutes.</div></div></div>
           <div className="controls-row" style={{ gap: 8, alignItems: "stretch" }}><Btn phase="pre" /><Btn phase="post" /></div>
           <div style={{ fontSize: 11, color: "#94a3b8", marginTop: 8 }}>Today's battery: {tests.map((t) => TEST_META[t][0]).join(" → ")}. Rotates by weekday so the slow measures each get a weekly turn.</div>
           <div style={{ display: "flex", gap: 10, justifyContent: "center", marginTop: 10 }}>
@@ -4294,6 +4294,7 @@
 
     function Section({ title, subtitle, storageKey, defaultOpen = true, children }) {
       const [open, setOpen] = useState(() => { try { const v = localStorage.getItem("pdm-sec-" + storageKey); return v ? v !== "closed" : defaultOpen; } catch { return defaultOpen; } });
+      useEffect(() => { const h = (e) => { if (e.detail === storageKey) setOpen(true); }; window.addEventListener("pdm-open-section", h); return () => window.removeEventListener("pdm-open-section", h); }, [storageKey]);
       useEffect(() => { try { localStorage.setItem("pdm-sec-" + storageKey, open ? "open" : "closed"); } catch {} }, [open]);
       return (
         <div className="section">
@@ -4479,9 +4480,21 @@
       const startBattery = (phase, tests) => { setSession({ phase, tests, index: 0, id: Date.now().toString(36) }); setTab("tests"); };
       useEffect(() => {
         if (!session || tab !== "tests") return;
-        const title = TEST_META[session.tests[session.index]][1];
-        const t = setTimeout(() => { const el = [...document.querySelectorAll(".card-title")].find((e) => e.textContent.trim() === title); if (el) { const card = el.closest(".card"); (card || el).scrollIntoView({ behavior: "smooth", block: "start" }); window.scrollBy(0, -120); } }, 150);
-        return () => clearTimeout(t);
+        const kind = session.tests[session.index]; const title = TEST_META[kind][1];
+        const section = ["ddk", "voice", "mpt", "read"].includes(kind) ? "voice" : "motor";
+        window.dispatchEvent(new CustomEvent("pdm-open-section", { detail: section }));
+        let tries = 0; let timer;
+        const go = () => {
+          const el = [...document.querySelectorAll(".card-title")].find((e) => e.textContent.trim() === title);
+          if (!el) { if (tries++ < 12) timer = setTimeout(go, 250); return; }
+          const card = el.closest(".card") || el;
+          document.querySelectorAll(".card.battery-active").forEach((c) => c.classList.remove("battery-active"));
+          card.classList.add("battery-active");
+          const y = card.getBoundingClientRect().top + window.scrollY - 140;
+          window.scrollTo({ top: Math.max(0, y), behavior: "smooth" });
+        };
+        timer = setTimeout(go, 200);
+        return () => clearTimeout(timer);
       }, [session && session.index, session && session.id, tab]);
       const refreshEvents = () => apiFetch("/api/events?days=21").then((r) => (r.ok ? r.json() : [])).then(setRecentEvents).catch(() => {});
 

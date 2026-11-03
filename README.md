@@ -65,9 +65,11 @@ The full Cronometer profile (80+ nutrients, supplements, creatine) needs the Cro
 ## Home tab: batteries and hypotheses
 The first tab is Home: date, ring + logging, **Run tests**, **Hypotheses**, recent days. A battery is the day's four
 tests in order (tremor and tapping daily; the third and fourth slots rotate by weekday: pa-ta-ka, gait, balance,
-spiral, sustained vowel, reading, max phonation, so each slow measure gets a weekly turn). Pre-dose is offered when
-no dose is logged yet, 3 h+ after the last dose, or within 60 min of a scheduled dose; post-dose 45–120 min after a
-logged dose; one of each per day, with countdowns until they unlock. Starting one switches to the Tests tab with a
+spiral, sustained vowel, reading, max phonation, so each slow measure gets a weekly turn). Windows come only from logged
+doses: pre-dose before the first dose, or 3 h+ after a dose while another is still expected (expected/day = number of
+scheduled times for dopaminergic meds); after the last expected dose, pre-dose waits for tomorrow. Post-dose 45–120
+min after any logged dose. One of each per day, with countdowns. The runner opens the right Tests section, scrolls to
+the card and outlines it. Starting one switches to the Tests tab with a
 banner; `apiFetch` tags each test save with `raw.battery` (pre/post) and `raw.session_id` and advances the banner
 (ad hoc tests of another kind don't advance it). Completion posts `/api/sessions` (observation `session/battery`),
 which drives the Mon–Fri pre/post grid and `derived/batteries_pre|post`.
