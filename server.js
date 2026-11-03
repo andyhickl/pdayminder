@@ -530,6 +530,12 @@ async function dailySeries(uid, source, metric, days) {
          group by 1 order by 1`, [uid, TZ, days, await dopaDrugs(uid)]);
       return rows.map((r) => [r.day, Number(r.v)]);
     }
+    if (metric === "batteries_pre" || metric === "batteries_post") {
+      const { rows } = await pool.query(
+        `select to_char((ts at time zone $2)::date,'YYYY-MM-DD') as day, count(*)::int as v from observations
+         where user_id = $1 and source = 'session' and metric = 'battery' and raw->>'phase' = $4 and (ts at time zone $2)::date >= (now() at time zone $2)::date - ($3::int - 1) group by 1 order by 1`, [uid, TZ, days, metric.slice(10)]);
+      return rows.map((r) => [r.day, Number(r.v)]);
+    }
     if (metric.startsWith("minutes_") && PLACE_COLORS[metric.slice(8)]) {
       const { rows } = await pool.query(
         `select to_char((ts at time zone $2)::date,'YYYY-MM-DD') as day, sum(coalesce(value, 0)) as v from observations
@@ -594,6 +600,127 @@ function localMidnightIso(tsIso) {
   const offsetMin = (new Date(guess.toLocaleString("en-US", { timeZone: TZ })) - new Date(guess.toLocaleString("en-US", { timeZone: "UTC" }))) / 60000;
   return new Date(guess.getTime() - offsetMin * 60000).toISOString();
 }
+
+// ---------- Test batteries (sessions) ----------
+// A battery is a pre- or post-dose run of the day's test set. Stored as observations source 'session', metric 'battery',
+// ts = when it finished, value = tests completed, raw = {phase, tests, session_id, weekday, dose_state, minutes_since_dose}.
+app.post("/api/sessions", requireAuth, async (req, res) => {
+  const b = req.body || {};
+  const phase = b.phase === "post" ? "post" : "pre";
+  const ts = new Date(b.ts || Date.now());
+  const ctx = (await annotateDose(req.user.id, [{ ts: ts.toISOString() }]))[0];
+  const raw = { phase, tests: Array.isArray(b.tests) ? b.tests.slice(0, 10).map(String) : [], session_id: String(b.session_id || ts.getTime()), dose_state: ctx.dose_state, minutes_since_dose: ctx.minutes_since_dose, dose_time: ctx.dose_time };
+  await pool.query(
+    `insert into observations (user_id, ts, source, metric, value, raw) values ($1,$2,'session','battery',$3,$4)
+     on conflict (user_id, source, metric, ts) do update set value = excluded.value, raw = excluded.raw`,
+    [req.user.id, ts.toISOString(), raw.tests.length, raw]);
+  res.json({ ok: true, battery: { ts: ts.toISOString(), ...raw } });
+});
+app.get("/api/sessions", requireAuth, async (req, res) => {
+  const days = Math.min(365, Number(req.query.days) || 14);
+  const { rows } = await pool.query(
+    `select ts, value as tests_done, raw from observations where user_id = $1 and source = 'session' and metric = 'battery'
+       and ts >= (now() at time zone $2)::date - ($3::int - 1) order by ts desc`, [req.user.id, TZ, days]);
+  res.json(rows.map((r) => ({ ts: r.ts, day: localDayOf(r.ts), tests_done: r.tests_done, ...r.raw })));
+});
+
+// ---------- Hypotheses ----------
+// A catalog of day-level hypotheses the data can already speak to. Each has an exposure and an outcome computed from
+// day features; a day "supports" the hypothesis when exposure and outcome agree with the predicted direction, "refutes"
+// it when they disagree, and is "n/a" when either side is missing. Active hypotheses live in settings.hypotheses.
+const HYPOTHESES = [
+  { id: "hrv_events", text: "Lower night HRV → more symptom events the next day", period: 7, exposure: "Night HRV below your 30-day median", outcome: "Any symptom event the next day", lag: 1,
+    exp: (d, ref) => d.avg_hrv == null || ref.avg_hrv_median == null ? null : d.avg_hrv < ref.avg_hrv_median, out: (n) => n.events_count == null ? null : n.events_count > 0 },
+  { id: "sleep_afternoon", text: "Short sleep (< 6.5 h) → worse afternoon QoL", period: 7, exposure: "Oura sleep under 6.5 h", outcome: "14:00–20:00 QoL below your median", lag: 0,
+    exp: (d) => d.total_sleep_h == null ? null : d.total_sleep_h < 6.5, out: (d, ref) => d.qol_pm == null || ref.qol_pm_median == null ? null : d.qol_pm < ref.qol_pm_median },
+  { id: "protein_dose", text: "Protein near a levodopa dose (> 20 g within 90 min) → worse QoL that day", period: 7, exposure: "> 20 g protein within 90 min of a dose", outcome: "Daily QoL below your median", lag: 0,
+    exp: (d) => d.protein_near_dose == null ? null : d.protein_near_dose > 20, out: (d, ref) => d.qol == null || ref.qol_median == null ? null : d.qol < ref.qol_median },
+  { id: "caffeine_tremor", text: "More caffeine (> 100 mg) → worse tremor score that day", period: 7, exposure: "Caffeine over 100 mg", outcome: "Tremor score below 4", lag: 0,
+    exp: (d) => d.caffeine == null ? null : d.caffeine > 100, out: (d) => d.tremor_score == null ? null : d.tremor_score < 4 },
+  { id: "driving_events", text: "Days with more than an hour of driving → more symptom events", period: 7, exposure: "Driving > 60 min", outcome: "Any symptom event that day", lag: 0,
+    exp: (d) => d.minutes_driving == null ? null : d.minutes_driving > 60, out: (d) => d.events_count == null ? null : d.events_count > 0 },
+  { id: "steps_qol", text: "More movement (steps above your median) → better QoL that day", period: 7, exposure: "Steps above your 30-day median", outcome: "Daily QoL above your median", lag: 0,
+    exp: (d, ref) => d.steps == null || ref.steps_median == null ? null : d.steps > ref.steps_median, out: (d, ref) => d.qol == null || ref.qol_median == null ? null : d.qol > ref.qol_median },
+  { id: "readiness_tapping", text: "Low Oura readiness → slower tapping that day", period: 7, exposure: "Readiness below your 30-day median", outcome: "Tapping score below 4", lag: 0,
+    exp: (d, ref) => d.readiness == null || ref.readiness_median == null ? null : d.readiness < ref.readiness_median, out: (d) => d.tap_score == null ? null : d.tap_score < 4 },
+  { id: "late_meal_sleep", text: "A late last meal (after 19:30) → worse sleep that night", period: 7, exposure: "Last meal after 19:30", outcome: "Next night's sleep score below your median", lag: 1,
+    exp: (d) => d.last_meal_hour == null ? null : d.last_meal_hour > 19.5, out: (n, ref) => n.sleep_score == null || ref.sleep_score_median == null ? null : n.sleep_score < ref.sleep_score_median },
+  { id: "supps_qol", text: "Taking the supplement stack → better QoL the next day", period: 14, exposure: "≥ 3 supplements logged", outcome: "Next day's QoL above your median", lag: 1,
+    exp: (d) => d.supplements_logged == null ? false : d.supplements_logged >= 3, out: (n, ref) => n.qol == null || ref.qol_median == null ? null : n.qol > ref.qol_median },
+  { id: "doses_events", text: "Fewer than 3 levodopa doses → more symptom events that day", period: 7, exposure: "Fewer than 3 doses logged", outcome: "Any symptom event that day", lag: 0,
+    exp: (d) => d.doses == null ? null : d.doses < 3, out: (d) => d.events_count == null ? null : d.events_count > 0 },
+  { id: "work_qol", text: "Work days → lower afternoon QoL than home days", period: 7, exposure: "> 3 h at work", outcome: "14:00–20:00 QoL below your median", lag: 0,
+    exp: (d) => d.minutes_work == null ? null : d.minutes_work > 180, out: (d, ref) => d.qol_pm == null || ref.qol_pm_median == null ? null : d.qol_pm < ref.qol_pm_median },
+  { id: "post_pre_tapping", text: "Post-dose tapping is faster than pre-dose on the same day", period: 7, exposure: "A pre/post battery pair that day", outcome: "Post-dose tap rate higher than pre-dose", lag: 0,
+    exp: (d) => d.tap_pre == null || d.tap_post == null ? null : true, out: (d) => d.tap_pre == null || d.tap_post == null ? null : d.tap_post > d.tap_pre },
+];
+const median = (arr) => { const a = arr.filter((v) => v != null).sort((x, y) => x - y); return a.length ? a[Math.floor(a.length / 2)] : null; };
+async function dayFeatures(uid, days) {
+  const keys = ["oura/avg_hrv", "oura/total_sleep_h", "oura/readiness_score", "oura/sleep_score", "derived/protein_near_dose", "cronometer/caffeine", "hae/caffeine", "derived/minutes_driving", "derived/minutes_work", "derived/supplements_logged", "derived/events_count", "hae/step_count", "derived/last_meal_hour", "motor/tremor_score", "motor/tap_score"];
+  const f = {};
+  const day = (k) => (f[k] = f[k] || {});
+  for (const k of keys) { const [src, m] = k.split("/"); (await dailySeries(uid, src, m, days)).forEach(([d, v]) => (day(d)[m] = v)); }
+  for (const d of Object.keys(f)) { if (f[d].caffeine == null && f[d].dietary_caffeine != null) f[d].caffeine = f[d].dietary_caffeine; if (f[d].steps == null && f[d].step_count != null) f[d].steps = f[d].step_count; if (f[d].readiness == null && f[d].readiness_score != null) f[d].readiness = f[d].readiness_score; }
+  const q = await pool.query(
+    `select to_char(day,'YYYY-MM-DD') as day, avg(rating) as qol, avg(rating) filter (where seg between 7 and 9) as qol_pm
+     from qol_ratings where user_id = $1 and type = 'rating' and day >= (now() at time zone $2)::date - ($3::int - 1) group by day`, [uid, TZ, days]);
+  q.rows.forEach((r) => { day(r.day).qol = r.qol == null ? null : Number(r.qol); day(r.day).qol_pm = r.qol_pm == null ? null : Number(r.qol_pm); });
+  const m = await pool.query(`select to_char(day,'YYYY-MM-DD') as day, count(*)::int as n from med_doses where user_id = $1 and drug = any($3) and day >= (now() at time zone $2)::date - ($4::int - 1) group by day`, [uid, TZ, await dopaDrugs(uid), days]);
+  m.rows.forEach((r) => (day(r.day).doses = r.n));
+  // pre/post tapping from batteries: tap_rate observations whose raw.battery matches
+  const t = await pool.query(
+    `select to_char((ts at time zone $2)::date,'YYYY-MM-DD') as day, raw->>'battery' as phase, avg(value) as v from observations
+     where user_id = $1 and source = 'motor' and metric = 'tap_rate' and raw->>'battery' in ('pre','post') and (ts at time zone $2)::date >= (now() at time zone $2)::date - ($3::int - 1) group by 1, 2`, [uid, TZ, days]);
+  t.rows.forEach((r) => (day(r.day)["tap_" + r.phase] = Number(r.v)));
+  return f;
+}
+async function evaluateHypotheses(uid, active) {
+  const f = await dayFeatures(uid, 45);
+  const allDays = Object.keys(f).sort();
+  const ref = { avg_hrv_median: median(allDays.map((d) => f[d].avg_hrv)), qol_median: median(allDays.map((d) => f[d].qol)), qol_pm_median: median(allDays.map((d) => f[d].qol_pm)),
+    steps_median: median(allDays.map((d) => f[d].steps)), readiness_median: median(allDays.map((d) => f[d].readiness)), sleep_score_median: median(allDays.map((d) => f[d].sleep_score)) };
+  const today = localDayOf(new Date());
+  return active.map((a) => {
+    const h = HYPOTHESES.find((x) => x.id === a.id); if (!h) return null;
+    const start = a.started || today; const period = a.period || h.period;
+    const days = []; for (let i = 0; i < period; i++) { const d = new Date(new Date(start + "T12:00:00Z").getTime() + i * 86400000).toISOString().slice(0, 10); if (d > today) break; days.push(d); }
+    const evals = days.map((d) => {
+      const next = new Date(new Date(d + "T12:00:00Z").getTime() + 86400000).toISOString().slice(0, 10);
+      const dd = f[d] || {}, nn = f[next] || {};
+      const e = h.exp(dd, ref); const o = h.out(h.lag ? nn : dd, ref);
+      let verdict = "na"; if (e != null && o != null) verdict = e === o ? "support" : "refute";
+      return { day: d, exposure: e, outcome: o, verdict };
+    });
+    const support = evals.filter((x) => x.verdict === "support").length, refute = evals.filter((x) => x.verdict === "refute").length;
+    const n = support + refute;
+    const grade = n === 0 ? "no data" : n < 5 ? "too early" : support / n >= 0.7 && support - refute >= 3 ? "supported so far" : refute / n >= 0.7 && refute - support >= 3 ? "not holding up" : "mixed";
+    return { id: h.id, text: h.text, exposure: h.exposure, outcome: h.outcome, lag: h.lag, started: start, period, days: evals, support, refute, na: evals.length - n, grade };
+  }).filter(Boolean);
+}
+async function activeHypotheses(uid) {
+  const { rows } = await pool.query("select data->'hypotheses' as h from settings where user_id = $1", [uid]);
+  let act = (rows[0] && Array.isArray(rows[0].h)) ? rows[0].h : [];
+  if (!act.length) { const today = localDayOf(new Date()); act = HYPOTHESES.slice(0, 3).map((h) => ({ id: h.id, started: today, period: h.period })); await saveHypotheses(uid, act); }
+  return act;
+}
+async function saveHypotheses(uid, act) {
+  await pool.query(`insert into settings (user_id, data) values ($1, jsonb_build_object('hypotheses', $2::jsonb)) on conflict (user_id) do update set data = settings.data || jsonb_build_object('hypotheses', $2::jsonb)`, [uid, JSON.stringify(act)]);
+}
+app.get("/api/hypotheses", requireAuth, async (req, res) => {
+  const act = await activeHypotheses(req.user.id);
+  res.json({ active: await evaluateHypotheses(req.user.id, act), catalog: HYPOTHESES.map((h) => ({ id: h.id, text: h.text, period: h.period })) });
+});
+// Swap one active hypothesis for the next unused one in the catalog (or a chosen id); restarts its period today.
+app.post("/api/hypotheses/refresh", requireAuth, async (req, res) => {
+  const act = await activeHypotheses(req.user.id);
+  const idx = act.findIndex((a) => a.id === req.body.id); if (idx < 0) return res.status(404).json({ error: "not active" });
+  const used = new Set([...act.map((a) => a.id), ...(req.body.seen || [])]);
+  const next = req.body.next && HYPOTHESES.find((h) => h.id === req.body.next && !act.some((a) => a.id === h.id)) || HYPOTHESES.find((h) => !used.has(h.id)) || HYPOTHESES.find((h) => !act.some((a) => a.id === h.id));
+  if (!next) return res.status(400).json({ error: "no more hypotheses" });
+  act[idx] = { id: next.id, started: localDayOf(new Date()), period: next.period };
+  await saveHypotheses(req.user.id, act);
+  res.json({ active: await evaluateHypotheses(req.user.id, act) });
+});
 
 // ---------- Location context (home / work / driving / out) ----------
 // Points come from Overland (GeoJSON batches) or any logger; segments are rebuilt per local day from the points,
@@ -850,6 +977,7 @@ app.get("/api/metrics", requireAuth, async (req, res) => {
   // Derived nutrition metrics show up once protein / energy rows exist (computed on read, see dailySeries).
   const have = new Set(rows.map((r) => r.source + "/" + r.metric));
   if (have.has("hae/protein") || have.has("cronometer/protein")) rows.push({ source: "derived", metric: "protein_near_dose", rows: (rows.find((r) => (r.source === "cronometer" || r.source === "hae") && r.metric === "protein") || { rows: 0 }).rows, last_ts: null });
+  if (have.has("session/battery")) ["batteries_pre", "batteries_post"].forEach((m) => rows.push({ source: "derived", metric: m, rows: 0, last_ts: null }));
   if (have.has("context/place")) Object.keys(PLACE_COLORS).forEach((p) => rows.push({ source: "derived", metric: "minutes_" + p, rows: 0, last_ts: null }));
   const supp = await pool.query("select drug, count(*)::int as n from med_doses where user_id = $1 and source = 'supplement' group by drug", [req.user.id]);
   if (supp.rows.length) {

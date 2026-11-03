@@ -62,6 +62,22 @@ dose; protein competes with levodopa for transport), `derived/first_meal_hour`, 
 non-zero hourly `dietary_energy`). Stats has a Nutrition group; Day vitals shows protein, fiber and caffeine.
 The full Cronometer profile (80+ nutrients, supplements, creatine) needs the Cronometer cron (backlog).
 
+## Home tab: batteries and hypotheses
+The first tab is Home: date, ring + logging, **Run tests**, **Hypotheses**, recent days. A battery is the day's four
+tests in order (tremor and tapping daily; the third and fourth slots rotate by weekday: pa-ta-ka, gait, balance,
+spiral, sustained vowel, reading, max phonation, so each slow measure gets a weekly turn). Pre-dose is offered when
+no dose is logged yet, 3 h+ after the last dose, or within 60 min of a scheduled dose; post-dose 45–120 min after a
+logged dose; one of each per day, with countdowns until they unlock. Starting one switches to the Tests tab with a
+banner; `apiFetch` tags each test save with `raw.battery` (pre/post) and `raw.session_id` and advances the banner
+(ad hoc tests of another kind don't advance it). Completion posts `/api/sessions` (observation `session/battery`),
+which drives the Mon–Fri pre/post grid and `derived/batteries_pre|post`.
+
+Hypotheses: a server-side catalog (`HYPOTHESES` in server.js) of day-level if/then statements over `dayFeatures()`
+(Oura, nutrition, context, events, doses, QoL, pre/post tapping). Three are active (`settings.hypotheses`); each day
+in a hypothesis's period is scored support / refute / n/a against the predicted direction, with a grade (no data, too
+early, mixed, supported so far, not holding up). `GET /api/hypotheses`, `POST /api/hypotheses/refresh {id}` swaps in
+the next unused one and restarts the period.
+
 ## Location context (source = context)
 Overland (iOS, free) posts GeoJSON batches to `/api/ingest/overland?api_key=…`; points land in `locations`. Per local
 day the server rebuilds segments: a point is `driving` if its motion array says so or speed > 6 m/s, else `home` /

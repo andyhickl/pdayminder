@@ -643,9 +643,25 @@
 
     // ---------- API ----------
     // Auth is a session cookie set by /login. On 401 the session expired: go sign in.
+    // Active test battery (pre/post-dose). Test cards don't know about it: apiFetch tags their saves and advances it.
+    const sessionRef = { current: null, onSaved: null };
+    const TEST_KIND = (metric) => metric.startsWith("tremor_") ? "tremor" : metric.startsWith("tap_") ? "tap" : metric.startsWith("ddk_") ? "ddk" : metric.startsWith("gait_") ? "gait" : metric.startsWith("balance_") ? "balance" : metric.startsWith("spiral_") ? "spiral" : metric.startsWith("voice_mpt") ? "mpt" : metric.startsWith("voice_") ? "voice" : metric.startsWith("read_") ? "read" : null;
+    window.__pdm = { apiFetch: (...a) => apiFetch(...a) }; // for scripted tests
     async function apiFetch(url, opts = {}) {
-      const res = await fetch(url, { ...opts, credentials: "same-origin" });
+      let body = opts.body, kind = null;
+      if (url === "/api/observations" && opts.method === "POST" && typeof body === "string" && sessionRef.current) {
+        try {
+          const items = JSON.parse(body);
+          if (Array.isArray(items) && items.length && items[0].source === "motor") {
+            kind = TEST_KIND(items[0].metric);
+            items.forEach((it) => { it.raw = { ...(it.raw || {}), battery: sessionRef.current.phase, session_id: sessionRef.current.id }; });
+            body = JSON.stringify(items);
+          }
+        } catch {}
+      }
+      const res = await fetch(url, { ...opts, body, credentials: "same-origin" });
       if (res.status === 401) window.location.href = "/login";
+      if (res.ok && kind && sessionRef.onSaved) sessionRef.onSaved(kind);
       return res;
     }
 
@@ -1449,6 +1465,123 @@
             {types.map((t) => <span key={t}><span style={{ display: "inline-block", width: 10, height: 10, background: eventColor(t), borderRadius: 2, marginRight: 4 }} />{eventLabel(t)} ({byType[t].reduce((a, b) => a + b, 0)})</span>)}
             {noDose > 0 && <span>{noDose} with no prior dose that day (not shown)</span>}
           </div>
+        </div>
+      );
+    }
+
+    // ---------- Test batteries ----------
+    // Tremor and tapping every day (fast, dose-sensitive). The other slots rotate so the slow measures each get a weekly turn.
+    const BATTERY_BY_WEEKDAY = {
+      0: ["tremor", "tap", "gait", "read"], 1: ["tremor", "tap", "ddk", "gait"], 2: ["tremor", "tap", "spiral", "balance"], 3: ["tremor", "tap", "ddk", "read"],
+      4: ["tremor", "tap", "gait", "voice"], 5: ["tremor", "tap", "ddk", "balance"], 6: ["tremor", "tap", "spiral", "mpt"],
+    };
+    const TEST_META = { tremor: ["Tremor", "Tremor test"], tap: ["Tapping", "Finger tapping test"], ddk: ["Pa-ta-ka", "Pa-ta-ka test (DDK)"], gait: ["Gait", "Gait test"], balance: ["Balance", "Balance test"], spiral: ["Spiral", "Spiral test"], voice: ["Sustained vowel", "Voice test"], mpt: ["Max phonation", "Voice test"], read: ["Reading", "Reading test"] };
+    const PRE_MIN_SINCE_DOSE = 180, POST_MIN = 45, POST_MAX = 120, PRE_BEFORE_SCHEDULED = 60;
+    // Availability of the two batteries right now, from today's logged doses and the medication schedule.
+    function batteryWindows(day, settings, now) {
+      const mins = now.getHours() * 60 + now.getMinutes();
+      const dopa = normalizeMeds(day && day.meds).filter((m) => isDopa(settings, m.drug)).map((m) => parseTimeToMinutes(m.t)).filter((t) => t <= mins);
+      const last = dopa.length ? Math.max(...dopa) : null;
+      const since = last == null ? null : mins - last;
+      const sched = normalizeMedications(settings).filter((m) => m.dopaminergic).flatMap((m) => m.times).map(parseTimeToMinutes).filter((t) => t > mins).sort((a, b) => a - b);
+      const nextSched = sched.length ? sched[0] : null;
+      const post = since != null && since >= POST_MIN && since <= POST_MAX;
+      const postIn = since != null && since < POST_MIN ? POST_MIN - since : null;
+      const preBySinceDose = since == null || since >= PRE_MIN_SINCE_DOSE;
+      const preBySched = nextSched != null && nextSched - mins <= PRE_BEFORE_SCHEDULED;
+      const pre = preBySinceDose || preBySched;
+      const preIn = pre ? null : Math.min(since != null ? PRE_MIN_SINCE_DOSE - since : Infinity, nextSched != null ? nextSched - mins - PRE_BEFORE_SCHEDULED : Infinity);
+      return { pre, post, preIn: isFinite(preIn) ? preIn : null, postIn, since, nextSched, last };
+    }
+    function RunTestsCard({ day, settings, onStart, sessions }) {
+      const [, tick] = useState(0);
+      useEffect(() => { const t = setInterval(() => tick((x) => x + 1), 30000); return () => clearInterval(t); }, []);
+      const now = new Date();
+      const w = batteryWindows(day, settings, now);
+      const todayKey = toDateKey(now);
+      const done = { pre: (sessions || []).some((s) => s.day === todayKey && s.phase === "pre"), post: (sessions || []).some((s) => s.day === todayKey && s.phase === "post") };
+      const tests = BATTERY_BY_WEEKDAY[now.getDay()];
+      const fmtMin = (m) => (m >= 60 ? `${Math.floor(m / 60)} h ${m % 60} min` : `${m} min`);
+      const reason = (phase) => {
+        if (done[phase]) return "done today";
+        if (phase === "post") { if (w.post) return `${w.since} min after the ${minutesToTimeString(w.last)} dose`; if (w.postIn != null) return `unlocks in ${fmtMin(w.postIn)}`; if (w.since == null) return "log a dose first"; return "window passed; next dose"; }
+        if (w.pre) return w.since == null ? "no dose yet today" : w.nextSched != null && w.nextSched - (now.getHours() * 60 + now.getMinutes()) <= PRE_BEFORE_SCHEDULED ? `before the ${minutesToTimeString(w.nextSched)} dose` : `${fmtMin(w.since)} since last dose`;
+        return w.preIn != null ? `unlocks in ${fmtMin(w.preIn)}` : "after the dose wears off";
+      };
+      // Mon–Fri this week
+      const monday = new Date(now); monday.setDate(now.getDate() - ((now.getDay() + 6) % 7)); monday.setHours(0, 0, 0, 0);
+      const week = Array.from({ length: 5 }, (_, i) => { const d = new Date(monday); d.setDate(monday.getDate() + i); const k = toDateKey(d); return { k, label: d.toLocaleDateString(undefined, { weekday: "short" }).slice(0, 2), pre: (sessions || []).some((s) => s.day === k && s.phase === "pre"), post: (sessions || []).some((s) => s.day === k && s.phase === "post"), future: d > now }; });
+      const Btn = ({ phase }) => { const ok = (phase === "pre" ? w.pre : w.post) && !done[phase]; return (
+        <button type="button" className={"pill-btn" + (ok ? " primary" : "")} disabled={!ok} style={{ opacity: ok ? 1 : 0.45, flex: 1, flexDirection: "column", display: "flex", alignItems: "center", padding: "8px 10px" }} onClick={() => onStart(phase, tests)}>
+          <span style={{ fontWeight: 600 }}>{done[phase] ? "✓ " : ""}{phase === "pre" ? "Pre-dose battery" : "Post-dose battery"}</span>
+          <span style={{ fontSize: 11, fontWeight: 400, opacity: 0.85 }}>{reason(phase)}</span>
+        </button>
+      ); };
+      return (
+        <div className="card">
+          <div className="card-header"><div><div className="card-title">Run tests</div><div className="card-subtitle">One pre-dose and one post-dose battery a day (any dose). Pre-dose: before a scheduled dose or 3 h+ after the last one. Post-dose: 45–120 min after a logged dose. Four tests, about four minutes.</div></div></div>
+          <div className="controls-row" style={{ gap: 8, alignItems: "stretch" }}><Btn phase="pre" /><Btn phase="post" /></div>
+          <div style={{ fontSize: 11, color: "#94a3b8", marginTop: 8 }}>Today's battery: {tests.map((t) => TEST_META[t][0]).join(" → ")}. Rotates by weekday so the slow measures each get a weekly turn.</div>
+          <div style={{ display: "flex", gap: 10, justifyContent: "center", marginTop: 10 }}>
+            {week.map((d) => (
+              <div key={d.k} style={{ textAlign: "center", opacity: d.future ? 0.4 : 1 }}>
+                <div style={{ fontSize: 10, color: "#94a3b8" }}>{d.label}</div>
+                <div style={{ display: "flex", gap: 3, justifyContent: "center", marginTop: 3 }}>
+                  <span title="pre-dose" style={{ width: 10, height: 10, borderRadius: 3, background: d.pre ? "#fbbf24" : "#1e293b", boxShadow: "inset 0 0 0 1px #334155" }} />
+                  <span title="post-dose" style={{ width: 10, height: 10, borderRadius: 3, background: d.post ? "#a3e635" : "#1e293b", boxShadow: "inset 0 0 0 1px #334155" }} />
+                </div>
+              </div>
+            ))}
+            <div style={{ fontSize: 10, color: "#64748b", alignSelf: "flex-end", marginLeft: 6 }}><span style={{ color: "#fbbf24" }}>■</span> pre <span style={{ color: "#a3e635" }}>■</span> post</div>
+          </div>
+        </div>
+      );
+    }
+    // Banner on the Tests tab while a battery is running.
+    function BatteryBanner({ session, onCancel }) {
+      if (!session) return null;
+      const step = session.tests[session.index];
+      return (
+        <div className="card" style={{ position: "sticky", top: 0, zIndex: 5, background: "#0b1220", borderColor: "#fbbf24" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+            <div>
+              <div style={{ fontSize: 13, fontWeight: 600 }}>{session.phase === "pre" ? "Pre-dose" : "Post-dose"} battery · {session.index + 1} of {session.tests.length}: {TEST_META[step][0]}</div>
+              <div style={{ fontSize: 11, color: "#94a3b8" }}>Run and save the {TEST_META[step][1]} below{step === "mpt" ? " (max phonation mode)" : ""}; the next one queues automatically.</div>
+            </div>
+            <button type="button" className="pill-btn" onClick={onCancel}>Stop</button>
+          </div>
+          <div style={{ display: "flex", gap: 4, marginTop: 6 }}>{session.tests.map((t, i) => <span key={t} style={{ flex: 1, height: 4, borderRadius: 2, background: i < session.index ? "#a3e635" : i === session.index ? "#fbbf24" : "#1e293b" }} />)}</div>
+        </div>
+      );
+    }
+    // ---------- Hypotheses ----------
+    function HypothesesCard() {
+      const [data, setData] = useState(null);
+      const [seen, setSeen] = useState([]);
+      const load = () => apiFetch("/api/hypotheses").then((r) => (r.ok ? r.json() : null)).then(setData).catch(() => {});
+      useEffect(() => { load(); }, []);
+      const refresh = async (id) => { const r = await apiFetch("/api/hypotheses/refresh", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id, seen }) }); if (r.ok) { setSeen((x) => [...x, id]); load(); } };
+      const gradeColor = { "no data": "#64748b", "too early": "#94a3b8", mixed: "#fbbf24", "supported so far": "#a3e635", "not holding up": "#f87171" };
+      return (
+        <div className="card">
+          <div className="card-header"><div><div className="card-title">Hypotheses</div><div className="card-subtitle">Three things the data could show. Each runs for its period; every day is scored as supporting, refuting, or no data. Refresh one to swap in a different hypothesis and restart.</div></div></div>
+          {!data && <div className="card-subtitle">Loading…</div>}
+          {data && data.active.map((h) => (
+            <div key={h.id} style={{ background: "#0f172a", borderRadius: 10, padding: "8px 10px", marginTop: 8 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "flex-start" }}>
+                <div style={{ fontSize: 13, fontWeight: 600 }}>{h.text}</div>
+                <button type="button" className="pill-btn" style={{ padding: "2px 8px", flexShrink: 0 }} onClick={() => refresh(h.id)} title="Swap for another hypothesis">↻</button>
+              </div>
+              <div style={{ fontSize: 11, color: "#94a3b8", marginTop: 2 }}>If: {h.exposure}. Then: {h.outcome}{h.lag ? " (next day)" : ""}. Period: {h.period} days from {h.started}.</div>
+              <div style={{ display: "flex", gap: 3, marginTop: 6, alignItems: "center" }}>
+                {h.days.map((d) => <span key={d.day} title={`${d.day}: ${d.verdict}${d.exposure != null ? ` · exposure ${d.exposure ? "yes" : "no"}` : ""}${d.outcome != null ? ` · outcome ${d.outcome ? "yes" : "no"}` : ""}`} style={{ width: 14, height: 14, borderRadius: 3, background: d.verdict === "support" ? "#a3e635" : d.verdict === "refute" ? "#f87171" : "#1e293b", boxShadow: "inset 0 0 0 1px #334155" }} />)}
+                {Array.from({ length: Math.max(0, h.period - h.days.length) }).map((_, i) => <span key={"f" + i} style={{ width: 14, height: 14, borderRadius: 3, background: "transparent", boxShadow: "inset 0 0 0 1px #1e293b" }} />)}
+                <span style={{ fontSize: 11, marginLeft: 6, color: gradeColor[h.grade] || "#94a3b8", fontWeight: 600 }}>{h.grade}</span>
+              </div>
+              <div style={{ fontSize: 11, color: "#94a3b8", marginTop: 4 }}><span style={{ color: "#a3e635" }}>{h.support}</span> supporting · <span style={{ color: "#f87171" }}>{h.refute}</span> refuting · {h.na} no data</div>
+            </div>
+          ))}
+          <div style={{ fontSize: 10, color: "#64748b", marginTop: 8 }}>A day supports a hypothesis when the "if" and the "then" agree with its direction, refutes it when they disagree. "Supported so far" needs 5+ scored days and a 70% majority; it's a reason to test, not a conclusion.</div>
         </div>
       );
     }
@@ -3979,6 +4112,7 @@
       "hae/vitamin_c": "Vitamin C (mg)", "hae/vitamin_d": "Vitamin D (µg)", "hae/vitamin_b12": "Vitamin B12 (µg)", "hae/vitamin_b6": "Vitamin B6 (mg)", "hae/folate": "Folate (µg)",
       "cronometer/energy": "Calories (Cronometer)", "cronometer/protein": "Protein (Cronometer)", "cronometer/carbs": "Carbs (Cronometer)", "cronometer/fat": "Fat (Cronometer)", "cronometer/fiber": "Fiber (Cronometer)",
       "cronometer/sugars": "Sugars (Cronometer)", "cronometer/caffeine": "Caffeine (Cronometer)", "cronometer/water": "Water (Cronometer)", "cronometer/omega_3": "Omega-3 (Cronometer)", "cronometer/alcohol": "Alcohol (Cronometer)",
+      "derived/batteries_pre": "Pre-dose batteries / day", "derived/batteries_post": "Post-dose batteries / day",
       "derived/minutes_home": "Minutes at home / day", "derived/minutes_work": "Minutes at work / day", "derived/minutes_driving": "Minutes driving / day", "derived/minutes_out": "Minutes out / day",
       "derived/supplements_logged": "Supplements logged / day",
       "derived/events_count": "Symptom events / day", "derived/event_minutes": "Minutes in symptom events / day", "derived/events_dystonia": "Dystonia events / day", "derived/events_dyskinesia": "Involuntary-movement events / day",
@@ -4092,8 +4226,8 @@
       );
     }
 
-    const TABS = [["qol", "QoL", "◉"], ["tests", "Tests", "✚"], ["trends", "Trends", "↗"], ["stats", "Stats", "Σ"], ["settings", "Settings", "⚙"]];
-    const TAB_TAGLINES = { qol: "Track meds and QoL, one ring per day.", tests: "Short objective tests. Same conditions each time.", trends: "What moves with what.", stats: "The numbers behind the charts.", settings: "Integrations, keys, data." };
+    const TABS = [["qol", "Home", "◉"], ["tests", "Tests", "✚"], ["trends", "Trends", "↗"], ["stats", "Stats", "Σ"], ["settings", "Settings", "⚙"]];
+    const TAB_TAGLINES = { qol: "Log QoL, doses, events; run today's batteries.", tests: "Short objective tests. Same conditions each time.", trends: "What moves with what.", stats: "The numbers behind the charts.", settings: "Integrations, keys, data." };
 
     function Section({ title, subtitle, storageKey, defaultOpen = true, children }) {
       const [open, setOpen] = useState(() => { try { const v = localStorage.getItem("pdm-sec-" + storageKey); return v ? v !== "closed" : defaultOpen; } catch { return defaultOpen; } });
@@ -4261,6 +4395,31 @@
       const [eventModal, setEventModal] = useState({ open: false, initial: null });
       const [recentEvents, setRecentEvents] = useState([]);
       const [recentContext, setRecentContext] = useState([]);
+      const [session, setSession] = useState(null); // {phase, tests, index, id}
+      const [sessionsTick, setSessionsTick] = useState(0);
+      const [sessions] = useJson("/api/sessions?days=14", [sessionsTick]);
+      sessionRef.current = session;
+      sessionRef.onSaved = (kind) => {
+        setSession((sess) => {
+          if (!sess) return sess;
+          const expect = sess.tests[sess.index];
+          if (kind !== expect) return sess; // an ad hoc test in the middle doesn't advance the battery
+          const next = sess.index + 1;
+          if (next >= sess.tests.length) {
+            apiFetch("/api/sessions", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ phase: sess.phase, tests: sess.tests, session_id: sess.id }) })
+              .then(() => { setSessionsTick((t) => t + 1); setTab("qol"); window.scrollTo(0, 0); });
+            return null;
+          }
+          return { ...sess, index: next };
+        });
+      };
+      const startBattery = (phase, tests) => { setSession({ phase, tests, index: 0, id: Date.now().toString(36) }); setTab("tests"); };
+      useEffect(() => {
+        if (!session || tab !== "tests") return;
+        const title = TEST_META[session.tests[session.index]][1];
+        const t = setTimeout(() => { const el = [...document.querySelectorAll(".card-title")].find((e) => e.textContent.trim() === title); if (el) { const card = el.closest(".card"); (card || el).scrollIntoView({ behavior: "smooth", block: "start" }); window.scrollBy(0, -120); } }, 150);
+        return () => clearTimeout(t);
+      }, [session && session.index, session && session.id, tab]);
       const refreshEvents = () => apiFetch("/api/events?days=21").then((r) => (r.ok ? r.json() : [])).then(setRecentEvents).catch(() => {});
 
       const dateKey = toDateKey(selectedDate);
@@ -4503,6 +4662,12 @@
             <DayEventsList events={dayEventList} onEdit={(e) => setEventModal({ open: true, initial: e })} onDeleted={refreshEvents} />
           </div>
           </Section>
+          <Section title="Run tests" subtitle="Today's pre- and post-dose batteries." storageKey="qol-tests">
+            <RunTestsCard day={day} settings={settings} sessions={sessions} onStart={startBattery} />
+          </Section>
+          <Section title="Hypotheses" subtitle="Three live hypotheses, scored day by day." storageKey="qol-hyp" defaultOpen={false}>
+            <HypothesesCard />
+          </Section>
           <Section title="Recent days" subtitle="A week at a glance; tap any block to rate it." storageKey="qol-summary">
               <QoLSummaryCard days={days} onCellClick={handleSummaryCellClick} selectedKey={dateKey} events={recentEvents} />
           </Section>
@@ -4511,6 +4676,7 @@
 
           {tab === "tests" && (
             <>
+              <BatteryBanner session={session} onCancel={() => setSession(null)} />
               <Section title="Motor" subtitle="Tremor, tapping, spiral. Same hand each time; pre-dose and ~1 h post-dose is the most useful pair." storageKey="motor">
                 <TremorTestCard />
                 <TapTestCard />
