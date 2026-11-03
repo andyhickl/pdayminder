@@ -1356,13 +1356,13 @@
               <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 4 }}>
                 {EVENT_REGIONS.map((r) => <button key={r} type="button" className="quick-time-pill" style={pill(f.regions.includes(r))} onClick={() => toggle("regions", r)}>{r}</button>)}
               </div>
-              <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 8 }}>Severity (1 = noticeable, 5 = couldn't function)</div>
+              <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 8 }}>How bad, on the app's 1–5 scale (1 = couldn't function, 5 = barely noticeable)</div>
               <div style={{ display: "flex", gap: 6, marginTop: 4 }}>
-                {[1, 2, 3, 4, 5].map((n) => <button key={n} type="button" className="quick-time-pill" style={{ ...pill(f.severity === n, ratingColor(6 - n)), minWidth: 36, textAlign: "center" }} onClick={() => setF((o) => ({ ...o, severity: n }))}>{n}</button>)}
+                {[1, 2, 3, 4, 5].map((n) => <button key={n} type="button" className="quick-time-pill" style={{ ...pill(f.severity === n, ratingColor(n)), minWidth: 36, textAlign: "center" }} onClick={() => setF((o) => ({ ...o, severity: n }))}>{n}</button>)}
               </div>
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginTop: 8 }}>
-                <label style={{ fontSize: 11, color: "var(--muted)" }}>Started<input type="datetime-local" className="settings-input" style={{ width: "100%", boxSizing: "border-box", marginTop: 2 }} value={f.start} onChange={(e) => setF((o) => ({ ...o, start: e.target.value }))} /></label>
-                <label style={{ fontSize: 11, color: "var(--muted)" }}>Ended<input type="datetime-local" className="settings-input" style={{ width: "100%", boxSizing: "border-box", marginTop: 2 }} value={f.end} disabled={f.ongoing} onChange={(e) => setF((o) => ({ ...o, end: e.target.value }))} /></label>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: 8, marginTop: 8 }}>
+                <label style={{ fontSize: 11, color: "var(--muted)", display: "flex", flexDirection: "column", gap: 2 }}>Started<input type="datetime-local" className="settings-input" style={{ width: "100%", boxSizing: "border-box", height: 34, fontSize: 14 }} value={f.start} onChange={(e) => setF((o) => ({ ...o, start: e.target.value }))} /></label>
+                <label style={{ fontSize: 11, color: "var(--muted)", display: "flex", flexDirection: "column", gap: 2 }}>Ended<input type="datetime-local" className="settings-input" style={{ width: "100%", boxSizing: "border-box", height: 34, fontSize: 14 }} value={f.end} disabled={f.ongoing} onChange={(e) => setF((o) => ({ ...o, end: e.target.value }))} /></label>
               </div>
               <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, marginTop: 6 }}><input type="checkbox" checked={f.ongoing} onChange={(e) => setF((o) => ({ ...o, ongoing: e.target.checked }))} /> still happening (set the end later)</label>
               <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 8 }}>What you were doing / possible triggers</div>
@@ -1391,15 +1391,17 @@
       return [Math.max(0, (Math.max(s, d0) - d0) / 60000), Math.min(1440, (Math.min(en, d1) - d0) / 60000)];
     }
     function fmtEventTime(iso) { return new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }); }
+    // Red whose saturation grows as the event gets worse (severity 1 = worst on the app's scale).
+    const severityRed = (sev) => `hsl(0, ${Math.round(25 + (5 - Math.max(1, Math.min(5, sev || 3))) * 17)}%, 52%)`;
     function DayEventsList({ events, onEdit, onDeleted }) {
       if (!events || !events.length) return null;
       const del = async (e) => { if (!window.confirm("Delete this event?")) return; const r = await apiFetch("/api/events?ts=" + encodeURIComponent(e.ts), { method: "DELETE" }); if (r.ok) onDeleted && onDeleted(); };
       return (
         <div style={{ marginTop: 8 }}>
           {events.map((e) => (
-            <div key={e.ts} style={{ display: "flex", gap: 8, alignItems: "flex-start", background: "#0f172a", borderRadius: 8, padding: "6px 10px", marginTop: 6, borderLeft: `3px solid ${eventColor(e.type)}` }}>
+            <div key={e.ts} style={{ display: "flex", gap: 8, alignItems: "flex-start", background: "#0f172a", borderRadius: 8, padding: "6px 10px", marginTop: 6, borderLeft: `4px solid ${severityRed(e.severity)}` }}>
               <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ fontSize: 13 }}><strong>{eventLabel(e.type)}</strong> · severity {e.severity} · {fmtEventTime(e.start)}–{e.end ? fmtEventTime(e.end) : "ongoing"}{e.minutes != null ? ` (${e.minutes} min)` : ""}</div>
+                <div style={{ fontSize: 13 }}><strong>{eventLabel(e.type)}</strong> · <span style={{ color: ratingColor(e.severity || 3) }}>{e.severity}/5</span> · {fmtEventTime(e.start)}–{e.end ? fmtEventTime(e.end) : "ongoing"}{e.minutes != null ? ` (${e.minutes} min)` : ""}</div>
                 <div style={{ fontSize: 11, color: "#94a3b8" }}>
                   {(e.regions || []).join(", ")}{e.regions && e.regions.length && e.triggers && e.triggers.length ? " · " : ""}{(e.triggers || []).join(", ")}
                   {e.minutes_since_dose != null ? ` · ${e.minutes_since_dose} min after ${e.dose_time} dose` : " · no prior dose that day"}
@@ -4459,9 +4461,9 @@
             </div>
             <div className="ring-container">
               <DayRing day={day} onSegmentClick={handleSegmentClick} settings={settings} events={dayEventList} context={dayContext} />
-              <div className="ring-caption">
-                Red = tougher hours. Green/blue = better QoL. Gray with 😴 = sleep, black = no data/not yet logged.
-                {dayContext.length > 0 && <> Inner band: navy = home, violet = work; gaps = driving, out, or unknown.</>}
+              <div className="ring-caption" style={{ display: "flex", gap: 16, justifyContent: "center", alignItems: "center" }}>
+                <span><span style={{ display: "inline-block", width: 12, height: 12, background: PLACE_COLORS.home, borderRadius: 3, verticalAlign: "-2px", marginRight: 5 }} />🏠</span>
+                <span><span style={{ display: "inline-block", width: 12, height: 12, background: PLACE_COLORS.work, borderRadius: 3, verticalAlign: "-2px", marginRight: 5 }} />💼</span>
               </div>
             </div>
             <div className="controls-row">

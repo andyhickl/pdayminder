@@ -87,7 +87,7 @@ draws in one pass.
 
 ## Symptom events (source = event)
 "Log an event" on the QoL tab records dystonia / cramping / posturing, involuntary movement, freezing, off episodes,
-falls, pain or other: body regions, severity 1–5, start and end (or "still happening"), triggers, free note. Stored
+falls, pain or other: body regions, severity on the app-wide 1–5 scale (1 = couldn't function, 5 = barely noticeable), start and end (or "still happening"), triggers, free note. Stored
 as one observation per event (`metric = event`, `ts = start`, `value = duration minutes`, details in `raw`) with
 the dose context computed server-side at save: `dose_state`, `minutes_since_dose`, `dose_time`. Endpoints:
 `GET /api/events?days=`, `POST /api/events` (upsert by start; `original_start` moves an edited event),
