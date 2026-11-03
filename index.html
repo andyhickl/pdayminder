@@ -1561,7 +1561,7 @@
       );
     }
     // ---------- Hypotheses ----------
-    function HypothesesCard() {
+    function HypothesesCard({ view = "hypotheses" }) {
       const [data, setData] = useState(null);
       const [busy, setBusy] = useState(null);
       const load = () => apiFetch("/api/hypotheses").then((r) => (r.ok ? r.json() : null)).then(setData).catch(() => {});
@@ -1586,6 +1586,32 @@
           When the "if" held: {h.twoByTwo.withExposure.yes}/{h.twoByTwo.withExposure.yes + h.twoByTwo.withExposure.no} days had the "then" ({pct(h.rateWith)}). When it didn't: {h.twoByTwo.without.yes}/{h.twoByTwo.without.yes + h.twoByTwo.without.no} ({pct(h.rateWithout)}).
           {h.posterior != null && <> Chance the effect is real: <strong style={{ color: gradeColor[h.grade] }}>{pct(h.posterior)}</strong>.</>}
         </div>
+      );
+      if (view === "findings") return (
+          <div className="card">
+            <div className="card-header"><div><div className="card-title">Findings</div><div className="card-subtitle">Hypotheses that held for their whole period, still evaluated every day, plus strong patterns the generator sees in your history that nobody has tracked yet. Discard any with ✕.</div></div></div>
+            {!data && <div className="card-subtitle">Loading…</div>}
+            {data && !data.findings.length && !data.generatorFindings.length && <div className="card-subtitle">Nothing yet. Findings appear when a hypothesis is still "supported so far" at the end of its period, or when the history shows a 95%+ effect with 5+ days on each side.</div>}
+            {data && data.findings.map((h) => (
+              <div key={h.id} style={{ background: "#0f172a", borderRadius: 10, padding: "8px 10px", marginTop: 8, borderLeft: `3px solid ${gradeColor[h.grade] || "#a3e635"}` }}>
+                <div style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "flex-start" }}>
+                  <div style={{ fontSize: 13, fontWeight: 600 }}>{h.text}</div>
+                  <button type="button" className="pill-btn" style={{ padding: "2px 8px", flexShrink: 0 }} onClick={() => discard(h)} title="Discard this finding">✕</button>
+                </div>
+                <div style={{ fontSize: 11, color: "#94a3b8", marginTop: 2 }}>Held over its {h.period}-day period from {h.started}; still being scored{h.grade !== "supported so far" ? ` — currently ${h.grade}` : ""}.</div>
+                <Strip h={h} /><TwoByTwo h={h} />
+              </div>
+            ))}
+            {data && data.generatorFindings.map((f) => (
+              <div key={f.id} style={{ background: "#0f172a", borderRadius: 10, padding: "8px 10px", marginTop: 8, borderLeft: "3px solid #94a3b8" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "flex-start" }}>
+                  <div style={{ fontSize: 13, fontWeight: 600 }}>{f.text}</div>
+                  <button type="button" className="pill-btn" style={{ padding: "2px 8px", flexShrink: 0 }} onClick={() => discard(f)} title="Discard">✕</button>
+                </div>
+                <div style={{ fontSize: 11, color: "#94a3b8", marginTop: 2 }}>From history, not tracked prospectively: {pct(f.rateWith)} on "if" days ({f.nE}) vs {pct(f.rateWithout)} otherwise ({f.nC}); chance it's real {pct(f.posterior)}. Treat as a lead; it hasn't been through a watching period.</div>
+              </div>
+            ))}
+          </div>
       );
       return (
         <>
@@ -1618,29 +1644,6 @@
             {data && data.queue && data.queue.length > 0 && <div style={{ fontSize: 11, color: "#94a3b8", marginTop: 8 }}>Up next ({data.candidates} candidates scorable): {data.queue.slice(0, 3).map((q) => q.text).join(" · ")}</div>}
             {data && data.history && data.history.length > 0 && <div style={{ fontSize: 10, color: "#64748b", marginTop: 4 }}>Retired: {data.history.slice(0, 4).map((x) => `${x.text} (${x.reason})`).join(" · ")}</div>}
             <div style={{ fontSize: 10, color: "#64748b", marginTop: 8 }}>"Chance the effect is real" is the posterior probability that the "then" is more frequent on "if" days than on other days (flat priors). Supported so far = 90%+ with at least 3 days on each side; not holding up = 10% or less. A hypothesis that is still supported at the end of its period moves to Findings. 📌 keeps one past its period and protects it from ✕/↻. 👍 teaches the ranker; ✕ retires and teaches the opposite; ↻ just swaps.</div>
-          </div>
-          <div className="card">
-            <div className="card-header"><div><div className="card-title">Findings</div><div className="card-subtitle">Hypotheses that held for their whole period, still evaluated every day, plus strong patterns the generator sees in your history that nobody has tracked yet. Discard any with ✕.</div></div></div>
-            {data && !data.findings.length && !data.generatorFindings.length && <div className="card-subtitle">Nothing yet. Findings appear when a hypothesis is still "supported so far" at the end of its period, or when the history shows a 95%+ effect with 5+ days on each side.</div>}
-            {data && data.findings.map((h) => (
-              <div key={h.id} style={{ background: "#0f172a", borderRadius: 10, padding: "8px 10px", marginTop: 8, borderLeft: `3px solid ${gradeColor[h.grade] || "#a3e635"}` }}>
-                <div style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "flex-start" }}>
-                  <div style={{ fontSize: 13, fontWeight: 600 }}>{h.text}</div>
-                  <button type="button" className="pill-btn" style={{ padding: "2px 8px", flexShrink: 0 }} onClick={() => discard(h)} title="Discard this finding">✕</button>
-                </div>
-                <div style={{ fontSize: 11, color: "#94a3b8", marginTop: 2 }}>Held over its {h.period}-day period from {h.started}; still being scored{h.grade !== "supported so far" ? ` — currently ${h.grade}` : ""}.</div>
-                <Strip h={h} /><TwoByTwo h={h} />
-              </div>
-            ))}
-            {data && data.generatorFindings.map((f) => (
-              <div key={f.id} style={{ background: "#0f172a", borderRadius: 10, padding: "8px 10px", marginTop: 8, borderLeft: "3px solid #94a3b8" }}>
-                <div style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "flex-start" }}>
-                  <div style={{ fontSize: 13, fontWeight: 600 }}>{f.text}</div>
-                  <button type="button" className="pill-btn" style={{ padding: "2px 8px", flexShrink: 0 }} onClick={() => discard(f)} title="Discard">✕</button>
-                </div>
-                <div style={{ fontSize: 11, color: "#94a3b8", marginTop: 2 }}>From history, not tracked prospectively: {pct(f.rateWith)} on "if" days ({f.nE}) vs {pct(f.rateWithout)} otherwise ({f.nC}); chance it's real {pct(f.posterior)}. Treat as a lead; it hasn't been through a watching period.</div>
-              </div>
-            ))}
           </div>
         </>
       );
@@ -4728,8 +4731,11 @@
           <Section title="Run tests" subtitle="Today's pre- and post-dose batteries." storageKey="qol-tests">
             <RunTestsCard day={day} settings={settings} sessions={sessions} onStart={startBattery} />
           </Section>
-          <Section title="Hypotheses" subtitle="Three live hypotheses, scored day by day." storageKey="qol-hyp" defaultOpen={false}>
+          <Section title="Hypotheses" subtitle="Live hypotheses, scored day by day." storageKey="qol-hyp" defaultOpen={false}>
             <HypothesesCard />
+          </Section>
+          <Section title="Findings" subtitle="What has held up, and what the history suggests." storageKey="qol-findings" defaultOpen={false}>
+            <HypothesesCard view="findings" />
           </Section>
             </>
           )}
