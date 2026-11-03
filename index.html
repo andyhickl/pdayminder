@@ -1077,13 +1077,29 @@
               tap a segment to rate QoL
             </text>
 
+            <defs>
+              <pattern id="ctx-driving" patternUnits="userSpaceOnUse" width="6" height="6" patternTransform="rotate(45)">
+                <rect width="6" height="6" fill="#334155" /><rect width="2.5" height="6" fill="#cbd5e1" />
+              </pattern>
+            </defs>
             {(context || []).map((seg, i) => {
-              // Context band just outside the wheel: where you were (home / work / driving / out).
+              // Context band on the inner edge of the wheel, in grays: home dark, work light, driving hatched, out = nothing.
+              // White ticks mark where a segment starts and stops. Event arcs draw on top of this.
+              if (seg.place === "out") return null;
               const span = contextSpanOnDay(seg, day.dateKey); if (!span || span[1] - span[0] < 3) return null;
               const a0 = (span[0] / 1440) * Math.PI * 2 - Math.PI / 2, a1 = (span[1] / 1440) * Math.PI * 2 - Math.PI / 2;
-              const r = rOuter + 3; const p = (a) => [cx + r * Math.cos(a), cy + r * Math.sin(a)];
-              const [x0, y0] = p(a0), [x1, y1] = p(a1);
-              return <path key={"ctx" + i} d={`M ${x0.toFixed(1)} ${y0.toFixed(1)} A ${r} ${r} 0 ${a1 - a0 > Math.PI ? 1 : 0} 1 ${x1.toFixed(1)} ${y1.toFixed(1)}`} fill="none" stroke={PLACE_COLORS[seg.place] || "#64748b"} strokeWidth="3" opacity={seg.place === "driving" ? 0.9 : 0.45}><title>{PLACE_LABELS[seg.place] || seg.place} {fmtEventTime(seg.start)}–{fmtEventTime(seg.end)}</title></path>;
+              const rI = rInner - 9, rO = rInner - 2; const p = (r, a) => [cx + r * Math.cos(a), cy + r * Math.sin(a)];
+              const big = a1 - a0 > Math.PI ? 1 : 0;
+              const [i0x, i0y] = p(rI, a0), [i1x, i1y] = p(rI, a1), [o0x, o0y] = p(rO, a0), [o1x, o1y] = p(rO, a1);
+              const d = `M ${o0x.toFixed(1)} ${o0y.toFixed(1)} A ${rO} ${rO} 0 ${big} 1 ${o1x.toFixed(1)} ${o1y.toFixed(1)} L ${i1x.toFixed(1)} ${i1y.toFixed(1)} A ${rI} ${rI} 0 ${big} 0 ${i0x.toFixed(1)} ${i0y.toFixed(1)} Z`;
+              const tick = (a, k) => { const [x1, y1] = p(rI - 1, a), [x2, y2] = p(rO + 1, a); return <line key={k} x1={x1} y1={y1} x2={x2} y2={y2} stroke="#f8fafc" strokeWidth="1" opacity="0.85" />; };
+              return (
+                <g key={"ctx" + i}>
+                  <path d={d} fill={seg.place === "driving" ? "url(#ctx-driving)" : PLACE_COLORS[seg.place] || "#475569"} opacity="0.9" />
+                  {span[0] > 0 && tick(a0, "s")}{span[1] < 1440 && tick(a1, "e")}
+                  <title>{PLACE_LABELS[seg.place] || seg.place} {fmtEventTime(seg.start)}–{fmtEventTime(seg.end)}</title>
+                </g>
+              );
             })}
             {(() => {
               // Markers: dose rays (blue), supplement rays (yellow), event arcs + rays (red). Labels sit in bubbles on two
@@ -1291,7 +1307,8 @@
     }
 
     // ---------- Location context ----------
-    const PLACE_COLORS = { home: "#22c55e", work: "#60a5fa", driving: "#f59e0b", out: "#a78bfa" };
+    // Ring palette is grays on purpose: context must not compete with the QoL colours. Stats cards use the same grays.
+    const PLACE_COLORS = { home: "#475569", work: "#94a3b8", driving: "#cbd5e1", out: "#1f2937" };
     const PLACE_LABELS = { home: "Home", work: "Work", driving: "Driving", out: "Out" };
     function contextSpanOnDay(seg, key) { return eventSpanOnDay({ start: seg.start, end: seg.end }, key); }
 
@@ -4444,7 +4461,7 @@
               <DayRing day={day} onSegmentClick={handleSegmentClick} settings={settings} events={dayEventList} context={dayContext} />
               <div className="ring-caption">
                 Red = tougher hours. Green/blue = better QoL. Gray with 😴 = sleep, black = no data/not yet logged.
-                {dayContext.length > 0 && <> Outer band: <span style={{ color: PLACE_COLORS.home }}>home</span> · <span style={{ color: PLACE_COLORS.work }}>work</span> · <span style={{ color: PLACE_COLORS.driving }}>driving</span> · <span style={{ color: PLACE_COLORS.out }}>out</span>.</>}
+                {dayContext.length > 0 && <> Inner band: <span style={{ color: "#64748b" }}>dark = home</span>, <span style={{ color: "#94a3b8" }}>light = work</span>, striped = driving, none = out or unknown.</>}
               </div>
             </div>
             <div className="controls-row">
