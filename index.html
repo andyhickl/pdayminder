@@ -4673,14 +4673,14 @@
             <DayEventsList events={dayEventList} onEdit={(e) => setEventModal({ open: true, initial: e })} onDeleted={refreshEvents} />
           </div>
           </Section>
+          <Section title="Recent days" subtitle="A week at a glance; tap any block to rate it." storageKey="qol-summary">
+              <QoLSummaryCard days={days} onCellClick={handleSummaryCellClick} selectedKey={dateKey} events={recentEvents} />
+          </Section>
           <Section title="Run tests" subtitle="Today's pre- and post-dose batteries." storageKey="qol-tests">
             <RunTestsCard day={day} settings={settings} sessions={sessions} onStart={startBattery} />
           </Section>
           <Section title="Hypotheses" subtitle="Three live hypotheses, scored day by day." storageKey="qol-hyp" defaultOpen={false}>
             <HypothesesCard />
-          </Section>
-          <Section title="Recent days" subtitle="A week at a glance; tap any block to rate it." storageKey="qol-summary">
-              <QoLSummaryCard days={days} onCellClick={handleSummaryCellClick} selectedKey={dateKey} events={recentEvents} />
           </Section>
             </>
           )}
