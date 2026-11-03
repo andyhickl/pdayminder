@@ -1308,7 +1308,7 @@
 
     // ---------- Location context ----------
     // Ring palette is grays on purpose: context must not compete with the QoL colours. Stats cards use the same grays.
-    const PLACE_COLORS = { home: "#1e3a6e", work: "#2f5597", driving: "#64748b", out: "#1f2937" };
+    const PLACE_COLORS = { home: "#1e3a6e", work: "#4a3f8f", driving: "#64748b", out: "#1f2937" };
     const PLACE_LABELS = { home: "Home", work: "Work", driving: "Driving", out: "Out" };
     function contextSpanOnDay(seg, key) { return eventSpanOnDay({ start: seg.start, end: seg.end }, key); }
 
@@ -4461,7 +4461,7 @@
               <DayRing day={day} onSegmentClick={handleSegmentClick} settings={settings} events={dayEventList} context={dayContext} />
               <div className="ring-caption">
                 Red = tougher hours. Green/blue = better QoL. Gray with 😴 = sleep, black = no data/not yet logged.
-                {dayContext.length > 0 && <> Inner band: dark blue = home, lighter blue = work; gaps = driving, out, or unknown.</>}
+                {dayContext.length > 0 && <> Inner band: navy = home, violet = work; gaps = driving, out, or unknown.</>}
               </div>
             </div>
             <div className="controls-row">
