@@ -1487,11 +1487,16 @@
       const nextSched = sched.length ? sched[0] : null;
       const post = since != null && since >= POST_MIN && since <= POST_MAX;
       const postIn = since != null && since < POST_MIN ? POST_MIN - since : null;
-      const preBySinceDose = since == null || since >= PRE_MIN_SINCE_DOSE;
+      // Pre-dose means "before a dose that is still coming today": a scheduled dose ahead, or no dose logged yet.
+      // Once the last scheduled dose is behind you (taken or passed), pre-dose waits for tomorrow.
+      const schedAll = normalizeMedications(settings).filter((m) => m.dopaminergic).flatMap((m) => m.times).map(parseTimeToMinutes);
+      const doseAhead = nextSched != null || (since == null && (schedAll.length === 0 || mins <= Math.max(...schedAll)));
+      const dayDone = !doseAhead && (since != null || (schedAll.length > 0 && mins > Math.max(...schedAll)));
+      const preBySinceDose = doseAhead && (since == null || since >= PRE_MIN_SINCE_DOSE);
       const preBySched = nextSched != null && nextSched - mins <= PRE_BEFORE_SCHEDULED;
-      const pre = preBySinceDose || preBySched;
-      const preIn = pre ? null : Math.min(since != null ? PRE_MIN_SINCE_DOSE - since : Infinity, nextSched != null ? nextSched - mins - PRE_BEFORE_SCHEDULED : Infinity);
-      return { pre, post, preIn: isFinite(preIn) ? preIn : null, postIn, since, nextSched, last };
+      const pre = !dayDone && (preBySinceDose || preBySched);
+      const preIn = pre || dayDone ? null : Math.min(since != null ? PRE_MIN_SINCE_DOSE - since : Infinity, nextSched != null ? nextSched - mins - PRE_BEFORE_SCHEDULED : Infinity);
+      return { pre, post, preIn: isFinite(preIn) ? preIn : null, postIn, since, nextSched, last, dayDone };
     }
     function RunTestsCard({ day, settings, onStart, sessions }) {
       const [, tick] = useState(0);
@@ -1506,6 +1511,7 @@
         if (done[phase]) return "done today";
         if (phase === "post") { if (w.post) return `${w.since} min after the ${minutesToTimeString(w.last)} dose`; if (w.postIn != null) return `unlocks in ${fmtMin(w.postIn)}`; if (w.since == null) return "log a dose first"; return "window passed; next dose"; }
         if (w.pre) return w.since == null ? "no dose yet today" : w.nextSched != null && w.nextSched - (now.getHours() * 60 + now.getMinutes()) <= PRE_BEFORE_SCHEDULED ? `before the ${minutesToTimeString(w.nextSched)} dose` : `${fmtMin(w.since)} since last dose`;
+        if (w.dayDone) return "last dose of the day taken; tomorrow";
         return w.preIn != null ? `unlocks in ${fmtMin(w.preIn)}` : "after the dose wears off";
       };
       // Mon–Sun this week
