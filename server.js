@@ -6,6 +6,13 @@ const bcrypt = require("bcryptjs");
 const { pool, migrate } = require("./db");
 
 const app = express();
+// Express 4 drops rejected promises from async handlers, and Node then exits on the unhandled rejection, taking the
+// whole service down for one bad request. Route every async handler's rejection into the error middleware instead.
+for (const m of ["get", "post", "put", "delete", "patch"]) {
+  const orig = app[m].bind(app);
+  app[m] = (path, ...hs) => (hs.length ? orig(path, ...hs.map((h) => (typeof h === "function" && h.length < 4 ? (req, res, next) => Promise.resolve(h(req, res, next)).catch(next) : h))) : orig(path));
+}
+process.on("unhandledRejection", (e) => console.error("unhandled rejection", e));
 const PORT = process.env.PORT || 3000;
 const SESSION_DAYS = 90;
 const TZ = process.env.TZ_NAME || "America/Los_Angeles";
@@ -248,8 +255,10 @@ async function saveClientPayload(userId, body) {
 app.use((err, req, res, next) => {
   if (!err) return next();
   const status = err.status || 500;
+  if (status >= 500) console.error(`${req.method} ${req.path}`, err);
   logIngest(null, `${req.method} ${req.path}`, status, 0, { error: err.type || err.message, length: req.get("content-length") });
-  res.status(status).json({ error: err.type || "bad request", limit: "50mb" });
+  if (res.headersSent) return;
+  res.status(status).json({ error: status >= 500 ? "server error: " + (err.message || "unknown") : err.type || "bad request", limit: "50mb" });
 });
 
 // Which drug ids count as levodopa-class for this user (from settings.medications; default: sinemet).
@@ -1068,7 +1077,7 @@ async function exerciseProfile(uid) {
   const { rows } = await pool.query("select data->'exercise' as ex from settings where user_id = $1", [uid]);
   const ex = { ...EXERCISE_DEFAULTS, ...((rows[0] && rows[0].ex) || {}) };
   const measured = await pool.query(
-    `select max(greatest(coalesce((raw->'heartRate'->'max'->>'qty')::float, 0), coalesce((raw->>'maxHeartRate')::float, 0))) as m
+    `select max(greatest(coalesce((raw->'heartRate'->'max'->>'qty')::float, 0), coalesce((raw->'maxHeartRate'->>'qty')::float, 0))) as m
        from observations where user_id = $1 and source = 'hae' and metric = 'workout' and ts > now() - interval '365 days'`, [uid]);
   const hrMaxMeasured = Number(measured.rows[0].m) || null;
   const tanaka = Math.round(208 - 0.7 * (Number(ex.age) || 48));
@@ -1431,6 +1440,13 @@ async function migrateScores() {
   await pool.query("insert into migrations (name) values ('scores_1_to_5')");
   console.log("migration: test scores converted to 1–5");
 }
+
+// Last-resort error handler for route errors (registered after every route so Express reaches it).
+app.use((err, req, res, next) => {
+  console.error(`${req.method} ${req.path}`, err);
+  if (res.headersSent) return next(err);
+  res.status(err.status || 500).json({ error: "server error: " + (err.message || "unknown") });
+});
 
 // ---------- start ----------
 (async () => {
