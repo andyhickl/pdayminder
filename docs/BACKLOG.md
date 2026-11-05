@@ -41,7 +41,9 @@ Ordered by value. Dates are when the item was added.
 - **Apple Movement Disorder API**: request the entitlement (write-up at /apple-movement-disorder), then a small
   native iOS + watchOS app posting tremor/dyskinesia percentages to `/api/observations`. The only passive source of
   the real signal.
-- Overland tuning after the first commute: driving threshold (motion flag vs 6 m/s), radii, visit events.
+- Overland: visit events; grow the home radius if "out" blips keep appearing ~900 m from home.
+- Workouts: RPE prompt after a session (PD blunts the heart-rate response, so RPE should govern when HR does not);
+  per-session pre/post test pairing; Concept2 Logbook API for splits and stroke rate.
 - Whoop, Strava, TrainingPeaks, Concept2 syncs (Oura's OAuth/token pattern; Strava is connected on the agent side).
 - Cronometer: keep an eye on the GWT hash discovery after Cronometer builds; nightly 429 handling is in.
 - Written HIPAA records request to Rune Labs for StrivePD history.
@@ -61,6 +63,9 @@ Ordered by value. Dates are when the item was added.
   Settings/Trends/QoL sections · daily-multi cap fix · nutrition via HAE (summed metrics, protein near dose, meal
   hours) · Cronometer cron (daily summary + servings, session reuse, 429 backoff) · symptom events (log/edit, dose
   context, bands, histogram, rollups) · ring arcs and grid stars.
+- 2026-11-04: context classifier fix (parked ≠ driving, quiet drives end, atomic rebuilds) · workouts: zone minutes
+  from per-minute HR, exercise profile, green ring arc, Day-vitals band, weekly intensity bars, Exercise dose stats,
+  exercise features in the hypotheses engine.
 - 2026-11-02: bubbled ray labels with precedence · supplements (settings, logging, yellow rays, rollups) · supplement
   stack recorded · location context (Overland, places, carry-forward, inner band, Location stats, QoL per place) ·
   event severity on the 1–5 scale · Home tab with Run tests (batteries, windows, Mon–Sun grid, runner banner) and

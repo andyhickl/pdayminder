@@ -68,6 +68,13 @@ Syllables as intensity peaks with a dip between them. _Used for:_ the pa-ta-ka s
 
 Spiral drawing is a standard clinical tremor task; digitised versions score deviation from the ideal path and tremor in the residual. Finger-on-glass is noisier than pen-on-tablet, so our deviation and tremor-share metrics are meant for within-person tracking only.
 
+## Exercise dose
+
+- **Schenkman M, et al.** Effect of high-intensity treadmill exercise on motor symptoms in patients with de novo Parkinson disease: the SPARX phase 2 randomized clinical trial. *JAMA Neurology* 2018;75(2):219–226. PMID 29228079. Six months at 80–85 % of maximum heart rate, four days a week, 30 minutes in zone, held UPDRS-III steady; the 60–65 % arm did not. The app's weekly target (120 vigorous minutes, 4 sessions) and the "vigorous ≈ 80 % HRmax" zone come from here.
+- **van der Kolk NM, et al.** Effectiveness of home-based and remotely supervised aerobic exercise in Parkinson's disease: a double-blind, randomised controlled trial (Park-in-Shape). *Lancet Neurology* 2019;18(11):998–1008. PMID 31521532. Home stationary cycling 30–45 min three times a week at 50–80 % of heart-rate reserve for six months improved off-state motor scores; the moderate zone and the 150 min/week moderate-plus-vigorous guideline line.
+- **Tanaka H, Monahan KD, Seals DR.** Age-predicted maximal heart rate revisited. *J Am Coll Cardiol* 2001;37(1):153–156. PMID 11153730. HRmax = 208 − 0.7 × age when no measured maximum exists.
+- **Karvonen MJ, Kentala E, Mustala O.** The effects of training on heart rate: a longitudinal study. *Ann Med Exp Biol Fenn* 1957;35:307–315. Heart-rate reserve zones (target = resting + % × (max − resting)).
+
 ## Data sources and plumbing
 
 **Oura API v2** (OAuth2): sleep stages, night HRV, lowest heart rate, readiness, activity, temperature deviation, SpO2. **Health Auto Export** (iOS) relays Apple Health metrics, including the Watch's gait measures (walking speed, step length, double support, asymmetry), heart rate and HRV; iOS drops its Authorization header, so the key travels in the URL. **Apple Health** has no cloud API and does not receive Movement Disorder API data.

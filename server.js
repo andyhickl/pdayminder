@@ -175,7 +175,8 @@ async function loadClientPayload(userId) {
   q.rows.forEach((r) => (dayFor(r.day).segments[r.seg] = { type: r.type, rating: r.rating }));
   m.rows.forEach((r) => (r.source === "supplement" ? dayFor(r.day).supps.push({ t: r.t, id: r.drug }) : dayFor(r.day).meds.push({ t: r.t, drug: r.drug || "sinemet" })));
   const events = await annotateDose(userId, ev.rows.map((r) => ({ ts: r.ts, minutes: r.minutes, ...r.raw })));
-  return { settings: s.rows[0] ? s.rows[0].data : null, days, events, context: ctx.rows.map((r) => r.raw) };
+  const wo = await workoutList(userId, 21);
+  return { settings: s.rows[0] ? s.rows[0].data : null, days, events, context: ctx.rows.map((r) => r.raw), workouts: wo.workouts.map(({ hr_series, ...w }) => w) };
 }
 
 async function saveClientPayload(userId, body) {
@@ -565,6 +566,10 @@ async function dailySeries(uid, source, metric, days) {
          group by 1 order by 1`, type ? [uid, TZ, days, type] : [uid, TZ, days]);
       return rows.map((r) => [r.day, Number(r.v)]);
     }
+    if (WORKOUT_METRICS.includes(metric)) {
+      const byDay = await workoutDays(uid, days);
+      return Object.keys(byDay).sort().filter((d) => byDay[d][metric] != null).map((d) => [d, byDay[d][metric]]);
+    }
     if (metric === "first_meal_hour" || metric === "last_meal_hour") {
       const fn = metric === "first_meal_hour" ? "min" : "max";
       const { rows } = await pool.query(
@@ -944,6 +949,7 @@ app.get("/api/metrics", requireAuth, async (req, res) => {
     ev.rows.forEach((r) => rows.push({ source: "derived", metric: "events_" + r.type, rows: r.n, last_ts: null }));
   }
   if (have.has("hae/dietary_energy") || have.has("cronometer/entries")) ["first_meal_hour", "last_meal_hour"].forEach((m) => rows.push({ source: "derived", metric: m, rows: 0, last_ts: null }));
+  if (have.has("hae/workout")) WORKOUT_METRICS.forEach((m) => rows.push({ source: "derived", metric: m, rows: 0, last_ts: null }));
   res.json(rows);
 });
 
@@ -1017,8 +1023,9 @@ app.get("/api/day", requireAuth, async (req, res) => {
   const hourly = {}, daily = {}, workouts = [];
   const counts = {};
   obs.rows.forEach((r) => (counts[r.metric] = (counts[r.metric] || 0) + 1));
+  const exProf = obs.rows.some((r) => r.metric === "workout") ? await exerciseProfile(uid) : null;
   obs.rows.forEach((r) => {
-    if (r.metric === "workout") return workouts.push({ ts: r.ts, minutes: r.value, ...r.raw });
+    if (r.metric === "workout") return workouts.push({ ts: r.ts, ...summarizeWorkout(r.ts, Number(r.value), r.raw, exProf) });
     if (isSummed(r.metric)) { daily[r.metric] = (daily[r.metric] || 0) + (r.value || 0); if (counts[r.metric] > 1) (hourly[r.metric] = hourly[r.metric] || []).push({ ts: r.ts, value: r.value }); }
     else if (counts[r.metric] > 1) (hourly[r.metric] = hourly[r.metric] || []).push({ ts: r.ts, value: r.value });
     else daily[r.metric] = r.value;
@@ -1051,14 +1058,116 @@ app.get("/api/daily-multi", requireAuth, async (req, res) => {
   res.json(Object.values(byDay));
 });
 
+// ---------- Workouts ----------
+// Zones follow the Block 1 exercise plan: heart-rate reserve (Karvonen), HRmax measured if we have seen one, else
+// Tanaka (208 − 0.7 × age). "Vigorous" = ≥65 % HRR, which is about ≥80 % HRmax: the SPARX high-intensity band
+// (Schenkman 2018: 4 × 30 min/week at 80–85 % HRmax slowed UPDRS-III progression over 6 months; the 60–65 % arm did not).
+// "Moderate" = 50–65 % HRR (Park-in-Shape entry zone). Settings › Profile › Exercise can override any of it.
+const EXERCISE_DEFAULTS = { age: 48, vigorousPct: 65, moderatePct: 50, weeklyVigorousMin: 120, weeklyMvpaMin: 150, sessionsPerWeek: 4 };
+async function exerciseProfile(uid) {
+  const { rows } = await pool.query("select data->'exercise' as ex from settings where user_id = $1", [uid]);
+  const ex = { ...EXERCISE_DEFAULTS, ...((rows[0] && rows[0].ex) || {}) };
+  const measured = await pool.query(
+    `select max(greatest(coalesce((raw->'heartRate'->'max'->>'qty')::float, 0), coalesce((raw->>'maxHeartRate')::float, 0))) as m
+       from observations where user_id = $1 and source = 'hae' and metric = 'workout' and ts > now() - interval '365 days'`, [uid]);
+  const hrMaxMeasured = Number(measured.rows[0].m) || null;
+  const tanaka = Math.round(208 - 0.7 * (Number(ex.age) || 48));
+  const hrMax = Number(ex.hrMax) || (hrMaxMeasured && hrMaxMeasured > tanaka ? Math.round(hrMaxMeasured) : tanaka);
+  const rest = await pool.query(
+    `select percentile_cont(0.5) within group (order by value) as v from observations
+       where user_id = $1 and ((source = 'hae' and metric = 'resting_heart_rate') or (source = 'oura' and metric = 'lowest_hr')) and ts > now() - interval '30 days'`, [uid]);
+  const hrRest = Number(ex.hrRest) || Math.round(Number(rest.rows[0].v)) || 55;
+  const hrr = hrMax - hrRest;
+  return { ...ex, hrMax, hrMaxMeasured, hrMaxSource: Number(ex.hrMax) ? "setting" : hrMaxMeasured && hrMaxMeasured > tanaka ? "measured" : "Tanaka 208 − 0.7 × age", hrRest,
+    moderateBpm: Math.round(hrRest + (ex.moderatePct / 100) * hrr), vigorousBpm: Math.round(hrRest + (ex.vigorousPct / 100) * hrr) };
+}
+// One workout from HAE's raw record → the numbers we show and score. Zone minutes come from the per-minute heart-rate
+// samples; a workout without them is scored on its average heart rate.
+function summarizeWorkout(ts, minutes, raw, prof) {
+  const r = raw || {};
+  const parseT = (s) => (s ? new Date(String(s).replace(" ", "T").replace(/ ([+-]\d{2})(\d{2})$/, "$1:$2")) : null);
+  const start = parseT(r.start) || new Date(ts), end = parseT(r.end) || new Date(start.getTime() + (minutes || 0) * 60000);
+  const mins = minutes || (end - start) / 60000;
+  const hrs = (r.heartRateData || []).map((h) => ({ t: parseT(h.date), hr: Number(h.Avg ?? h.qty) })).filter((h) => h.t && isFinite(h.hr));
+  let vigorous = 0, moderate = 0;
+  if (hrs.length) { for (const h of hrs) { if (h.hr >= prof.vigorousBpm) vigorous++; else if (h.hr >= prof.moderateBpm) moderate++; } }
+  else { const avg = Number(r.heartRate?.avg?.qty ?? r.avgHeartRate?.qty); if (avg >= prof.vigorousBpm) vigorous = mins; else if (avg >= prof.moderateBpm) moderate = mins; }
+  const scale = hrs.length && mins ? Math.min(1, mins / hrs.length) : 1; // samples are per minute; guard against sub-minute buckets
+  return {
+    id: r.id || null, name: r.name || r.activities?.[0]?.activityType || "Workout", start: start.toISOString(), end: end.toISOString(), minutes: Math.round(mins * 10) / 10,
+    avg_hr: r.heartRate?.avg?.qty != null ? Math.round(r.heartRate.avg.qty) : r.avgHeartRate?.qty != null ? Math.round(r.avgHeartRate.qty) : null,
+    max_hr: r.heartRate?.max?.qty != null ? Math.round(r.heartRate.max.qty) : r.maxHeartRate?.qty != null ? Math.round(r.maxHeartRate.qty) : null,
+    kcal: r.activeEnergyBurned?.qty != null ? Math.round(r.activeEnergyBurned.qty) : r.totalEnergy?.qty != null ? Math.round(r.totalEnergy.qty) : null,
+    distance: r.distance?.qty != null ? Math.round(r.distance.qty * 100) / 100 : null, distance_units: r.distance?.units || null,
+    source: r.source?.name || null, vigorous_min: Math.round(vigorous * scale), moderate_min: Math.round(moderate * scale),
+    hr_series: hrs.map((h) => ({ t: h.t.toISOString(), hr: Math.round(h.hr) })),
+  };
+}
+// Summaries for the last N days, newest first.
+async function workoutList(uid, days) {
+  const prof = await exerciseProfile(uid);
+  const { rows } = await pool.query(
+    `select ts, value as minutes, raw from observations where user_id = $1 and source = 'hae' and metric = 'workout'
+       and (ts at time zone $2)::date >= (now() at time zone $2)::date - ($3::int - 1) order by ts desc`, [uid, TZ, days]);
+  return { profile: prof, workouts: rows.map((r) => ({ ts: r.ts, day: localDayOf(r.ts), ...summarizeWorkout(r.ts, Number(r.minutes), r.raw, prof) })) };
+}
+// Per-day rollup used by the derived metrics (hypotheses, trends, stats). Days from the first workout on are present
+// with zeros, so "no workout" is a real observation once the stream exists.
+async function workoutDays(uid, days) {
+  const { workouts } = await workoutList(uid, days + 7);
+  if (!workouts.length) return {};
+  const byDay = {};
+  for (const w of workouts) {
+    const d = byDay[w.day] = byDay[w.day] || { workout_minutes: 0, workout_vigorous: 0, workout_moderate: 0, workouts_count: 0, kcal: 0, hrSum: 0, hrN: 0, max_hr: null, start_hour: null };
+    d.workout_minutes += w.minutes; d.workout_vigorous += w.vigorous_min; d.workout_moderate += w.moderate_min; d.workouts_count++; d.kcal += w.kcal || 0;
+    if (w.avg_hr) { d.hrSum += w.avg_hr * w.minutes; d.hrN += w.minutes; } if (w.max_hr) d.max_hr = Math.max(d.max_hr || 0, w.max_hr);
+    const [hh, mm] = new Date(w.start).toLocaleTimeString("en-GB", { timeZone: TZ, hour: "2-digit", minute: "2-digit" }).split(":").map(Number);
+    const sh = Math.round((hh + mm / 60) * 100) / 100;
+    d.start_hour = d.start_hour == null ? sh : Math.min(d.start_hour, sh);
+  }
+  const first = workouts[workouts.length - 1].day, today = localDayOf(new Date());
+  const out = {};
+  for (let i = days + 6; i >= 0; i--) {
+    const d = new Date(Date.now() - i * 86400000).toLocaleDateString("en-CA", { timeZone: TZ });
+    if (d < first || d > today) continue;
+    const x = byDay[d] || { workout_minutes: 0, workout_vigorous: 0, workout_moderate: 0, workouts_count: 0, kcal: 0, hrSum: 0, hrN: 0, max_hr: null, start_hour: null };
+    out[d] = { workout_minutes: Math.round(x.workout_minutes), workout_vigorous: x.workout_vigorous, workout_moderate: x.workout_moderate, workouts_count: x.workouts_count,
+      workout_kcal: x.kcal || null, workout_hr_avg: x.hrN ? Math.round(x.hrSum / x.hrN) : null, workout_hr_max: x.max_hr, workout_start_hour: x.start_hour };
+  }
+  // rolling 7-day vigorous and MVPA minutes (the weekly dose, as of each day)
+  const keys = Object.keys(out).sort();
+  keys.forEach((d, i) => { let v = 0, m = 0; for (let j = Math.max(0, i - 6); j <= i; j++) { v += out[keys[j]].workout_vigorous; m += out[keys[j]].workout_vigorous + out[keys[j]].workout_moderate; } out[d].vigorous_7d = v; out[d].mvpa_7d = m; });
+  return out;
+}
+const WORKOUT_METRICS = ["workout_minutes", "workout_vigorous", "workout_moderate", "workouts_count", "workout_kcal", "workout_hr_avg", "workout_hr_max", "workout_start_hour", "vigorous_7d", "mvpa_7d"];
+
 app.get("/api/workouts", requireAuth, async (req, res) => {
   const days = Math.min(365, Number(req.query.days) || 14);
-  const { rows } = await pool.query(
-    `select ts, value as minutes, raw from observations
-     where user_id = $1 and metric = 'workout' and ts >= now() - ($2 || ' days')::interval order by ts desc`,
-    [req.user.id, String(days)]
-  );
-  res.json(rows);
+  const { profile, workouts } = await workoutList(req.user.id, days);
+  res.json({ profile, workouts: workouts.map(({ hr_series, ...w }) => w) });
+});
+// Weekly rollups (Mon–Sun) against the targets, plus the last 14 days.
+app.get("/api/workouts/stats", requireAuth, async (req, res) => {
+  const weeks = Math.min(26, Number(req.query.weeks) || 8);
+  const uid = req.user.id;
+  const prof = await exerciseProfile(uid);
+  const byDay = await workoutDays(uid, weeks * 7 + 7);
+  const today = localDayOf(new Date());
+  const dow = (d) => (new Date(d + "T12:00:00Z").getUTCDay() + 6) % 7; // Mon = 0
+  const monday = (d) => new Date(new Date(d + "T12:00:00Z").getTime() - dow(d) * 86400000).toISOString().slice(0, 10);
+  const thisMon = monday(today);
+  const wk = {};
+  for (let i = 0; i < weeks; i++) { const m = new Date(new Date(thisMon + "T12:00:00Z").getTime() - i * 7 * 86400000).toISOString().slice(0, 10); wk[m] = { week: m, sessions: 0, minutes: 0, vigorous: 0, moderate: 0, days: 0, hasData: false }; }
+  for (const [d, x] of Object.entries(byDay)) { const w = wk[monday(d)]; if (!w) continue; w.hasData = true; w.sessions += x.workouts_count; w.minutes += x.workout_minutes; w.vigorous += x.workout_vigorous; w.moderate += x.workout_moderate; if (x.workouts_count) w.days++; }
+  const weeksArr = Object.values(wk).sort((a, b) => a.week.localeCompare(b.week));
+  const cur = wk[thisMon];
+  const past = weeksArr.filter((w) => w.week !== thisMon && w.hasData).slice(-4);
+  const avg = (k) => (past.length ? past.reduce((a, w) => a + w[k], 0) / past.length : null);
+  const last14 = Object.keys(byDay).sort().slice(-14).map((d) => ({ day: d, ...byDay[d] }));
+  const { workouts } = await workoutList(uid, 90);
+  const longestVig = workouts.reduce((m, w) => Math.max(m, w.vigorous_min), 0);
+  res.json({ profile: prof, weeks: weeksArr, current: { ...cur, daysElapsed: dow(today) + 1 }, avg4: { sessions: avg("sessions"), minutes: avg("minutes"), vigorous: avg("vigorous"), moderate: avg("moderate") },
+    last14, longest_vigorous_session: longestVig, sessions90: workouts.length });
 });
 
 // ---------- public legal pages (no login) ----------

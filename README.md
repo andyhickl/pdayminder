@@ -99,13 +99,28 @@ outcome family and two per "if" feature, with a growing penalty on repeated outc
 
 ## Location context (source = context)
 Overland (iOS, free) posts GeoJSON batches to `/api/ingest/overland?api_key=…`; points land in `locations`. Per local
-day the server rebuilds segments: a point is `driving` if its motion array says so or speed > 6 m/s, else `home` /
-`work` if within that place's radius (Settings › Profile › Places: address geocoded via Nominatim at `/api/geocode`,
-or the phone's position; default 250 m), else `out`. A state lasts until the next point; driving blips < 2 min are
-absorbed. Segments are observations (`metric = place`, `ts = start`, `value = minutes`, raw `{place,start,end,
+day the server rebuilds segments: a point is `driving` if speed > 6 m/s, or if its motion array says so and it is not
+sitting still inside a place (iOS keeps the driving flag on for minutes after parking); else `home` / `work` if within
+that place's radius (Settings › Profile › Places: address geocoded via Nominatim at `/api/geocode`, or the phone's
+position; default 250 m), else `out`. A state lasts until the next point, except that a drive with no points for
+10 min (2 min inside a place) ends and the silence is labelled by the last point's position. Blips < 2 min are
+absorbed. Rebuilds are transactional; `POST /api/context/rebuild?days=N` re-derives past days. Segments are observations (`metric = place`, `ts = start`, `value = minutes`, raw `{place,start,end,
 source}`); `POST /api/context/manual {segments:[{start,end,place}]}` writes manual segments that own their days.
 `/api/context?days=`, `/api/context/qol?days=` (minutes and overlap-weighted QoL per place), derived
 `minutes_<place>` daily metrics, a Location section in Stats, and the outer band on the ring.
+
+## Workouts (hae/workout, derived/workout_*)
+HAE's workout records (name, start/end, per-minute heart rate, energy, distance) are summarised on read with
+`summarizeWorkout`: minutes in the vigorous and moderate zones from the per-minute samples. Zones use heart-rate
+reserve: HRmax = highest recorded workout HR in a year (else 208 − 0.7 × age, Tanaka), resting HR = 30-day median of
+Watch resting / Oura lowest HR; vigorous ≥ 65 % HRR (≈ 80 % HRmax, the SPARX band), moderate ≥ 50 % HRR. Settings ›
+Profile › Exercise (`settings.exercise {age, hrMax, hrRest, vigorousPct, weeklyVigorousMin, sessionsPerWeek}`)
+overrides. `GET /api/workouts?days=` (summaries + profile), `GET /api/workouts/stats?weeks=` (Mon–Sun rollups, 4-week
+averages, last 14 days). Daily derived metrics for trends, stats and the hypotheses engine: `workout_minutes`,
+`workout_vigorous`, `workout_moderate`, `workouts_count`, `workout_kcal`, `workout_hr_avg`, `workout_hr_max`,
+`workout_start_hour`, `vigorous_7d`, `mvpa_7d` (days from the first workout on are present with zeros). UI: green arc
+on the ring, green band with the heart-rate trace on Day vitals, "Workouts by intensity" weekly bars on Trends,
+"Exercise dose" tiles on Stats (this week vs 120 vigorous min, 150 MVPA min, 4 sessions).
 
 ## Supplements
 Settings › Profile › Supplements mirrors the medication editor (`settings.supplements[{id,name,dose,times[]}]`), for
@@ -115,7 +130,7 @@ yellow rays on the ring and marks on Day vitals. Daily rollups: `derived/supplem
 
 ## Ring markers
 Dose rays blue (dopaminergic; other meds are dots), supplement rays yellow, events red arcs on the inner edge with
-start/end rays. Time labels sit in bubbles on two rings outside the wheel; placement runs in priority order (dose,
+start/end rays, workouts green arcs (end label only for sessions of an hour or more). Time labels sit in bubbles on two rings outside the wheel; placement runs in priority order (dose,
 event, supplement), moving a colliding label to the outer ring and dropping it if both rings are taken (the ray and
 its tooltip stay). Events for the last 21 days come with the initial `/api/pdayminder/data` payload so the ring
 draws in one pass.

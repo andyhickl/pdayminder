@@ -1004,7 +1004,7 @@
       );
     }
 
-    function DayRing({ day, onSegmentClick, settings: ringSettings, events, context }) {
+    function DayRing({ day, onSegmentClick, settings: ringSettings, events, context, workouts }) {
       const [hubNow, setHubNow] = useState(() => new Date());
       useEffect(() => { const t = setInterval(() => setHubNow(new Date()), 30000); return () => clearInterval(t); }, []);
       const width = 300;
@@ -1159,6 +1159,15 @@
                 markers.push({ key: `ev-${i}-s`, kind: "event", angle: a0, label: fmtEventTime(e.start).replace(/\s?[AP]M/i, ""), color: "#ef4444", priority: 1, title: arcs[arcs.length - 1].title });
                 if (e.end) markers.push({ key: `ev-${i}-e`, kind: "event", angle: a1, label: fmtEventTime(e.end).replace(/\s?[AP]M/i, ""), color: "#ef4444", priority: 1, title: arcs[arcs.length - 1].title });
               });
+              (workouts || []).forEach((w, i) => {
+                // Green arc for a workout, same geometry as an event arc; vigorous minutes in the tooltip.
+                const span = contextSpanOnDay(w, day.dateKey); if (!span) return;
+                const a0 = angleOfMin(span[0]), a1 = angleOfMin(Math.max(span[1], span[0] + 8));
+                const title = `${w.name} ${Math.round(w.minutes)} min · ${fmtEventTime(w.start)}–${fmtEventTime(w.end)}${w.avg_hr ? ` · avg ${w.avg_hr} bpm` : ""}${w.vigorous_min ? ` · ${w.vigorous_min} min vigorous` : ""}`;
+                arcs.push({ key: `wo-${i}`, a0, a1, color: "#22c55e", title });
+                markers.push({ key: `wo-${i}-s`, kind: "event", angle: a0, label: fmtEventTime(w.start).replace(/\s?[AP]M/i, ""), color: "#22c55e", priority: 1.5, title });
+                if (span[1] - span[0] >= 60) markers.push({ key: `wo-${i}-e`, kind: "event", angle: a1, label: fmtEventTime(w.end).replace(/\s?[AP]M/i, ""), color: "#22c55e", priority: 1.5, title });
+              });
               // Label placement: by priority, two rings, minimum angular gap scaled by radius so bubbles don't overlap.
               const rings = [rOuter + 24, rOuter + 38];
               const placed = [[], []];
@@ -1175,8 +1184,9 @@
                   {arcs.map((e) => {
                     const [ax0, ay0] = p(rArc, e.a0), [ax1, ay1] = p(rArc, e.a1);
                     const d = `M ${ax0.toFixed(1)} ${ay0.toFixed(1)} A ${rArc} ${rArc} 0 ${e.a1 - e.a0 > Math.PI ? 1 : 0} 1 ${ax1.toFixed(1)} ${ay1.toFixed(1)}`;
-                    const ray = (a, k) => { const [x1, y1] = p(rArc, a), [x2, y2] = p(rOuter + 6, a); return <line key={k} x1={x1} y1={y1} x2={x2} y2={y2} stroke="#ef4444" strokeWidth="1.5" opacity="0.9" />; };
-                    return <g key={e.key}><path d={d} fill="none" stroke="#ef4444" strokeWidth="4" strokeLinecap="round" opacity="0.95" />{ray(e.a0, "s")}{!e.ongoing && ray(e.a1, "e")}<title>{e.title}</title></g>;
+                    const col = e.color || "#ef4444";
+                    const ray = (a, k) => { const [x1, y1] = p(rArc, a), [x2, y2] = p(rOuter + 6, a); return <line key={k} x1={x1} y1={y1} x2={x2} y2={y2} stroke={col} strokeWidth="1.5" opacity="0.9" />; };
+                    return <g key={e.key}><path d={d} fill="none" stroke={col} strokeWidth="4" strokeLinecap="round" opacity="0.95" />{ray(e.a0, "s")}{!e.ongoing && ray(e.a1, "e")}<title>{e.title}</title></g>;
                   })}
                   {markers.map((m) => {
                     if (m.kind === "othermed") { const [rx, ry] = p(rOuter + 6, m.angle); return <g key={m.key}><circle cx={rx} cy={ry} r="3" fill="#94a3b8" opacity="0.9"><title>{m.title}</title></circle></g>; }
@@ -1791,6 +1801,16 @@
               </div>
             );
           })}
+          <div style={{ marginTop: 16, fontSize: 13, fontWeight: 600 }}>Exercise</div>
+          <div className="card-subtitle">Heart-rate zones for workouts. HRmax is taken from your highest recorded workout heart rate (else 208 − 0.7 × age); resting HR from the last 30 days of Watch/Oura data. Fill a box only to override. Vigorous = this share of heart-rate reserve (65 % ≈ 80 % of HRmax, the SPARX band).</div>
+          {(() => { const ex = local.exercise || {}; const setEx = (patch) => handleChange("exercise", { ...ex, ...patch }); const num = (k, ph, label) => (
+            <label style={{ fontSize: 11, color: "var(--muted)", display: "flex", flexDirection: "column", gap: 2, minWidth: 0 }}>{label}<input className="settings-input" type="number" style={{ width: "100%", height: 28, boxSizing: "border-box" }} value={ex[k] ?? ""} placeholder={ph} onChange={(e) => setEx({ [k]: e.target.value === "" ? undefined : Number(e.target.value) })} /></label>);
+            return (
+              <div style={{ background: "#0f172a", borderRadius: 10, padding: "8px 10px", marginTop: 8, display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: 6 }}>
+                {num("age", "48", "Age")}{num("hrMax", "auto", "HRmax bpm")}{num("hrRest", "auto", "Resting bpm")}
+                {num("vigorousPct", "65", "Vigorous % HRR")}{num("weeklyVigorousMin", "120", "Vigorous min/wk")}{num("sessionsPerWeek", "4", "Sessions/wk")}
+              </div>
+            ); })()}
           <div style={{ marginTop: 16, fontSize: 13, fontWeight: 600 }}>Supplements</div>
           <div className="card-subtitle">Single-nutrient supplements you want to time (creatine, vitamin D, fiber, CoQ10…). Logged from the QoL tab; yellow rays on the ring. Multivitamins and anything you want broken into nutrients belong in Cronometer.</div>
           {(local.supplements || []).map((m, i) => (
@@ -1908,7 +1928,8 @@
       const mn = data.hourly.heart_rate_min || [];
       const mx = data.hourly.heart_rate_max || [];
       const hrv = data.hourly.heart_rate_variability || [];
-      const hrVals = [...avg, ...mn, ...mx].map((p) => p.value);
+      const woHr = (data.workouts || []).flatMap((w) => (w.hr_series || []).map((h) => h.hr));
+      const hrVals = [...avg, ...mn, ...mx].map((p) => p.value).concat(woHr);
       const lo = hrVals.length ? Math.min(...hrVals) - 5 : 40, hi = hrVals.length ? Math.max(...hrVals) + 5 : 120;
       const y = (v) => padT + (H - padT - padB) * (1 - (v - lo) / (hi - lo || 1));
       const hrvVals = hrv.map((p) => p.value);
@@ -1938,6 +1959,15 @@
             const dayStart = new Date(data.day + "T00:00:00"); const h0 = Math.max(0, (new Date(e.start) - dayStart) / 36e5); const h1 = Math.min(24, e.end ? (new Date(e.end) - dayStart) / 36e5 : h0 + 0.5);
             if (h1 <= 0 || h0 >= 24) return null;
             return <g key={"e" + i}><rect x={x(h0)} y={padT} width={Math.max(2, x(h1) - x(h0))} height={H - padT - padB} fill={eventColor(e.type)} opacity="0.35" /><rect x={x(h0)} y={padT} width={Math.max(2, x(h1) - x(h0))} height={4} fill={eventColor(e.type)} /><title>{eventLabel(e.type)} {e.severity}/5 {fmtEventTime(e.start)}–{e.end ? fmtEventTime(e.end) : "ongoing"}{e.minutes_since_dose != null ? ` · ${e.minutes_since_dose} min after dose` : ""}</title></g>;
+          })}
+          {(data.workouts || []).map((w, i) => {
+            // Workout band: green span from start to end (like the dose lines, but a stretch), with the per-minute heart rate drawn inside it.
+            const dayStart = new Date(data.day + "T00:00:00"); const h0 = Math.max(0, (new Date(w.start) - dayStart) / 36e5); const h1 = Math.min(24, (new Date(w.end) - dayStart) / 36e5);
+            if (h1 <= 0 || h0 >= 24) return null;
+            const pts = (w.hr_series || []).map((h) => [x((new Date(h.t) - dayStart) / 36e5), y(h.hr)]);
+            return <g key={"w" + i}><rect x={x(h0)} y={padT} width={Math.max(2, x(h1) - x(h0))} height={H - padT - padB} fill="#22c55e" opacity="0.18" /><rect x={x(h0)} y={padT} width={Math.max(2, x(h1) - x(h0))} height={4} fill="#22c55e" />
+              {pts.length > 1 && <path d={"M" + pts.map(([px, py]) => `${px.toFixed(1)} ${py.toFixed(1)}`).join(" L")} fill="none" stroke="#22c55e" strokeWidth="1.5" />}
+              <title>{w.name} {Math.round(w.minutes)} min · {fmtEventTime(w.start)}–{fmtEventTime(w.end)}{w.avg_hr ? ` · avg ${w.avg_hr} bpm, max ${w.max_hr}` : ""}{w.vigorous_min ? ` · ${w.vigorous_min} min vigorous` : ""}</title></g>;
           })}
           {band && <path d={band} fill="#38bdf8" opacity="0.18" />}
           {avg.length > 0 && <path d={line(avg, y)} fill="none" stroke="#38bdf8" strokeWidth="2" />}
@@ -2009,13 +2039,13 @@
         const partial = isToday && label === "Steps";
         return [label + (partial ? " (so far)" : ""), (label === "Steps" ? Math.round(v).toLocaleString() : fmt(v, dec)) + unit, arrow, pv == null ? null : fmt(pv, dec) + unit];
       }).filter(Boolean) : [];
-      const hasHourly = data && (data.hourly.heart_rate_avg || []).length > 0;
+      const hasHourly = data && ((data.hourly.heart_rate_avg || []).length > 0 || (data.workouts || []).length > 0);
       return (
         <div className="card">
           <div className="card-header">
             <div>
               <div className="card-title">Day vitals</div>
-              <div className="card-subtitle">Hourly heart rate (band = min–max) and HRV (dashed), over your QoL ratings. Levodopa doses as white dashed lines, other medications as faint grey; tests as dots with their 1–5 score: tremor pink, tapping blue, gait green, balance amber.</div>
+              <div className="card-subtitle">Hourly heart rate (band = min–max) and HRV (dashed), over your QoL ratings. Levodopa doses as white dashed lines, other medications as faint grey; tests as dots with their 1–5 score: tremor pink, tapping blue, gait green, balance amber. Workouts as green bands with their heart rate.</div>
             </div>
           </div>
           {err && <div className="card-subtitle">Couldn't load ({err}).</div>}
@@ -2037,7 +2067,7 @@
           {data && stats.length > 0 && <div style={{ fontSize: 10, color: "#64748b", marginTop: 6 }}>Arrows compare with the previous day (green = better, red = worse, for that metric's direction). Watch gait totals and step counts arrive the next morning, so they're hidden until then; today's steps show Oura's running count.</div>}
           {data && data.workouts.length > 0 && (
             <div className="med-list" style={{ marginTop: 8 }}>
-              Workouts: {data.workouts.map((w) => `${w.name || "workout"} ${w.minutes ? Math.round(w.minutes) + " min" : ""}`).join(", ")}
+              Workouts: {data.workouts.map((w) => `${w.name || "workout"} ${w.minutes ? Math.round(w.minutes) + " min" : ""}${w.avg_hr ? ` · avg ${w.avg_hr} bpm` : ""}${w.vigorous_min ? ` · ${w.vigorous_min} min vigorous` : ""}`).join(", ")}
             </div>
           )}
         </div>
@@ -2105,6 +2135,16 @@
         ["cronometer/b12", "Vitamin B12 (µg)", "#f9a8d4", 1],
         ["derived/first_meal_hour", "First meal (h)", "#fcd34d", 1],
         ["derived/last_meal_hour", "Last meal (h)", "#fde68a", 1],
+      ],
+      exercise: [
+        ["derived/workout_vigorous", "Vigorous minutes", "#22c55e", 0],
+        ["derived/workout_moderate", "Moderate minutes", "#86efac", 0],
+        ["derived/workout_minutes", "Workout minutes", "#4ade80", 0],
+        ["derived/vigorous_7d", "Vigorous min, last 7 days", "#16a34a", 0],
+        ["derived/workout_hr_avg", "Workout avg HR (bpm)", "#f87171", 0],
+        ["derived/workout_hr_max", "Workout max HR (bpm)", "#ef4444", 0],
+        ["derived/workout_kcal", "Workout kcal", "#fbbf24", 0],
+        ["derived/workout_start_hour", "Workout start (h)", "#fde68a", 1],
       ],
     };
     const VITALS = Object.values(VITALS_GROUPS).flat();
@@ -2178,29 +2218,96 @@
       return <VitalsTrendsCard metrics={list} subtitle="Times logged per day (PDayMinder) or amount per day (Cronometer). Gaps are days you didn't log it." />;
     }
 
+    // Weekly minutes by intensity against the SPARX dose (4 × 30 min at 80–85 % HRmax ≈ 120 vigorous min/week), with the
+    // last 14 days and the latest sessions. Zones come from the exercise profile (Settings › Profile › Exercise).
+    function zoneNote(prof) {
+      if (!prof) return "";
+      return `Vigorous = ≥${prof.vigorousBpm} bpm (${prof.vigorousPct} % of heart-rate reserve ≈ 80 % of HRmax ${prof.hrMax}, ${prof.hrMaxSource}; resting ${prof.hrRest}). Moderate = ${prof.moderateBpm}–${prof.vigorousBpm - 1} bpm.`;
+    }
     function WorkoutsCard() {
-      const [rows, err] = useJson("/api/workouts?days=14", []);
+      const [st, err] = useJson("/api/workouts/stats?weeks=8", []);
+      const [list] = useJson("/api/workouts?days=28", []);
+      if (err) return <div className="card"><div className="card-subtitle">Couldn't load.</div></div>;
+      if (!st) return <div className="card"><div className="card-subtitle">Loading…</div></div>;
+      const prof = st.profile, target = prof.weeklyVigorousMin || 120, mvpaT = prof.weeklyMvpaMin || 150;
+      const firstIdx = st.weeks.findIndex((w) => w.sessions > 0);
+      const weeks = st.weeks.slice(Math.max(0, Math.min(firstIdx < 0 ? 0 : firstIdx - 1, st.weeks.length - 4)));
+      if (!weeks.some((w) => w.sessions)) return <div className="card"><div className="card-title">Workouts</div><div className="card-subtitle">No workouts synced yet. Workouts recorded on the Watch (or by ErgData, Strava…) arrive through Health Auto Export.</div></div>;
+      const W = 600, H = 170, padL = 30, padR = 10, padT = 14, padB = 24;
+      const maxV = Math.max(target, mvpaT, ...weeks.map((w) => w.vigorous + w.moderate + Math.max(0, w.minutes - w.vigorous - w.moderate))) * 1.08;
+      const bw = (W - padL - padR) / weeks.length, y = (v) => padT + (H - padT - padB) * (1 - v / maxV);
+      const fmtWk = (d) => new Date(d + "T12:00:00").toLocaleDateString(undefined, { month: "short", day: "numeric" });
+      const l14 = st.last14 || [];
+      const maxD = Math.max(30, ...l14.map((d) => d.workout_minutes));
       return (
         <div className="card">
-          <div className="card-header">
-            <div>
-              <div className="card-title">Workouts (14 days)</div>
-              <div className="card-subtitle">From the Watch via Health Auto Export.</div>
+          <div className="card-header"><div><div className="card-title">Workouts by intensity</div><div className="card-subtitle">Minutes per week: <span style={{ color: "#22c55e" }}>■</span> vigorous, <span style={{ color: "#86efac" }}>■</span> moderate, <span style={{ color: "#475569" }}>■</span> easier. Dashed lines: {target} vigorous min/week (the SPARX dose) and {mvpaT} min/week moderate-plus-vigorous (guideline). {zoneNote(prof)}</div></div></div>
+          <svg viewBox={`0 0 ${W} ${H}`} style={{ width: "100%", height: H, display: "block" }}>
+            {[target, mvpaT].map((t, i) => <g key={i}><line x1={padL} x2={W - padR} y1={y(t)} y2={y(t)} stroke={i ? "#64748b" : "#22c55e"} strokeDasharray="4 3" opacity="0.7" /><text x={padL - 3} y={y(t) + 3} fontSize="9" fill={i ? "#94a3b8" : "#22c55e"} textAnchor="end">{t}</text></g>)}
+            {weeks.map((w, i) => {
+              const x0 = padL + i * bw + bw * 0.15, wd = bw * 0.7; const easy = Math.max(0, w.minutes - w.vigorous - w.moderate);
+              const cur = i === weeks.length - 1;
+              return (
+                <g key={w.week} opacity={cur ? 1 : 0.85}>
+                  {easy > 0 && <rect x={x0} y={y(w.vigorous + w.moderate + easy)} width={wd} height={y(0) - y(easy)} fill="#475569" />}
+                  {w.moderate > 0 && <rect x={x0} y={y(w.vigorous + w.moderate)} width={wd} height={y(0) - y(w.moderate)} fill="#86efac" />}
+                  {w.vigorous > 0 && <rect x={x0} y={y(w.vigorous)} width={wd} height={y(0) - y(w.vigorous)} fill="#22c55e" />}
+                  {cur && <rect x={x0 - 2} y={padT} width={wd + 4} height={H - padT - padB} fill="none" stroke="#334155" strokeDasharray="2 2" />}
+                  {w.minutes > 0 && <text x={x0 + wd / 2} y={y(w.minutes) - 3} fontSize="9" fill="#e2e8f0" textAnchor="middle">{Math.round(w.vigorous)}</text>}
+                  <text x={x0 + wd / 2} y={H - 8} fontSize="9" fill="#64748b" textAnchor="middle">{cur ? "this wk" : fmtWk(w.week)}</text>
+                  <title>Week of {fmtWk(w.week)}: {w.sessions} session{w.sessions === 1 ? "" : "s"}, {Math.round(w.minutes)} min, {Math.round(w.vigorous)} vigorous, {Math.round(w.moderate)} moderate</title>
+                </g>
+              );
+            })}
+          </svg>
+          {l14.length > 0 && (
+            <div style={{ marginTop: 8 }}>
+              <div style={{ fontSize: 11, color: "#94a3b8" }}>Last 14 days (minutes per day; green = vigorous share)</div>
+              <svg viewBox="0 0 600 46" style={{ width: "100%", height: 46, display: "block" }}>
+                {l14.map((d, i) => { const x0 = 2 + i * (596 / 14), wd = 596 / 14 - 4; const h = (m) => (m / maxD) * 30;
+                  return <g key={d.day}><rect x={x0} y={32 - h(d.workout_minutes)} width={wd} height={h(d.workout_minutes)} fill="#475569" /><rect x={x0} y={32 - h(d.workout_vigorous)} width={wd} height={h(d.workout_vigorous)} fill="#22c55e" />
+                    <text x={x0 + wd / 2} y={43} fontSize="8" fill="#64748b" textAnchor="middle">{new Date(d.day + "T12:00:00").toLocaleDateString(undefined, { weekday: "narrow" })}</text><title>{d.day}: {d.workout_minutes} min, {d.workout_vigorous} vigorous{d.workout_hr_avg ? `, avg ${d.workout_hr_avg} bpm` : ""}</title></g>; })}
+              </svg>
             </div>
+          )}
+          {list && list.workouts && list.workouts.slice(0, 6).map((w, i) => (
+            <div key={i} className="med-list" style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "flex-start" }}>
+              <span style={{ textAlign: "left" }}><strong>{w.name}</strong><div style={{ fontSize: 11, color: "#94a3b8" }}>{new Date(w.start).toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" })} {fmtEventTime(w.start)}</div></span>
+              <span style={{ textAlign: "right", flexShrink: 0 }}>{Math.round(w.minutes)} min{w.vigorous_min ? <span style={{ color: "#22c55e" }}> · {w.vigorous_min} vigorous</span> : ""}<div style={{ fontSize: 11, color: "#94a3b8" }}>{w.avg_hr ? `${w.avg_hr}/${w.max_hr} bpm` : ""}{w.kcal ? ` · ${w.kcal} kcal` : ""}{w.distance ? ` · ${w.distance} ${w.distance_units || ""}` : ""}</div></span>
+            </div>
+          ))}
+        </div>
+      );
+    }
+    // Stats: this week against the therapeutic dose, with 4-week context.
+    function WorkoutStatsCard() {
+      const [st] = useJson("/api/workouts/stats?weeks=8", []);
+      if (!st) return null;
+      const prof = st.profile, cur = st.current || {}, a4 = st.avg4 || {};
+      const target = prof.weeklyVigorousMin || 120, mvpaT = prof.weeklyMvpaMin || 150, sessT = prof.sessionsPerWeek || 4;
+      const tile = (label, value, goal, unit, color, sub) => {
+        const pct = goal ? Math.min(1, (value || 0) / goal) : 0;
+        return (
+          <div style={{ background: "#0f172a", borderRadius: 8, padding: "8px 10px", borderLeft: `3px solid ${color}` }}>
+            <div style={{ fontSize: 11, color: "#94a3b8" }}>{label}</div>
+            <div style={{ fontSize: 16, fontWeight: 600 }}>{value == null ? "–" : Math.round(value)}{unit} <span style={{ fontSize: 11, fontWeight: 400, color: "#94a3b8" }}>{goal ? `of ${goal}${unit}` : ""}</span></div>
+            {goal ? <div style={{ height: 4, background: "#1e293b", borderRadius: 2, marginTop: 4 }}><div style={{ width: `${pct * 100}%`, height: 4, background: color, borderRadius: 2 }} /></div> : null}
+            {sub && <div style={{ fontSize: 10, color: "#64748b", marginTop: 3 }}>{sub}</div>}
           </div>
-          {err && <div className="card-subtitle">Couldn't load.</div>}
-          {rows && rows.length === 0 && <div className="card-subtitle">No workouts synced yet.</div>}
-          {rows && rows.map((w, i) => {
-            const r = w.raw || {};
-            const kcal = r.activeEnergyBurned?.qty ?? r.totalEnergy?.qty ?? r.activeEnergy?.qty;
-            const dist = r.distance?.qty;
-            return (
-              <div key={i} className="med-list" style={{ display: "flex", justifyContent: "space-between" }}>
-                <span><strong>{r.name || "Workout"}</strong> · {new Date(w.ts).toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" })}</span>
-                <span style={{ color: "#94a3b8" }}>{w.minutes ? Math.round(w.minutes) + " min" : ""}{kcal ? ` · ${Math.round(kcal)} kcal` : ""}{dist ? ` · ${Number(dist).toFixed(1)} ${r.distance?.units || ""}` : ""}</span>
-              </div>
-            );
-          })}
+        );
+      };
+      const f = (v) => (v == null ? "–" : Math.round(v));
+      return (
+        <div className="card">
+          <div className="card-header"><div><div className="card-title">Exercise dose</div><div className="card-subtitle">This week (Mon–Sun, day {cur.daysElapsed || "?"} of 7) against the dose that slowed motor progression in SPARX: 4 sessions of 30 minutes at 80–85 % of HRmax. {zoneNote(prof)}</div></div></div>
+          {!st.sessions90 && <div className="card-subtitle">No workouts in the last 90 days yet.</div>}
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 8 }}>
+            {tile("Vigorous minutes this week", cur.vigorous, target, "", "#22c55e", `4-week avg ${f(a4.vigorous)} · ≥${prof.vigorousBpm} bpm`)}
+            {tile("Moderate + vigorous this week", (cur.vigorous || 0) + (cur.moderate || 0), mvpaT, "", "#86efac", `4-week avg ${f((a4.vigorous || 0) + (a4.moderate || 0))} · ≥${prof.moderateBpm} bpm`)}
+            {tile("Sessions this week", cur.sessions, sessT, "", "#38bdf8", `4-week avg ${a4.sessions == null ? "–" : a4.sessions.toFixed(1)} · ${st.sessions90} in 90 days`)}
+            {tile("Longest vigorous session (90 d)", st.longest_vigorous_session, 30, " min", "#f59e0b", "SPARX sessions were 30 min in zone")}
+          </div>
+          <div style={{ fontSize: 10, color: "#64748b", marginTop: 8 }}>Schenkman et al. 2018 (SPARX, JAMA Neurol): 6 months at 80–85 % HRmax, 4×/week, held UPDRS-III steady while 60–65 % did not. Van der Kolk et al. 2019 (Park-in-Shape): 30–45 min home cycling 3×/week at 50–80 % HRR. Zones use heart-rate reserve (Karvonen); the app's HRmax comes from your highest recorded workout heart rate, else 208 − 0.7 × age, and can be set under Settings › Profile › Exercise.</div>
         </div>
       );
     }
@@ -4366,6 +4473,7 @@
       ["Motor measures", [["motor/tremor_amp_cm", "Tremor amplitude (cm)", 2, -1], ["motor/tap_rate", "Taps / s", 2, 1], ["motor/tap_cv", "Tapping rhythm CV", 2, -1], ["motor/gait_cadence", "Cadence (steps/min)", 0, 1], ["motor/gait_step_cv", "Step variability (%)", 1, -1], ["motor/gait_stride_regularity", "Stride regularity", 2, 1], ["motor/gait_asymmetry", "Gait asymmetry", 2, -1], ["motor/balance_sway_rms", "Sway RMS (m/s²)", 3, -1], ["motor/balance_jerk", "Sway jerk (m/s³)", 2, -1], ["motor/balance_path", "Sway path (/s)", 2, -1], ["motor/spiral_error_pct", "Spiral deviation (%)", 1, -1], ["motor/spiral_tremor_share", "Spiral tremor share", 2, -1]]],
       ["Voice measures", [["motor/ddk_rate", "Pa-ta-ka syll / s", 2, 1], ["motor/ddk_cv", "Pa-ta-ka rhythm CV", 2, -1], ["motor/voice_hnr", "Voice HNR (dB)", 1, 1], ["motor/voice_jitter_pct", "Voice jitter (%)", 2, -1], ["motor/voice_ppe", "Voice PPE", 3, -1], ["motor/voice_int_slope", "Voice loudness slope (dB/s)", 2, 1], ["motor/read_f0_sd_st", "Reading pitch var. (st)", 2, 1], ["motor/read_rate", "Reading rate (/s)", 2, 1], ["motor/voice_mpt", "Max phonation (s)", 1, 1]]],
       ["Oura", [["oura/sleep_score", "Sleep score", 0, 1], ["oura/readiness_score", "Readiness", 0, 1], ["oura/total_sleep_h", "Sleep (h)", 1, 1], ["oura/deep_h", "Deep (h)", 1, 1], ["oura/avg_hrv", "Night HRV (ms)", 0, 1], ["oura/lowest_hr", "Lowest HR", 0, -1], ["oura/temperature_deviation", "Temp dev (°C)", 2, 0]]],
+      ["Exercise (per day)", [["derived/workout_vigorous", "Vigorous minutes", 0, 1], ["derived/workout_moderate", "Moderate minutes", 0, 1], ["derived/workout_minutes", "Workout minutes", 0, 1], ["derived/vigorous_7d", "Vigorous min, trailing 7 days", 0, 1], ["derived/workouts_count", "Sessions", 1, 1], ["derived/workout_hr_avg", "Workout avg HR", 0, 0], ["derived/workout_hr_max", "Workout max HR", 0, 0], ["derived/workout_kcal", "Workout kcal", 0, 0]]],
       ["Location (minutes / day)", [["derived/minutes_home", "Home", 0, 0], ["derived/minutes_work", "Work", 0, 0], ["derived/minutes_driving", "Driving", 0, -1], ["derived/minutes_out", "Out", 0, 0]]],
       ["Symptom events", [["derived/events_count", "Events / day", 1, -1], ["derived/event_minutes", "Minutes in events / day", 0, -1], ["derived/events_dystonia", "Dystonia / day", 1, -1], ["derived/events_dyskinesia", "Involuntary movement / day", 1, -1], ["derived/events_off", "Off episodes / day", 1, -1], ["derived/events_freezing", "Freezing / day", 1, -1]]],
       ["Nutrition (Cronometer)", [["cronometer/energy", "Calories (kcal)", 0, 0], ["cronometer/protein", "Protein (g)", 0, 0], ["derived/protein_near_dose", "Protein near levodopa (g)", 0, -1], ["cronometer/carbs", "Carbs (g)", 0, 0], ["cronometer/fat", "Fat (g)", 0, 0], ["cronometer/fiber", "Fiber (g)", 0, 1], ["cronometer/sugars", "Sugars (g)", 0, -1], ["cronometer/caffeine", "Caffeine (mg)", 0, 0], ["cronometer/water", "Water (g)", 0, 1], ["cronometer/omega_3", "Omega-3 (g)", 1, 1], ["cronometer/sodium", "Sodium (mg)", 0, -1], ["cronometer/magnesium", "Magnesium (mg)", 0, 1], ["cronometer/vitamin_d", "Vitamin D", 0, 1], ["cronometer/b12", "Vitamin B12 (µg)", 1, 1], ["derived/first_meal_hour", "First meal (h)", 1, 0], ["derived/last_meal_hour", "Last meal (h)", 1, 0]]],
@@ -4518,6 +4626,7 @@
       const [eventModal, setEventModal] = useState({ open: false, initial: null });
       const [recentEvents, setRecentEvents] = useState([]);
       const [recentContext, setRecentContext] = useState([]);
+      const [recentWorkouts, setRecentWorkouts] = useState([]);
       const [session, setSession] = useState(null); // {phase, tests, index, id}
       const [sessionsTick, setSessionsTick] = useState(0);
       const [sessions] = useJson("/api/sessions?days=14", [sessionsTick]);
@@ -4560,6 +4669,7 @@
       const dateKey = toDateKey(selectedDate);
       const dayEventList = useMemo(() => recentEvents.filter((e) => eventSpanOnDay(e, dateKey)), [recentEvents, dateKey]);
       const dayContext = useMemo(() => recentContext.filter((c) => contextSpanOnDay(c, dateKey)), [recentContext, dateKey]);
+      const dayWorkouts = useMemo(() => recentWorkouts.filter((w) => contextSpanOnDay(w, dateKey)), [recentWorkouts, dateKey]);
 
       useEffect(() => {
         setDays((prev) => {
@@ -4603,6 +4713,7 @@
             }
             if (Array.isArray(payload.events)) setRecentEvents(payload.events);
             if (Array.isArray(payload.context)) setRecentContext(payload.context);
+            if (Array.isArray(payload.workouts)) setRecentWorkouts(payload.workouts);
             // Mark the post-load state as clean on the next render.
             setTimeout(() => { loadedRef.current = true; dirtyDaysRef.current = new Set(); settingsDirtyRef.current = false; }, 0);
           } catch {
@@ -4758,13 +4869,14 @@
               </div>
             </div>
             <div className="ring-container">
-              <DayRing day={day} onSegmentClick={handleSegmentClick} settings={settings} events={dayEventList} context={dayContext} />
+              <DayRing day={day} onSegmentClick={handleSegmentClick} settings={settings} events={dayEventList} context={dayContext} workouts={dayWorkouts} />
               <div className="ring-legend">
                 <span><i style={{ background: PLACE_COLORS.home }} />Home</span>
                 <span><i style={{ background: PLACE_COLORS.work }} />Work</span>
                 <span><i style={{ background: "#4b5563" }} />Sleep</span>
                 <span><i style={{ background: "#1f2933", boxShadow: "inset 0 0 0 1px #334155" }} />No data</span>
                 <span><i style={{ background: "#ef4444", height: 4, borderRadius: 2 }} />Event</span>
+                <span><i style={{ background: "#22c55e", height: 4, borderRadius: 2 }} />Workout</span>
               </div>
             </div>
             <div className="controls-row">
@@ -4796,6 +4908,11 @@
             </div>
             <div className="med-list" style={{ marginTop: 6 }}><span>Events:</span> {dayEventList.length ? "" : "none logged (dystonia, involuntary movement, freezing, off episodes, falls, pain)"}</div>
             <DayEventsList events={dayEventList} onEdit={(e) => setEventModal({ open: true, initial: e })} onDeleted={refreshEvents} />
+            {dayWorkouts.length > 0 && <div className="med-list" style={{ marginTop: 6 }}><span>Workouts:</span> {dayWorkouts.map((w, i) => (
+              <div key={i} style={{ display: "flex", gap: 8, alignItems: "flex-start", background: "#0f172a", borderRadius: 8, padding: "6px 10px", marginTop: 6, borderLeft: "4px solid #22c55e" }}>
+                <span><strong>{w.name}</strong> {fmtEventTime(w.start)}–{fmtEventTime(w.end)}</span>
+                <span style={{ color: "#94a3b8", marginLeft: "auto", textAlign: "right" }}>{Math.round(w.minutes)} min{w.avg_hr ? ` · avg ${w.avg_hr} bpm` : ""}{w.vigorous_min ? ` · ${w.vigorous_min} min vigorous` : ""}</span>
+              </div>))}</div>}
           </div>
           </Section>
           <Section title="Recent days" subtitle="A week at a glance; tap any block to rate it." storageKey="qol-summary">
@@ -4863,13 +4980,14 @@
               <Section title="Supplement trends" subtitle="One line per supplement found in Cronometer." storageKey="tr-supps" defaultOpen={false}>
                 <SupplementTrendsCard settings={settings} />
               </Section>
-              <Section title="Workouts" storageKey="tr-workouts" defaultOpen={false}>
+              <Section title="Workouts" subtitle="Minutes per week by intensity against the SPARX dose, recent sessions, and daily exercise metrics." storageKey="tr-workouts" defaultOpen={false}>
                 <WorkoutsCard />
+                <VitalsTrendsCard metrics={VITALS_GROUPS.exercise} />
               </Section>
             </>
           )}
 
-          {tab === "stats" && <><StatusCard /><Section title="Location" subtitle="Home, work, driving, out: hours and QoL in each." storageKey="st-location" defaultOpen={false}><LocationStatsCard /></Section><StatsTab /></>}
+          {tab === "stats" && <><StatusCard /><Section title="Exercise" subtitle="Vigorous minutes and sessions this week against the therapeutic dose." storageKey="st-exercise" defaultOpen={false}><WorkoutStatsCard /></Section><Section title="Location" subtitle="Home, work, driving, out: hours and QoL in each." storageKey="st-location" defaultOpen={false}><LocationStatsCard /></Section><StatsTab /></>}
 
           {tab === "settings" && (
             <>
