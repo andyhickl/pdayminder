@@ -4967,8 +4967,8 @@
                 <span><strong>{w.name}</strong> {fmtEventTime(w.start)}–{fmtEventTime(w.end)}</span>
                 <span style={{ color: "#94a3b8", marginLeft: "auto", textAlign: "right" }}>{Math.round(w.minutes)} min{w.avg_hr ? ` · avg ${w.avg_hr} bpm` : ""}{w.vigorous_min ? ` · ${w.vigorous_min} min vigorous` : ""}</span>
               </div>))}</div>}
-            <DayVitalsCard embedded dateKey={dateKey} days={days} />
             <QoLSummaryCard embedded days={days} onCellClick={handleSummaryCellClick} onSelectDay={(k) => { const [y, m, d] = k.split("-").map(Number); handleCalendarSelect(new Date(y, m - 1, d)); }} selectedKey={dateKey} events={recentEvents} />
+            <DayVitalsCard embedded dateKey={dateKey} days={days} />
           </div>
           </Section>
           <Section title="Run tests" subtitle="Today's pre- and post-dose batteries." storageKey="qol-tests">
