@@ -1570,6 +1570,27 @@
         </div>
       );
     }
+    // Home-tab banner when a battery is open right now; tapping starts it. Hidden when neither battery is available.
+    function TestsDueBanner({ days, settings, sessions, onStart }) {
+      const [, tick] = useState(0);
+      useEffect(() => { const t = setInterval(() => tick((x) => x + 1), 30000); return () => clearInterval(t); }, []);
+      const now = new Date(), todayKey = toDateKey(now);
+      const w = batteryWindows(days[todayKey], settings, now);
+      const done = { pre: (sessions || []).some((s) => s.day === todayKey && s.phase === "pre"), post: (sessions || []).some((s) => s.day === todayKey && s.phase === "post") };
+      const phase = w.post && !done.post ? "post" : w.pre && !done.pre ? "pre" : null;
+      if (!phase) return null;
+      const tests = BATTERY_BY_WEEKDAY[now.getDay()];
+      const detail = phase === "post" ? `${w.since} min after the ${minutesToTimeString(w.last)} dose · closes in ${POST_MAX - w.since} min` : w.since == null ? "before your first dose" : `${Math.floor(w.since / 60)} h ${w.since % 60} min since the ${minutesToTimeString(w.last)} dose`;
+      return (
+        <div className="card battery-active" role="button" onClick={() => onStart(phase, tests)} style={{ cursor: "pointer", padding: "10px 14px", display: "flex", alignItems: "center", gap: 12 }}>
+          <div style={{ flex: 1 }}>
+            <div style={{ fontWeight: 600 }}>{phase === "post" ? "Post-dose" : "Pre-dose"} battery is open</div>
+            <div style={{ fontSize: 12, color: "#94a3b8" }}>{detail} · {tests.map((t) => TEST_META[t][0]).join(" → ")}, about four minutes</div>
+          </div>
+          <div style={{ color: "#fbbf24", fontSize: 20 }}>›</div>
+        </div>
+      );
+    }
     // Banner on the Tests tab while a battery is running.
     function BatteryBanner({ session, onCancel }) {
       if (!session) return null;
@@ -4818,6 +4839,7 @@
 
           {tab === "qol" && (
             <>
+          <TestsDueBanner days={days} settings={settings} sessions={sessions} onStart={startBattery} />
           <Section title="Today" subtitle="Ring, log, the day's vitals, and the week; one date for all of it." storageKey="qol-ring">
           <div className="card">
             <div className="day-nav" style={{ marginTop: 0 }}>
