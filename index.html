@@ -2022,7 +2022,7 @@
       ["Fiber", (x) => (x.nutrition || {}).fiber ?? x.daily.fiber ?? null, 0, " g", 1],
       ["Caffeine", (x) => (x.nutrition || {}).caffeine ?? x.daily.caffeine ?? null, 0, " mg", 0],
     ];
-    function DayVitalsCard({ dateKey, days }) {
+    function DayVitalsCard({ dateKey, days, embedded }) {
       // re-fetch when the day's local QoL/meds change too, so bands and dose lines stay in sync
       const localDay = days[dateKey];
       const sig = localDay ? JSON.stringify([localDay.segments, localDay.meds]) : "";
@@ -2041,10 +2041,10 @@
       }).filter(Boolean) : [];
       const hasHourly = data && ((data.hourly.heart_rate_avg || []).length > 0 || (data.workouts || []).length > 0);
       return (
-        <div className="card">
+        <div className={embedded ? "" : "card"} style={embedded ? { marginTop: 12, paddingTop: 10, borderTop: "1px solid #1e293b" } : undefined}>
           <div className="card-header">
             <div>
-              <div className="card-title">Day vitals</div>
+              <div className="card-title" style={embedded ? { fontSize: 14 } : undefined}>Day vitals</div>
               <div className="card-subtitle">Hourly heart rate (band = min–max) and HRV (dashed), over your QoL ratings. Levodopa doses as white dashed lines, other medications as faint grey; tests as dots with their 1–5 score: tremor pink, tapping blue, gait green, balance amber. Workouts as green bands with their heart rate.</div>
             </div>
           </div>
@@ -4818,7 +4818,7 @@
 
           {tab === "qol" && (
             <>
-          <Section title="Today" subtitle="Rate the ring, log what happens, pick a day from the week below." storageKey="qol-ring">
+          <Section title="Today" subtitle="Ring, log, the day's vitals, and the week; one date for all of it." storageKey="qol-ring">
           <div className="card">
             <div className="day-nav" style={{ marginTop: 0 }}>
               <button className="day-nav-btn" type="button" onClick={() => goToOffsetDay(-1)} aria-label="Previous day"><span>←</span></button>
@@ -4891,11 +4891,9 @@
                 <span><strong>{w.name}</strong> {fmtEventTime(w.start)}–{fmtEventTime(w.end)}</span>
                 <span style={{ color: "#94a3b8", marginLeft: "auto", textAlign: "right" }}>{Math.round(w.minutes)} min{w.avg_hr ? ` · avg ${w.avg_hr} bpm` : ""}{w.vigorous_min ? ` · ${w.vigorous_min} min vigorous` : ""}</span>
               </div>))}</div>}
+            <DayVitalsCard embedded dateKey={dateKey} days={days} />
             <QoLSummaryCard embedded days={days} onCellClick={handleSummaryCellClick} onSelectDay={(k) => { const [y, m, d] = k.split("-").map(Number); handleCalendarSelect(new Date(y, m - 1, d)); }} selectedKey={dateKey} events={recentEvents} />
           </div>
-          </Section>
-          <Section title="Day vitals" subtitle="Hourly vitals over the selected day's QoL, doses, events and workouts." storageKey="qol-dayvitals">
-            <DayVitalsCard dateKey={dateKey} days={days} />
           </Section>
           <Section title="Run tests" subtitle="Today's pre- and post-dose batteries." storageKey="qol-tests">
             <RunTestsCard day={day} settings={settings} sessions={sessions} onStart={startBattery} />
@@ -4923,11 +4921,6 @@
 
           {tab === "trends" && (
             <>
-              <div className="day-nav" style={{ marginTop: 0 }}>
-                <button className="day-nav-btn" type="button" onClick={() => goToOffsetDay(-1)}><span>←</span> <span>Prev</span></button>
-                <div className="day-nav-date" style={{ textDecoration: "none", cursor: "default" }}>{formatPrettyDate(selectedDate)}</div>
-                <button className="day-nav-btn" type="button" onClick={() => goToOffsetDay(1)}><span>Next</span> <span>→</span></button>
-              </div>
               <Section title="QoL correlations" subtitle="Daily QoL against doses and any synced metric, with lag." storageKey="tr-corr">
                 <TrendsCard settings={settings} />
               </Section>
