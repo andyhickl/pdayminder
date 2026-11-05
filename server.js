@@ -643,7 +643,9 @@ app.get("/api/sessions", requireAuth, async (req, res) => {
 
 // ---------- Hypotheses (engine in hypotheses.js) ----------
 const hyp = require("./hypotheses")({ pool, dailySeries, dopaDrugs, TZ, localDayOf });
+const insights = require("./insights")({ pool, hyp, TZ, localDayOf, exerciseProfile: (uid) => exerciseProfile(uid), workoutDays: (uid, d) => workoutDays(uid, d), dopaDrugs });
 hyp.routes(app, requireAuth);
+insights.routes(app, requireAuth);
 
 // ---------- Location context (home / work / driving / out) ----------
 // Points come from Overland (GeoJSON batches) or any logger; segments are rebuilt per local day from the points,
@@ -1459,6 +1461,7 @@ app.use((err, req, res, next) => {
   await repairCumulative();
   await migrateScores();
   await hyp.ensureTables();
+  await insights.ensureTables();
   // Intake metrics arrive as hourly sums; drop stray per-sample rows (from an automation run without aggregation)
   // that sit inside an hour which also has an hour-aligned row, so the day total isn't counted twice.
   await pool.query(`delete from observations o where o.source = 'hae' and o.metric ~ $1

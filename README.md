@@ -63,9 +63,22 @@ non-zero hourly `dietary_energy`). Stats has a Nutrition group; Day vitals shows
 The full Cronometer profile (80+ nutrients, supplements, creatine) needs the Cronometer cron (backlog).
 
 ## Home tab layout
-Today (date nav + QoL ring + log buttons + the week grid, which doubles as the date picker: tap a day label to open
-it; the month picker sits behind the date), Day vitals (hourly HR/HRV over QoL, doses, events, workouts for the
-selected day), Run tests. Hypotheses and Findings live on Trends. Insights card: planned (see docs/BACKLOG.md).
+Battery banner (yellow, when a battery is open; tap to start), Today (date nav + QoL ring + log buttons + Day vitals +
+the week grid, which doubles as the date picker: tap a day label to open it; the month picker sits behind the date),
+Run tests, Insights. Hypotheses and Findings live on Trends.
+
+## Insights (insights.js, /api/insights)
+Home-tab card: observation + action + why (with the citation) + links into the data. Generators over the hypotheses
+feature table (`hyp.snapshot`) plus a few direct queries: goal gaps (SPARX vigorous minutes this week, protein near
+doses, sleep, dose gaps, battery adherence, fiber); today's conflicts (protein in the hour after a dose, caffeine
+after 14:00, a long gap with doses still expected); emerging patterns (active hypotheses with posterior ≥ 0.8 and
+≥ 4 days per arm, worded as early); findings and historical leads restated as advice; notes (best day in 30 and what
+differed by robust z-score, workout and battery streaks, personal bests, slow-measure drift over 2 vs 4 weeks,
+week-over-week QoL). Each candidate has a stable key. Table `insights` keeps status (`shown` → `cooled` after 7 days
+or on ↻, `dismissed` for 30 days on ✕, `expired` when no longer generated), vote, pin. Ranking = generator base
+score + a tiny online logistic model over kind/family/strength trained by 👍/✕ (`settings.insight_weights`) + a vote
+bonus; fill is diverse (one per family, two per kind). Count 1–8 in `settings.insight_count`. Routes: GET
+`/api/insights`, POST `/api/insights/{vote,pin,refresh,count}`.
 
 ## Home tab: batteries and hypotheses
 The first tab is Home: date, ring + logging, **Run tests**, **Hypotheses**, recent days. A battery is the day's four

@@ -1610,6 +1610,56 @@
     }
     // ---------- Hypotheses ----------
     const FK_LABEL = (k) => ({ sleep_h: "sleep", deep_h: "deep sleep", rem_h: "REM sleep", sleep_score: "Oura sleep score", latency_min: "time to fall asleep", hrv: "night HRV", lowest_hr: "lowest night HR", readiness: "readiness", temp_dev: "temp deviation", steps: "steps", walk_speed: "walking speed", dbl_support: "double support", asymmetry: "asymmetry", resting_hr: "resting HR", energy: "calories", protein: "protein", protein_near_dose: "protein near dose", carbs: "carbs", fiber: "fiber", caffeine: "caffeine", water: "water", first_meal: "first meal", last_meal: "last meal", supps: "supplements", doses: "doses", first_dose_h: "first dose", dose_gap_max: "longest dose gap", min_home: "min at home", min_work: "min at work", min_driving: "min driving", events: "events", event_min: "event minutes", dystonia: "dystonia", qol: "QoL", qol_am: "morning QoL", qol_pm: "afternoon QoL", qol_eve: "evening QoL", tremor: "tremor score", tap: "tapping score", tap_rate: "tap rate", gait: "gait score", balance: "balance score", ddk: "pa-ta-ka rate", tap_delta: "tapping delta", tremor_delta: "tremor delta", batteries: "batteries" }[k] || k);
+    // Insights: observation + action + why, from /api/insights. Vote, pin, refresh; count via +/−.
+    const INSIGHT_KIND = { today: ["Today", "#f59e0b"], goal: ["Goal", "#38bdf8"], pattern: ["Early pattern", "#a78bfa"], finding: ["Finding", "#a3e635"], note: ["Note", "#94a3b8"] };
+    function InsightsCard() {
+      const [data, setData] = useState(null);
+      const [err, setErr] = useState(null);
+      const [busy, setBusy] = useState(false);
+      const [why, setWhy] = useState({});
+      const load = () => apiFetch("/api/insights").then((r) => (r.ok ? r.json() : Promise.reject(r.status))).then((d) => { setData(d); setErr(null); }).catch((e) => setErr(String(e)));
+      useEffect(() => { load(); }, []);
+      const post = async (path, body) => { setBusy(true); try { const r = await apiFetch(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }); if (r.ok) setData(await r.json()); } finally { setBusy(false); } };
+      const go = (l) => { if (l.day) window.dispatchEvent(new CustomEvent("pdm-goto-day", { detail: l.day })); else window.dispatchEvent(new CustomEvent("pdm-goto", { detail: { tab: l.tab, section: l.section } })); };
+      if (err) return <div className="card"><div className="card-subtitle">Couldn't load insights ({err}).</div></div>;
+      if (!data) return <div className="card"><div className="card-subtitle">Reading your data…</div></div>;
+      return (
+        <div className="card">
+          <div className="card-header" style={{ alignItems: "flex-start" }}>
+            <div><div className="card-title">Insights</div><div className="card-subtitle">What your data suggests you could do next, and what is worth knowing. 👍 keeps the kind coming, ✕ drops it, pin keeps it in place, ↻ swaps it out.</div></div>
+            <div style={{ display: "flex", gap: 4, alignItems: "center", flexShrink: 0 }}>
+              <button type="button" className="pill-btn" style={{ padding: "2px 8px" }} disabled={busy || data.count <= 1} onClick={() => post("/api/insights/count", { count: data.count - 1 })}>−</button>
+              <span style={{ fontSize: 12, color: "#94a3b8" }}>{data.count}</span>
+              <button type="button" className="pill-btn" style={{ padding: "2px 8px" }} disabled={busy || data.count >= 8} onClick={() => post("/api/insights/count", { count: data.count + 1 })}>+</button>
+              <button type="button" className="pill-btn" style={{ padding: "2px 8px" }} disabled={busy} title="Swap all unpinned" onClick={() => post("/api/insights/refresh", {})}>↻</button>
+            </div>
+          </div>
+          {!data.items.length && <div className="card-subtitle">Nothing to say yet ({data.candidates} candidates considered). Insights appear as the goals, today's logs and the hypotheses fill in.</div>}
+          {data.items.map((it) => { const [label, color] = INSIGHT_KIND[it.kind] || ["", "#94a3b8"]; return (
+            <div key={it.id} style={{ background: "#0f172a", borderRadius: 10, padding: "10px 12px", marginTop: 8, borderLeft: `4px solid ${color}`, opacity: busy ? 0.7 : 1 }}>
+              <div style={{ display: "flex", gap: 8, alignItems: "center", fontSize: 11 }}>
+                <span style={{ color, fontWeight: 600 }}>{label}</span>
+                <span style={{ color: "#64748b" }}>{it.strength}</span>
+                {it.pinned && <span style={{ color: "#fbbf24" }}>pinned</span>}
+                <span style={{ marginLeft: "auto", display: "flex", gap: 2 }}>
+                  <button type="button" className="pill-btn" title="Useful" style={{ padding: "1px 7px", color: it.vote > 0 ? "#a3e635" : undefined }} disabled={busy} onClick={() => post("/api/insights/vote", { id: it.id, vote: 1 })}>👍</button>
+                  <button type="button" className="pill-btn" title={it.pinned ? "Unpin" : "Pin"} style={{ padding: "1px 7px", color: it.pinned ? "#fbbf24" : undefined }} disabled={busy} onClick={() => post("/api/insights/pin", { id: it.id, pinned: !it.pinned })}>📌</button>
+                  <button type="button" className="pill-btn" title="Swap for another" style={{ padding: "1px 7px" }} disabled={busy || it.pinned} onClick={() => post("/api/insights/refresh", { id: it.id })}>↻</button>
+                  <button type="button" className="pill-btn" title="Not useful; don't show this again" style={{ padding: "1px 7px", opacity: it.pinned ? 0.4 : 1 }} disabled={busy || it.pinned} onClick={() => post("/api/insights/vote", { id: it.id, vote: -1 })}>✕</button>
+                </span>
+              </div>
+              <div style={{ marginTop: 4, fontSize: 14 }}>{it.text}</div>
+              {it.action && <div style={{ marginTop: 4, fontSize: 13, color: "#e2e8f0" }}><span style={{ color }}>→</span> {it.action}</div>}
+              <div style={{ marginTop: 6, display: "flex", gap: 10, flexWrap: "wrap", fontSize: 11 }}>
+                {it.why && <a href="#" onClick={(e) => { e.preventDefault(); setWhy((w) => ({ ...w, [it.id]: !w[it.id] })); }} style={{ color: "#94a3b8" }}>{why[it.id] ? "hide why" : "why"}</a>}
+                {(it.links || []).map((l, i) => <a key={i} href="#" onClick={(e) => { e.preventDefault(); go(l); }} style={{ color: "#38bdf8", textDecoration: "none" }}>{l.label} ›</a>)}
+              </div>
+              {why[it.id] && <div style={{ marginTop: 4, fontSize: 11, color: "#94a3b8", lineHeight: 1.4 }}>{it.why}</div>}
+            </div>
+          ); })}
+        </div>
+      );
+    }
     function HypothesesCard({ view = "hypotheses" }) {
       const [data, setData] = useState(null);
       const [busy, setBusy] = useState(null);
@@ -4477,7 +4527,7 @@
       useEffect(() => { const h = (e) => { if (e.detail === storageKey) setOpen(true); }; window.addEventListener("pdm-open-section", h); return () => window.removeEventListener("pdm-open-section", h); }, [storageKey]);
       useEffect(() => { try { localStorage.setItem("pdm-sec-" + storageKey, open ? "open" : "closed"); } catch {} }, [open]);
       return (
-        <div className="section">
+        <div className="section" data-section={storageKey}>
           <button type="button" className="section-head" onClick={() => setOpen((v) => !v)} aria-expanded={open}>
             <div>
               <div className="section-title">{title}</div>
@@ -4827,6 +4877,10 @@
 
       const handleCalendarSelect = (d) => setSelectedDate(d);
       useEffect(() => { const h = (e) => { const d = new Date(e.detail + "T12:00:00"); if (!isNaN(d)) { setSelectedDate(d); setTab("qol"); window.scrollTo({ top: 0, behavior: "smooth" }); } }; window.addEventListener("pdm-goto-day", h); return () => window.removeEventListener("pdm-goto-day", h); }, []);
+      // Jump to a tab + section (insight links): switch tab, open the section, scroll to it once it has rendered.
+      useEffect(() => { const h = (e) => { const { tab: t, section } = e.detail || {}; if (t) setTab(t); if (!section) return; window.dispatchEvent(new CustomEvent("pdm-open-section", { detail: section }));
+        let tries = 0; const go = () => { const el = document.querySelector(`[data-section="${section}"]`); if (!el) { if (tries++ < 12) setTimeout(go, 250); return; } window.dispatchEvent(new CustomEvent("pdm-open-section", { detail: section })); window.scrollTo({ top: Math.max(0, el.getBoundingClientRect().top + window.scrollY - 70), behavior: "smooth" }); }; setTimeout(go, 150); };
+        window.addEventListener("pdm-goto", h); return () => window.removeEventListener("pdm-goto", h); }, []);
 
       const medList = normalizeMeds(day.meds);
 
@@ -4919,6 +4973,9 @@
           </Section>
           <Section title="Run tests" subtitle="Today's pre- and post-dose batteries." storageKey="qol-tests">
             <RunTestsCard day={day} settings={settings} sessions={sessions} onStart={startBattery} />
+          </Section>
+          <Section title="Insights" subtitle="Coaching and things worth knowing, from your own data and the literature." storageKey="qol-insights">
+            <InsightsCard />
           </Section>
             </>
           )}

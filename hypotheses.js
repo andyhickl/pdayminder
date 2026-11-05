@@ -377,9 +377,9 @@ module.exports = function init({ pool, dailySeries, dopaDrugs, TZ, localDayOf })
   }
 
   // ---------- routes ----------
-  function routes(app, requireAuth) {
-    app.get("/api/hypotheses", requireAuth, async (req, res) => {
-      const uid = req.user.id; const table = await buildFeatures(uid, 60);
+  // Everything the Hypotheses UI shows, as one object (the insights engine reads the same snapshot).
+  async function snapshot(uid) {
+      const table = await buildFeatures(uid, 60);
       await settle(uid, table);
       await fillActive(uid, table, localDayOf(new Date()));
       const active = await evaluateActive(uid, table);
@@ -395,7 +395,12 @@ module.exports = function init({ pool, dailySeries, dopaDrugs, TZ, localDayOf })
       const refsAll = { med: Object.fromEntries(F.map((f) => [f.key, med(daysAll.map((d) => table[d][f.key]))])) };
       const generatorFindings = leadRows.map((lr) => { const sc = score(lr.spec, table, refsAll, daysAll.slice(-45)); return { id: lr.id, text: describe(lr.spec, refsAll), rationale: rationale(lr.spec), spec: lr.spec, firstSeen: lr.started ? new Date(lr.started).toISOString().slice(0, 10) : null, rateWith: sc.rE, rateWithout: sc.rC, posterior: sc.post, nE: sc.nE, nC: sc.nC, days: sc.perDay.filter((d) => d.verdict !== "na"), weakened: sc.post == null || sc.post < 0.8, xUnit: FK[lr.spec.x].unit, yUnit: FK[lr.spec.y].unit }; });
       const history = (await pool.query("select id, text, status, started, period, vote, reason, updated_at from hypotheses where user_id = $1 and status in ('retired') order by updated_at desc limit 20", [uid])).rows;
-      res.json({ active, findings, generatorFindings, queue: ranked.slice(0, 5).map((r) => ({ id: r.id, text: r.text, coverage: r.coverage, prior: r.prior, hint: r.hint })), history, candidates: ranked.length, features: Object.keys(table).length, count: await wantCount(uid) });
+      return { active, findings, generatorFindings, queue: ranked.slice(0, 5).map((r) => ({ id: r.id, text: r.text, coverage: r.coverage, prior: r.prior, hint: r.hint })), history, candidates: ranked.length, features: Object.keys(table).length, count: await wantCount(uid), table, refs: refsAll };
+  }
+  function routes(app, requireAuth) {
+    app.get("/api/hypotheses", requireAuth, async (req, res) => {
+      const { table, refs, ...out } = await snapshot(req.user.id);
+      res.json(out);
     });
     app.post("/api/hypotheses/pin", requireAuth, async (req, res) => {
       await pool.query("update hypotheses set pinned = $3, updated_at = now() where user_id = $1 and id = $2", [req.user.id, String(req.body.id || ""), Boolean(req.body.pinned)]);
@@ -434,5 +439,5 @@ module.exports = function init({ pool, dailySeries, dopaDrugs, TZ, localDayOf })
     });
   }
 
-  return { routes, buildFeatures, invalidate, ensureTables, F };
+  return { routes, buildFeatures, invalidate, ensureTables, F, FK, snapshot, describe, rationale, med };
 };
