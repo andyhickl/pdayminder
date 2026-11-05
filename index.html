@@ -4551,9 +4551,6 @@
       const scoreColor = (v) => (v == null ? "inherit" : ratingColor(Math.max(1, Math.min(5, Math.round(v)))));
       return (
         <>
-          <div className="card" style={{ padding: "10px 14px" }}>
-            <div className="card-subtitle">Latest value coloured relative to your baseline (mean of days 8–90 ago): <span style={{ color: ratingColor(3) }}>■</span> about usual, <span style={{ color: ratingColor(1) }}>■</span><span style={{ color: ratingColor(2) }}>■</span> worse, <span style={{ color: ratingColor(4) }}>■</span><span style={{ color: ratingColor(5) }}>■</span> better. 1–5 scores and QoL are coloured on their own scale.</div>
-          </div>
           {err && <div className="card"><div className="card-subtitle">Couldn't load stats ({err}).</div></div>}
           {STAT_GROUPS.map(([group, rows]) => {
             const present = rows.filter(([k]) => data && data[k] && data[k].n30 > 0);
@@ -4561,6 +4558,7 @@
             return (
               <Section key={group} title={group} subtitle="Daily values; 7/14/30-day means; min, max, SD over 30 days; baseline = days 8–90 ago." storageKey={"stats-" + group.toLowerCase().replace(/[^a-z]+/g, "-")}>
               <div className="card">
+                <div className="card-subtitle" style={{ marginBottom: 6 }}>Latest value coloured against your baseline (mean of days 8–90 ago): <span style={{ color: ratingColor(3) }}>■</span> about usual, <span style={{ color: ratingColor(1) }}>■</span><span style={{ color: ratingColor(2) }}>■</span> worse, <span style={{ color: ratingColor(4) }}>■</span><span style={{ color: ratingColor(5) }}>■</span> better. 1–5 scores and QoL use their own scale.</div>
                 <div className="stats-list">
                   {(data ? present : rows).map(([k, label, d, dir, kind]) => {
                     const r = data && data[k];
