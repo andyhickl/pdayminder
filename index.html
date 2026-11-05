@@ -1617,17 +1617,17 @@
                   <a href="#" onClick={(e) => { e.preventDefault(); window.dispatchEvent(new CustomEvent("pdm-goto-day", { detail: d.day })); }} style={{ color: "#38bdf8", textDecoration: "none" }}>{d.day.slice(5)}</a>
                   <div style={{ color: d.exposure == null ? "#475569" : d.exposure ? "#e2e8f0" : "#94a3b8" }}>{fmtV(d.xValue, h.xUnit)}{d.exposure == null ? "" : d.exposure ? " ✓" : " ✗"}</div>
                   <div style={{ color: d.outcome == null ? "#475569" : d.outcome ? "#e2e8f0" : "#94a3b8" }}>{fmtV(d.yValue, h.yUnit)}{d.outcome == null ? "" : d.outcome ? " ✓" : " ✗"}</div>
-                  <div style={{ color: d.verdict === "support" ? "#a3e635" : d.verdict === "refute" ? "#f87171" : "#475569" }}>{d.verdict === "na" ? "–" : d.verdict}</div>
+                  <div style={{ color: d.verdict === "support" ? "#a3e635" : d.verdict === "against" ? "#f87171" : "#64748b" }}>{d.verdict === "na" ? "–" : d.verdict === "support" ? "as predicted" : d.verdict === "against" ? "not as predicted" : "comparison"}</div>
                 </React.Fragment>
               ))}
             </div>
-            <div style={{ fontSize: 10, color: "#64748b", marginTop: 4 }}>✓ = the condition held that day, ✗ = it didn't. A day supports the hypothesis when both columns agree (✓✓ or ✗✗), refutes it when they disagree. Tap a date to open that day.</div>
+            <div style={{ fontSize: 10, color: "#64748b", marginTop: 4 }}>✓ = the condition held that day, ✗ = it didn't. Days where the "if" held are the test: the outcome was as predicted or not. Days where it didn't hold are comparison days: they set the base rate the test days are measured against, and don't count for or against on their own. Tap a date to open that day.</div>
           </div>
         );
       };
       const Strip = ({ h }) => (
         <div style={{ display: "flex", gap: 3, marginTop: 6, alignItems: "center", flexWrap: "wrap" }}>
-          {h.days.slice(-28).map((d) => <span key={d.day} title={`${d.day}: ${d.verdict}${d.exposure != null ? ` · if ${d.exposure ? "yes" : "no"}` : ""}${d.outcome != null ? ` · then ${d.outcome ? "yes" : "no"}` : ""}`} style={{ width: 14, height: 14, borderRadius: 3, background: d.verdict === "support" ? "#a3e635" : d.verdict === "refute" ? "#f87171" : "#1e293b", boxShadow: "inset 0 0 0 1px #334155" }} />)}
+          {h.days.slice(-28).map((d) => <span key={d.day} title={`${d.day}: ${d.verdict === "support" ? "as predicted" : d.verdict === "against" ? "not as predicted" : d.verdict === "comparison" ? "comparison day" : "no data"}${d.exposure != null ? ` · if ${d.exposure ? "yes" : "no"}` : ""}${d.outcome != null ? ` · then ${d.outcome ? "yes" : "no"}` : ""}`} style={{ width: 14, height: 14, borderRadius: 3, background: d.verdict === "support" ? "#a3e635" : d.verdict === "against" ? "#f87171" : d.verdict === "comparison" ? "#334155" : "#1e293b", boxShadow: "inset 0 0 0 1px #334155" }} />)}
           {!h.pinned && h.status === "active" && Array.from({ length: Math.max(0, h.period - h.days.length) }).map((_, i) => <span key={"f" + i} style={{ width: 14, height: 14, borderRadius: 3, boxShadow: "inset 0 0 0 1px #1e293b" }} />)}
           <span style={{ fontSize: 11, marginLeft: 6, color: gradeColor[h.grade] || "#94a3b8", fontWeight: 600 }}>{h.grade}</span>
         </div>
@@ -4125,7 +4125,7 @@
       );
     }
 
-    function QoLSummaryCard({ days, onCellClick, selectedKey, events }) {
+    function QoLSummaryCard({ days, onCellClick, onSelectDay, selectedKey, events, embedded }) {
       const now = new Date();
       const nowMinutes = now.getHours() * 60 + now.getMinutes();
       const todayKey = toDateKey(now);
@@ -4133,6 +4133,13 @@
       // Window ends on `endDate` (default today); ^ / v page one day at a time, Today resets.
       const [endDate, setEndDate] = useState(() => new Date(now.getFullYear(), now.getMonth(), now.getDate()));
       const endKey = toDateKey(endDate);
+      // Keep the selected day inside the window (the grid doubles as the date picker when embedded).
+      useEffect(() => {
+        if (!selectedKey) return;
+        const [y, m, d] = selectedKey.split("-").map(Number); const sel = new Date(y, m - 1, d);
+        const base = new Date(endDate); base.setDate(endDate.getDate() - 6);
+        if (sel > endDate) setEndDate(sel); else if (sel < base) { const e = new Date(sel); e.setDate(sel.getDate() + 6); const today = new Date(now.getFullYear(), now.getMonth(), now.getDate()); setEndDate(e > today ? today : e); }
+      }, [selectedKey]);
       const atToday = endKey >= todayKey;
       const shiftWindow = (n) => setEndDate((d) => {
         const next = new Date(d); next.setDate(d.getDate() + n);
@@ -4193,20 +4200,20 @@
       const rowLabels = last7Dates.map((d) => d.toLocaleDateString(undefined, { weekday: "short" }).slice(0, 2) + " " + d.getDate());
 
       return (
-        <div className="card summary-card">
-          <div className="card-header">
+        <div className={embedded ? "summary-card" : "card summary-card"} style={embedded ? { marginTop: 12, paddingTop: 10, borderTop: "1px solid #1e293b" } : undefined}>
+          {!embedded && <div className="card-header">
             <div>
               <div className="card-title">QoL summary · {rangeLabel}</div>
               <div className="card-subtitle">Tap any cell to rate that block. ^ / v page a day at a time.</div>
             </div>
-          </div>
+          </div>}
           <div style={{ fontSize: "11px", color: "var(--muted)", marginTop: 4 }}>
-            Each cell is a 2-hour block: red → lower QoL, green/blue → better QoL, gray = sleep, black = no data / not yet logged. <span style={{ color: "#ef4444" }}>✱</span> = a symptom event touched that block.
+            {embedded ? <><strong style={{ color: "var(--text)" }}>{rangeLabel}.</strong> Tap a day to open it, a cell to rate that 2-hour block. Gray = sleep, black = unrated, <span style={{ color: "#ef4444" }}>✱</span> = event.</> : <>Each cell is a 2-hour block: red → lower QoL, green/blue → better QoL, gray = sleep, black = no data / not yet logged. <span style={{ color: "#ef4444" }}>✱</span> = a symptom event touched that block.</>}
           </div>
           <div className="summary-chart" style={{ display: "grid", gridTemplateColumns: "34px 1fr 28px", gap: 4, alignItems: "stretch" }}>
             <div style={{ display: "grid", gridTemplateRows: "repeat(7, 1fr)", fontSize: 10, color: "var(--muted)", gap: 3 }}>
               {rowLabels.map((l, i) => (
-                <div key={i} style={{ display: "flex", alignItems: "center", fontWeight: last7Dates[i] && toDateKey(last7Dates[i]) === selectedKey ? 700 : 400, color: toDateKey(last7Dates[i]) === selectedKey ? "var(--text)" : "var(--muted)" }}>{l}</div>
+                <div key={i} role={onSelectDay ? "button" : undefined} onClick={() => onSelectDay && onSelectDay(toDateKey(last7Dates[i]))} style={{ display: "flex", alignItems: "center", cursor: onSelectDay ? "pointer" : "default", fontWeight: last7Dates[i] && toDateKey(last7Dates[i]) === selectedKey ? 700 : 400, color: toDateKey(last7Dates[i]) === selectedKey ? "var(--text)" : "var(--muted)" }}>{l}</div>
               ))}
             </div>
             <div className="matrix-grid">
@@ -4811,18 +4818,10 @@
 
           {tab === "qol" && (
             <>
-          <Section title="Date" subtitle={formatPrettyDate(selectedDate)} storageKey="qol-date" defaultOpen={false}>
+          <Section title="Today" subtitle="Rate the ring, log what happens, pick a day from the week below." storageKey="qol-ring">
           <div className="card">
-            <div className="card-header">
-              <div>
-                <div className="card-title">Date picker</div>
-                <div className="card-subtitle">One page per day. Arrows or calendar to change.</div>
-              </div>
-            </div>
-            <div className="day-nav">
-              <button className="day-nav-btn" type="button" onClick={() => goToOffsetDay(-1)}>
-                <span>←</span> <span>Prev</span>
-              </button>
+            <div className="day-nav" style={{ marginTop: 0 }}>
+              <button className="day-nav-btn" type="button" onClick={() => goToOffsetDay(-1)} aria-label="Previous day"><span>←</span></button>
               <label
                 className="day-nav-date"
                 title="Pick a date"
@@ -4833,7 +4832,7 @@
                   try { input.showPicker(); } catch { input.focus(); input.click(); }
                 }}
               >
-                {formatPrettyDate(selectedDate)}
+                {formatPrettyDate(selectedDate)}{dateKey !== toDateKey(new Date()) && <button type="button" className="pill-btn" style={{ padding: "1px 8px", fontSize: 11, marginLeft: 8 }} onClick={(e) => { e.stopPropagation(); e.preventDefault(); handleCalendarSelect(new Date()); }}>Today</button>}
                 <input
                   type="date"
                   value={dateKey}
@@ -4845,26 +4844,7 @@
                   }}
                 />
               </label>
-              <button className="day-nav-btn" type="button" onClick={() => goToOffsetDay(1)}>
-                <span>Next</span> <span>→</span>
-              </button>
-            </div>
-            <MiniCalendar
-              selectedDate={selectedDate}
-              daysWithData={daysWithData}
-              onSelect={handleCalendarSelect}
-            />
-          </div>
-          </Section>
-          <Section title="Today" subtitle="Tap a segment to rate it; log doses as they happen." storageKey="qol-ring">
-          <div className="card">
-            <div className="card-header">
-              <div>
-                <div className="card-title">QoL ring</div>
-                <div className="card-subtitle">
-                  24 hours in 12 segments. QoL 1 (red) to 5 (blue), with meds as rays.
-                </div>
-              </div>
+              <button className="day-nav-btn" type="button" onClick={() => goToOffsetDay(1)} aria-label="Next day"><span>→</span></button>
             </div>
             <div className="ring-container">
               <DayRing day={day} onSegmentClick={handleSegmentClick} settings={settings} events={dayEventList} context={dayContext} workouts={dayWorkouts} />
@@ -4911,19 +4891,14 @@
                 <span><strong>{w.name}</strong> {fmtEventTime(w.start)}–{fmtEventTime(w.end)}</span>
                 <span style={{ color: "#94a3b8", marginLeft: "auto", textAlign: "right" }}>{Math.round(w.minutes)} min{w.avg_hr ? ` · avg ${w.avg_hr} bpm` : ""}{w.vigorous_min ? ` · ${w.vigorous_min} min vigorous` : ""}</span>
               </div>))}</div>}
+            <QoLSummaryCard embedded days={days} onCellClick={handleSummaryCellClick} onSelectDay={(k) => { const [y, m, d] = k.split("-").map(Number); handleCalendarSelect(new Date(y, m - 1, d)); }} selectedKey={dateKey} events={recentEvents} />
           </div>
           </Section>
-          <Section title="Recent days" subtitle="A week at a glance; tap any block to rate it." storageKey="qol-summary">
-              <QoLSummaryCard days={days} onCellClick={handleSummaryCellClick} selectedKey={dateKey} events={recentEvents} />
+          <Section title="Day vitals" subtitle="Hourly vitals over the selected day's QoL, doses, events and workouts." storageKey="qol-dayvitals">
+            <DayVitalsCard dateKey={dateKey} days={days} />
           </Section>
           <Section title="Run tests" subtitle="Today's pre- and post-dose batteries." storageKey="qol-tests">
             <RunTestsCard day={day} settings={settings} sessions={sessions} onStart={startBattery} />
-          </Section>
-          <Section title="Hypotheses" subtitle="Live hypotheses, scored day by day." storageKey="qol-hyp" defaultOpen={false}>
-            <HypothesesCard />
-          </Section>
-          <Section title="Findings" subtitle="What has held up, and what the history suggests." storageKey="qol-findings" defaultOpen={false}>
-            <HypothesesCard view="findings" />
           </Section>
             </>
           )}
@@ -4953,11 +4928,14 @@
                 <div className="day-nav-date" style={{ textDecoration: "none", cursor: "default" }}>{formatPrettyDate(selectedDate)}</div>
                 <button className="day-nav-btn" type="button" onClick={() => goToOffsetDay(1)}><span>Next</span> <span>→</span></button>
               </div>
-              <Section title="Day" subtitle="Hourly vitals over the selected day's QoL and doses." storageKey="tr-day">
-                <DayVitalsCard dateKey={dateKey} days={days} />
-              </Section>
               <Section title="QoL correlations" subtitle="Daily QoL against doses and any synced metric, with lag." storageKey="tr-corr">
                 <TrendsCard settings={settings} />
+              </Section>
+              <Section title="Hypotheses" subtitle="Live hypotheses, scored day by day." storageKey="tr-hyp" defaultOpen={false}>
+                <HypothesesCard />
+              </Section>
+              <Section title="Findings" subtitle="What has held up, and what the history suggests." storageKey="tr-findings" defaultOpen={false}>
+                <HypothesesCard view="findings" />
               </Section>
               <Section title="Vitals trends" subtitle="Sleep, HRV, heart rate, steps and watch gait." storageKey="tr-vitals" defaultOpen={false}>
                 <VitalsTrendsCard metrics={VITALS_GROUPS.vitals} />

@@ -193,7 +193,9 @@ module.exports = function init({ pool, dailySeries, dopaDrugs, TZ, localDayOf })
     for (const day of days) {
       const e = exposureOf(spec, table[day], refs); const o = outcomeOf(spec, table[spec.lag ? nextDay(day) : day], refs);
       let verdict = "na";
-      if (e != null && o != null) { if (e) { o ? a++ : b++; } else { o ? c++ : d++; } verdict = e === o ? "support" : "refute"; }
+      // Days where the condition held are the test: "as predicted" or "not as predicted". Days where it didn't hold are
+      // the comparison arm (they make the 2×2 work) but say nothing for or against the "if" on their own.
+      if (e != null && o != null) { if (e) { o ? a++ : b++; verdict = o ? "support" : "against"; } else { o ? c++ : d++; verdict = "comparison"; } }
       const od = spec.lag ? nextDay(day) : day;
       perDay.push({ day, outcomeDay: od, exposure: e, outcome: o, verdict, xValue: table[day] ? table[day][spec.x] ?? null : null, yValue: table[od] ? table[od][spec.y] ?? null : null });
     }
@@ -368,7 +370,7 @@ module.exports = function init({ pool, dailySeries, dopaDrugs, TZ, localDayOf })
       const retro = score(spec, table, refs, days.filter((d) => d < start).slice(-45));
       const x = FK[spec.x], y = FK[spec.y];
       return { id: h.id, text: describe(spec, refs), rationale: rationale(spec), spec, exposure: x.label, outcome: y.label, xUnit: x.unit, yUnit: y.unit, lag: spec.lag, started: start, period, dayIndex: win.length, vote: h.vote, pinned: Boolean(h.pinned), status: h.status, reason: h.reason,
-        days: sc.perDay, support: sc.perDay.filter((p) => p.verdict === "support").length, refute: sc.perDay.filter((p) => p.verdict === "refute").length, na: sc.perDay.filter((p) => p.verdict === "na").length,
+        days: sc.perDay, support: sc.perDay.filter((p) => p.verdict === "support").length, against: sc.perDay.filter((p) => p.verdict === "against").length, comparison: sc.perDay.filter((p) => p.verdict === "comparison").length, na: sc.perDay.filter((p) => p.verdict === "na").length,
         twoByTwo: { withExposure: { yes: sc.a, no: sc.b }, without: { yes: sc.c, no: sc.d } }, rateWith: sc.rE, rateWithout: sc.rC, diff: sc.diff, posterior: sc.post, grade: grade(sc),
         retro: { scored: retro.scored, rateWith: retro.rE, rateWithout: retro.rC, posterior: retro.post }, controllable: x.ctrl, families: [x.fam, y.fam] };
     });
