@@ -62,6 +62,11 @@ dose; protein competes with levodopa for transport), `derived/first_meal_hour`, 
 non-zero hourly `dietary_energy`). Stats has a Nutrition group; Day vitals shows protein, fiber and caffeine.
 The full Cronometer profile (80+ nutrients, supplements, creatine) needs the Cronometer cron (backlog).
 
+## Home tab layout
+Today (date nav + QoL ring + log buttons + the week grid, which doubles as the date picker: tap a day label to open
+it; the month picker sits behind the date), Day vitals (hourly HR/HRV over QoL, doses, events, workouts for the
+selected day), Run tests. Hypotheses and Findings live on Trends. Insights card: planned (see docs/BACKLOG.md).
+
 ## Home tab: batteries and hypotheses
 The first tab is Home: date, ring + logging, **Run tests**, **Hypotheses**, recent days. A battery is the day's four
 tests in order (tremor and tapping daily; the third and fourth slots rotate by weekday: pa-ta-ka, gait, balance,

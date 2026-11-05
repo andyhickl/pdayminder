@@ -18,6 +18,12 @@ Ordered by value. Dates are when the item was added.
   exposure (bedtime by 22:15 on A days, etc.), push the schedule to Google Calendar, tag days A/B, read out
   automatically on day 15 against a pre-registered outcome. Observational-only hypotheses say so; anything touching
   medication dose or timing becomes a needs-neurologist-approval card instead.
+- **Insights card on Home** (2026-11-05). Replaces the Hypotheses/Findings cards there. Generators: goal gaps from
+  the Block 1 regimen rules (exercise dose, protein timing, bedtime, battery adherence, dose gaps) with citations;
+  today's conflicts (protein within 60 min of a dose, long dose gaps); emerging patterns from the hypotheses engine
+  (posterior ≥ 0.8, ≥ 4 days/arm, worded as early); findings restated as advice; serendipity (best day in 30 and
+  what differed, streaks, personal bests, slow-measure drift). Each: observation + action + why + strength + links.
+  Vote / pin / refresh; `insights` table; cooldown keys so nothing repeats; ranked by the hypotheses' vote model.
 - **Hypothesis generation beyond the catalog** (2026-11-02). Generate variants (thresholds, lags, two-exposure
   combinations), rank by coverage + votes + literature plausibility + cost of the intervention; naive Bayes over the
   whole feature set for "what predicts a bad afternoon". Votes (👍/✕) are the training signal.
@@ -63,6 +69,9 @@ Ordered by value. Dates are when the item was added.
   Settings/Trends/QoL sections · daily-multi cap fix · nutrition via HAE (summed metrics, protein near dose, meal
   hours) · Cronometer cron (daily summary + servings, session reuse, 429 backoff) · symptom events (log/edit, dose
   context, bands, histogram, rollups) · ring arcs and grid stars.
+- 2026-11-05: Home tab layout A (Today card = date nav + ring + week grid as picker; Day vitals moved from Trends;
+  Hypotheses/Findings moved to Trends); per-day hypothesis verdicts relabelled (as predicted / not as predicted /
+  comparison day).
 - 2026-11-04: context classifier fix (parked ≠ driving, quiet drives end, atomic rebuilds) · workouts: zone minutes
   from per-minute HR, exercise profile, green ring arc, Day-vitals band, weekly intensity bars, Exercise dose stats,
   exercise features in the hypotheses engine.
