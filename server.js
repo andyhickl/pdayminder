@@ -648,19 +648,32 @@ async function userPlaces(userId) {
   const p = (rows[0] && rows[0].places) || {};
   return ["home", "work"].filter((k) => p[k] && isFinite(p[k].lat) && isFinite(p[k].lon)).map((k) => ({ name: k, lat: Number(p[k].lat), lon: Number(p[k].lon), radius: Number(p[k].radius) || 250 }));
 }
-function classifyPoint(pt, places) {
-  const motion = pt.motion || [];
-  if (motion.includes("driving") || (pt.speed != null && pt.speed > 6)) return "driving";
+// Position-only label: the place whose radius contains the point, else "out".
+function placeOf(pt, places) {
   for (const pl of places) if (haversineM(pt.lat, pt.lon, pl.lat, pl.lon) <= pl.radius) return pl.name;
   return "out";
 }
+// iOS keeps the "driving" motion flag on for minutes after you park, and Overland reports those points with speed 0
+// or unknown (-1). So a slow or speed-less point inside a place is that place; the motion flag only counts outside.
+function classifyPoint(pt, places) {
+  const motion = pt.motion || [];
+  const speed = pt.speed == null || pt.speed < 0 ? null : Number(pt.speed);
+  if (speed != null && speed > 6) return "driving";
+  const place = placeOf(pt, places);
+  if (place !== "out" && (speed == null || speed <= 3)) return place;
+  if (motion.includes("driving")) return "driving";
+  return place;
+}
+// A drive with no points for a while is over: Overland sends points every minute or so while moving, so a long silence
+// after a driving point means the phone is parked. The silence is labelled by where that last point was.
+const DRIVE_TAIL_MS = 10 * 60000, DRIVE_TAIL_AT_PLACE_MS = 2 * 60000;
 // Rebuild context segments for one local day from stored points. A state persists until the next point; the last
-// state runs to end of day (or now for today). Driving blips under 2 minutes are absorbed into the surrounding state.
+// state runs to end of day (or now for today). Blips under 2 minutes are absorbed into the surrounding state.
+// Delete + insert run in one transaction so a concurrent read never sees an empty day.
 async function rebuildContextDay(userId, day) {
   const places = await userPlaces(userId);
   const manual = await pool.query(
     `select 1 from observations where user_id = $1 and source = 'context' and metric = 'place' and raw->>'source' = 'manual' and (ts at time zone $2)::date = $3::date limit 1`, [userId, TZ, day]);
-  await pool.query(`delete from observations where user_id = $1 and source = 'context' and metric = 'place' and raw->>'source' = 'overland' and (ts at time zone $2)::date = $3::date`, [userId, TZ, day]);
   if (manual.rows.length) return 0; // manual segments own this day
   const { rows: pts } = await pool.query(
     `select ts, lat, lon, speed, motion from locations where user_id = $1 and (ts at time zone $2)::date = $3::date order by ts`, [userId, TZ, day]);
@@ -668,33 +681,55 @@ async function rebuildContextDay(userId, day) {
   const dayEnd = new Date(dayStart.getTime() + 86400000);
   const now = new Date();
   if (dayStart > now) return 0;
+  const endTime = dayEnd < now ? dayEnd : now;
   // Where were we at midnight? The last point before the day (a phone that doesn't move sends nothing), up to 7 days back.
   const prev = await pool.query(`select ts, lat, lon, speed, motion from locations where user_id = $1 and ts < $2 and ts > $2::timestamptz - interval '7 days' order by ts desc limit 1`, [userId, dayStart.toISOString()]);
-  const carried = prev.rows[0] ? classifyPoint(prev.rows[0], places) : null;
-  const labelled = pts.map((p) => ({ ts: new Date(p.ts), place: classifyPoint(p, places) }));
-  // merge runs
+  let carried = prev.rows[0] ? classifyPoint(prev.rows[0], places) : null;
+  if (carried === "driving") carried = placeOf(prev.rows[0], places); // parked somewhere overnight
+  const labelled = pts.map((p) => ({ ts: new Date(p.ts), place: classifyPoint(p, places), at: placeOf(p, places) }));
+  // merge runs; end a drive that goes quiet
   const runs = [];
-  if (carried && carried !== "driving") runs.push({ place: carried, start: dayStart, end: dayStart, n: 0, inferred: true });
-  for (const p of labelled) { const last = runs[runs.length - 1]; if (last && last.place === p.place) { last.end = p.ts; last.n++; } else runs.push({ place: p.place, start: p.ts, end: p.ts, n: 1 }); }
+  if (carried) runs.push({ place: carried, start: dayStart, end: dayStart, n: 0, inferred: true });
+  let lastPt = null;
+  const endQuietDrive = (until) => {
+    const last = runs[runs.length - 1];
+    if (!last || last.place !== "driving" || !lastPt) return;
+    const tail = lastPt.at !== "out" ? DRIVE_TAIL_AT_PLACE_MS : DRIVE_TAIL_MS;
+    if (until - lastPt.ts > tail) runs.push({ place: lastPt.at, start: new Date(lastPt.ts.getTime() + tail), end: until, n: 0, inferred: true });
+  };
+  for (const p of labelled) {
+    endQuietDrive(p.ts);
+    const last = runs[runs.length - 1];
+    if (last && last.place === p.place) { last.end = p.ts; last.n++; } else runs.push({ place: p.place, start: p.ts, end: p.ts, n: 1 });
+    lastPt = p;
+  }
+  endQuietDrive(endTime);
   if (!runs.length) return 0;
   // extend each run to the next run's start; last to end of day / now
-  for (let i = 0; i < runs.length; i++) runs[i].end = i + 1 < runs.length ? runs[i + 1].start : (dayEnd < now ? dayEnd : now);
+  for (let i = 0; i < runs.length; i++) runs[i].end = i + 1 < runs.length ? runs[i + 1].start : endTime;
   if (runs[0].start > dayStart && runs[0].place !== "driving") runs[0].start = dayStart;
-  // absorb short driving blips
+  // absorb blips: driving under 2 min, or any sub-2-minute run between two runs of the same place
   const cleaned = [];
-  for (const r of runs) {
+  for (let i = 0; i < runs.length; i++) {
+    const r = runs[i], next = runs[i + 1];
     const mins = (r.end - r.start) / 60000; const last = cleaned[cleaned.length - 1];
-    if (r.place === "driving" && mins < 2 && last) { last.end = r.end; continue; }
-    if (last && last.place === r.place) { last.end = r.end; continue; }
+    if (last && mins < 2 && (r.place === "driving" || r.place === "out" || (next && next.place === last.place))) { last.end = r.end; continue; }
+    if (last && last.place === r.place) { last.end = r.end; last.n += r.n; continue; }
     cleaned.push({ ...r });
   }
+  const client = await pool.connect();
   let n = 0;
-  for (const r of cleaned) {
-    await pool.query(
-      `insert into observations (user_id, ts, source, metric, value, raw) values ($1,$2,'context','place',$3,$4)
-       on conflict (user_id, source, metric, ts) do update set value = excluded.value, raw = excluded.raw`,
-      [userId, r.start.toISOString(), Math.round((r.end - r.start) / 60000), { place: r.place, start: r.start.toISOString(), end: r.end.toISOString(), source: "overland", points: r.n, inferred: r.inferred || r.n === 0 }]); n++;
-  }
+  try {
+    await client.query("begin");
+    await client.query(`delete from observations where user_id = $1 and source = 'context' and metric = 'place' and raw->>'source' = 'overland' and (ts at time zone $2)::date = $3::date`, [userId, TZ, day]);
+    for (const r of cleaned) {
+      await client.query(
+        `insert into observations (user_id, ts, source, metric, value, raw) values ($1,$2,'context','place',$3,$4)
+         on conflict (user_id, source, metric, ts) do update set value = excluded.value, raw = excluded.raw`,
+        [userId, r.start.toISOString(), Math.round((r.end - r.start) / 60000), { place: r.place, start: r.start.toISOString(), end: r.end.toISOString(), source: "overland", points: r.n, inferred: r.inferred || r.n === 0 }]); n++;
+    }
+    await client.query("commit");
+  } catch (e) { await client.query("rollback"); throw e; } finally { client.release(); }
   return n;
 }
 // Days with no points at all (phone never moved) get carried-forward segments. Called on ingest and on app load.
@@ -726,6 +761,16 @@ app.post("/api/ingest/overland", requireAuth, async (req, res) => {
   await fillContextGaps(req.user.id);
   await logIngest(req.user.id, "overland", 200, n, { points: n, days: [...days], segments: segs, trip: body.trip ? 1 : 0 });
   res.json({ result: "ok", points: n, segments: segs });
+});
+// Rebuild the last N days from stored points (after changing places, radii or the classifier). Manual days are kept.
+app.post("/api/context/rebuild", requireAuth, async (req, res) => {
+  const days = Math.min(90, Number(req.body && req.body.days) || Number(req.query.days) || 7);
+  const out = [];
+  for (let i = 0; i < days; i++) {
+    const d = new Date(Date.now() - i * 86400000).toLocaleDateString("en-CA", { timeZone: TZ });
+    out.push({ day: d, segments: await rebuildContextDay(req.user.id, d) });
+  }
+  res.json({ result: "ok", days: out });
 });
 // Raw points for a day with the label each would get (for checking Overland and tuning radii).
 app.get("/api/context/points", requireAuth, async (req, res) => {
