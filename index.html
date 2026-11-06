@@ -1746,6 +1746,7 @@
       try { const im = await new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = rej; i.src = url; }); g.drawImage(im, x, y, w, h); } catch (e) { console.error("svg raster", e); } finally { URL.revokeObjectURL(url); }
       return h;
     }
+    function shareKicker(g, P, text, color) { g.fillStyle = color; g.font = shareFont(700, 28); g.fillText(text.toUpperCase(), P, P + 10); }
     function shareLegend(g, x, y, items) { g.font = shareFont(400, 22); items.forEach(([label, color, kind]) => { if (kind === "line") { g.fillStyle = color; g.fillRect(x, y - 10, 26, 5); } else { g.fillStyle = color; g.beginPath(); g.roundRect(x, y - 18, 22, 22, 5); g.fill(); } g.fillStyle = "#94a3b8"; g.fillText(label, x + 32, y); x += 32 + g.measureText(label).width + 26; }); return y + 30; }
     const shareFont = (w, px) => `${w} ${px}px -apple-system, "SF Pro Text", Inter, system-ui, sans-serif`;
     function shareWrap(g, text, x, y, maxW, lh, fnt, col) { g.font = fnt; g.fillStyle = col; const words = String(text).split(/\s+/); let line = ""; for (const w of words) { const t = line ? line + " " + w : w; if (g.measureText(t).width > maxW && line) { g.fillText(line, x, y); y += lh; line = w; } else line = t; } if (line) { g.fillText(line, x, y); y += lh; } return y; }
@@ -1785,11 +1786,12 @@
       const doses = normalizeMeds(day.meds).length;
       openShare({ title: "QoL ring", name: `ring-${key}`, draw: async (g, W, H, P, measuring, opts) => {
         const date = new Date(key + "T12:00:00").toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric" });
-        g.fillStyle = "#e2e8f0"; g.font = shareFont(700, 44); g.fillText(date, P, P + 40);
-        g.fillStyle = "#94a3b8"; g.font = shareFont(400, 28); g.fillText("Quality of life through the day, 1–5, rated every two hours", P, P + 84);
+        shareKicker(g, P, "QoL ring", "#38bdf8");
+        g.fillStyle = "#e2e8f0"; g.font = shareFont(700, 44); g.fillText(date, P, P + 60);
+        g.fillStyle = "#94a3b8"; g.font = shareFont(400, 28); g.fillText("Quality of life through the day, 1–5, rated every two hours", P, P + 100);
         const remove = ['[data-share="hint"]']; if (opts.hidePlace) remove.push('[data-share="place"]'); if (opts.hideMeds) remove.push('[data-share="dose"]'); if (opts.hideEvents) remove.push('[data-share="event"]');
-        if (!measuring) await drawSvg(g, svgEl, P, P + 110, W - 2 * P, remove);
-        let y = P + 110 + (W - 2 * P) + 30;
+        if (!measuring) await drawSvg(g, svgEl, P, P + 126, W - 2 * P, remove);
+        let y = P + 126 + (W - 2 * P) + 30;
         const items = [["Home", PLACE_COLORS.home], ["Work", PLACE_COLORS.work], ["Sleep", "#4b5563"], ["No data", "#1e293b"]]; if (!opts.hideEvents) items.push(["Event", "#ef4444", "line"]); if ((workouts || []).length) items.push(["Workout", "#22c55e", "line"]);
         y = shareLegend(g, P, y, opts.hidePlace ? items.slice(2) : items);
         const parts = [mean != null ? `mean QoL ${mean.toFixed(1)} over ${rated.length} blocks` : "no ratings yet"]; if (!opts.hideMeds && doses) parts.push(`${doses} dose${doses === 1 ? "" : "s"}`); const ev = (events || []).filter((e) => eventSpanOnDay(e, key)); if (!opts.hideEvents && ev.length) parts.push(`${ev.length} event${ev.length === 1 ? "" : "s"}`); const wo = (workouts || []).filter((w) => contextSpanOnDay(w, key)); if (wo.length) parts.push(wo.map((w) => `${Math.round(w.minutes)} min ${w.name.toLowerCase()}${w.vigorous_min ? ` (${w.vigorous_min} vigorous)` : ""}`).join(", "));
@@ -1799,9 +1801,10 @@
     }
     function shareWeek(cells, rowLabels, rangeLabel, avgQoL, prevAvg, ratedSegments) {
       openShare({ title: "This week", name: `week-${rangeLabel.replace(/[^a-z0-9]+/gi, "-").toLowerCase()}`, draw: (g, W, H, P, measuring, opts) => {
-        g.fillStyle = "#e2e8f0"; g.font = shareFont(700, 44); g.fillText(rangeLabel, P, P + 40);
-        g.fillStyle = "#94a3b8"; g.font = shareFont(400, 28); g.fillText("Seven days of two-hour quality-of-life blocks", P, P + 84);
-        const labelW = 110, gridW = W - 2 * P - labelW, cw = gridW / 12, rh = 84, top = P + 130;
+        shareKicker(g, P, "The week", "#38bdf8");
+        g.fillStyle = "#e2e8f0"; g.font = shareFont(700, 44); g.fillText(rangeLabel, P, P + 60);
+        g.fillStyle = "#94a3b8"; g.font = shareFont(400, 28); g.fillText("Seven days of two-hour quality-of-life blocks", P, P + 100);
+        const labelW = 110, gridW = W - 2 * P - labelW, cw = gridW / 12, rh = 84, top = P + 146;
         g.font = shareFont(400, 22); g.fillStyle = "#64748b"; for (let i = 0; i < 12; i += 2) g.fillText(`${String(i * 2).padStart(2, "0")}`, P + labelW + i * cw + 2, top - 12);
         const means = [];
         for (let r = 0; r < 7; r++) { g.fillStyle = "#94a3b8"; g.font = shareFont(500, 26); g.fillText(rowLabels[r], P, top + r * rh + 50); let s = 0, n = 0;
@@ -1818,10 +1821,11 @@
       const d = data; const key = d.day;
       openShare({ title: "Day vitals", name: `vitals-${key}`, story: true, draw: async (g, W, H, P, measuring, opts) => {
         const date = new Date(key + "T12:00:00").toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric" });
-        g.fillStyle = "#e2e8f0"; g.font = shareFont(700, 44); g.fillText(date, P, P + 40);
-        g.fillStyle = "#94a3b8"; g.font = shareFont(400, 28); g.fillText("Heart rate and HRV by hour over the day's QoL, doses, events and workouts", P, P + 84);
+        shareKicker(g, P, "Day vitals", "#f87171");
+        g.fillStyle = "#e2e8f0"; g.font = shareFont(700, 44); g.fillText(date, P, P + 60);
+        g.fillStyle = "#94a3b8"; g.font = shareFont(400, 28); g.fillText("Heart rate and HRV by hour over the day's QoL, doses, events and workouts", P, P + 100);
         const remove = []; if (opts.hideMeds) remove.push('[data-share="dose"]'); if (opts.hideEvents) remove.push('[data-share="event"]');
-        let y = P + 110; if (!measuring) y += await drawSvg(g, svgEl, P, y, W - 2 * P, remove); else y += (W - 2 * P) * 0.5;
+        let y = P + 126; if (!measuring) y += await drawSvg(g, svgEl, P, y, W - 2 * P, remove); else y += (W - 2 * P) * 0.5;
         y += 20; const items = [["Heart rate", "#f87171", "line"], ["HRV", "#38bdf8", "line"]]; if (!opts.hideMeds) items.push(["Dose", "#38bdf8"]); if (!opts.hideEvents) items.push(["Event", "#ef4444"]); if ((d.workouts || []).length) items.push(["Workout", "#22c55e"]);
         y = shareLegend(g, P, y + 10, items);
         // stats row
@@ -1837,9 +1841,10 @@
     }
     function shareCorrelation(svgEl, label, lag, corr, meanQol, rated, span) {
       openShare({ title: "QoL correlation", name: `correlation-${label.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`, draw: async (g, W, H, P, measuring, opts) => {
-        g.fillStyle = "#e2e8f0"; g.font = shareFont(700, 44); g.fillText(label ? `QoL and ${label}` : "QoL over time", P, P + 40);
-        g.fillStyle = "#94a3b8"; g.font = shareFont(400, 28); g.fillText(`Last ${span} days${lag === -1 ? " · metric from the day before" : lag === 1 ? " · metric from the day after" : ""}`, P, P + 84);
-        let y = P + 110; if (!measuring) y += await drawSvg(g, svgEl, P, y, W - 2 * P, opts.hideMeds ? ['[data-share="dose"]'] : []); else y += (W - 2 * P) * 0.5;
+        shareKicker(g, P, label ? "QoL correlation" : "QoL over time", "#a3e635");
+        g.fillStyle = "#e2e8f0"; g.font = shareFont(700, 44); g.fillText(label ? `QoL and ${label}` : `Last ${span} days`, P, P + 60);
+        g.fillStyle = "#94a3b8"; g.font = shareFont(400, 28); g.fillText(`Last ${span} days${lag === -1 ? " · metric from the day before" : lag === 1 ? " · metric from the day after" : ""}`, P, P + 100);
+        let y = P + 126; if (!measuring) y += await drawSvg(g, svgEl, P, y, W - 2 * P, opts.hideMeds ? ['[data-share="dose"]'] : []); else y += (W - 2 * P) * 0.5;
         const items = [["Mean QoL (1–5)", "#38bdf8", "line"]]; if (!opts.hideMeds) items.push(["Levodopa doses / day", "#334155"]); if (label) items.push([label, "#a3e635", "line"]);
         y = shareLegend(g, P, y + 30, items);
         y = shareWrap(g, `Mean QoL ${meanQol} over ${rated} rated days`, P, y + 8, W - 2 * P, 40, shareFont(500, 30), "#e2e8f0");
@@ -1851,9 +1856,10 @@
     function shareWorkouts(svgEl, st, prof) {
       const cur = st.current || {}; const target = prof.weeklyVigorousMin || 120;
       openShare({ title: "Workouts by intensity", name: "workouts-week", draw: async (g, W, H, P, measuring, opts) => {
-        g.fillStyle = "#e2e8f0"; g.font = shareFont(700, 44); g.fillText("Workouts by intensity", P, P + 40);
-        g.fillStyle = "#94a3b8"; g.font = shareFont(400, 28); g.fillText(`Minutes per week · vigorous = ≥${prof.vigorousBpm} bpm (≈80 % of HRmax ${prof.hrMax})`, P, P + 84);
-        let y = P + 110; if (!measuring) y += await drawSvg(g, svgEl, P, y, W - 2 * P, []); else y += (W - 2 * P) * 0.28;
+        shareKicker(g, P, "Workouts", "#22c55e");
+        g.fillStyle = "#e2e8f0"; g.font = shareFont(700, 44); g.fillText("Minutes by intensity, week by week", P, P + 60);
+        g.fillStyle = "#94a3b8"; g.font = shareFont(400, 28); g.fillText(`Vigorous = ≥${prof.vigorousBpm} bpm (≈80 % of HRmax ${prof.hrMax}) · target ${target} min/week`, P, P + 100);
+        let y = P + 126; if (!measuring) y += await drawSvg(g, svgEl, P, y, W - 2 * P, []); else y += (W - 2 * P) * 0.28;
         y = shareLegend(g, P, y + 30, [["Vigorous", "#22c55e"], ["Moderate", "#86efac"], ["Easier", "#475569"], [`${target} min target`, "#22c55e", "line"]]);
         y = shareWrap(g, `This week: ${Math.round(cur.vigorous || 0)} vigorous minutes of ${target}, ${cur.sessions || 0} session${cur.sessions === 1 ? "" : "s"}${st.avg4 && st.avg4.vigorous != null ? ` · 4-week average ${Math.round(st.avg4.vigorous)}` : ""}`, P, y + 8, W - 2 * P, 40, shareFont(500, 30), "#e2e8f0");
         y = shareWrap(g, "SPARX 2018: 4 × 30 min/week at 80–85 % HRmax held UPDRS-III steady over six months.", P, y + 6, W - 2 * P, 34, shareFont(400, 25), "#64748b");
