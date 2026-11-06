@@ -1729,14 +1729,17 @@
       useEffect(() => { if (!spec) return; let live = true; setBusy(true); renderShare(spec.draw, { ...opts, story: spec.story }).then((c) => { if (!live) return; canvasRef.current = c; setImg(c.toDataURL("image/png")); }).catch((e) => console.error("share render", e)).finally(() => live && setBusy(false)); return () => { live = false; }; }, [spec, opts]);
       useEffect(() => { try { localStorage.setItem("pdm-share-opts", JSON.stringify(opts)); } catch {} }, [opts]);
       if (!spec) return null;
-      const tog = (k, label) => <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: "#cbd5e1" }}><input type="checkbox" checked={Boolean(opts[k])} onChange={(e) => setOpts((o) => ({ ...o, [k]: e.target.checked }))} />{label}</label>;
+      const tog = (k, label) => <button type="button" className={"pill-btn" + (opts[k] ? " primary" : "")} style={{ padding: "5px 11px", fontSize: 12 }} onClick={() => setOpts((o) => ({ ...o, [k]: !o[k] }))}>{opts[k] ? "✓ " : ""}{label}</button>;
       return (
-        <div onClick={() => setSpec(null)} style={{ position: "fixed", inset: 0, zIndex: 200, background: "rgba(2,6,23,0.8)", display: "flex", alignItems: "flex-end", justifyContent: "center" }}>
-          <div onClick={(e) => e.stopPropagation()} style={{ background: "#0f172a", border: "1px solid #334155", borderRadius: "16px 16px 0 0", padding: "12px 14px calc(14px + env(safe-area-inset-bottom))", width: "100%", maxWidth: 520, maxHeight: "92vh", display: "flex", flexDirection: "column", gap: 10 }}>
-            <div style={{ display: "flex", alignItems: "center" }}><div style={{ fontWeight: 600 }}>Share: {spec.title}</div><button type="button" className="pill-btn" style={{ marginLeft: "auto", padding: "2px 10px" }} onClick={() => setSpec(null)}>✕</button></div>
-            <div style={{ display: "flex", gap: 14, flexWrap: "wrap" }}>{tog("hideMeds", "Hide medication details")}{tog("hidePlace", "Hide location")}{tog("hideEvents", "Hide symptom events")}</div>
-            <div style={{ flex: 1, minHeight: 0, overflow: "auto", background: "#020617", borderRadius: 10, display: "flex", justifyContent: "center", alignItems: "flex-start" }}>{img ? <img src={img} alt="" style={{ width: "100%", maxWidth: 360, display: "block", opacity: busy ? 0.6 : 1 }} /> : <div className="card-subtitle" style={{ padding: 30 }}>Rendering…</div>}</div>
-            <button type="button" className="pill-btn primary" disabled={busy || !img} onClick={() => canvasRef.current && deliverShare(canvasRef.current, spec.name, spec.title)} style={{ padding: "10px 14px", fontSize: 14 }}>{navigator.share ? "Share…" : "Download PNG"}</button>
+        <div onClick={() => setSpec(null)} style={{ position: "fixed", inset: 0, zIndex: 200, background: "rgba(2,6,23,0.78)", backdropFilter: "blur(6px)", display: "flex", alignItems: "flex-end", justifyContent: "center" }}>
+          <div className="card" onClick={(e) => e.stopPropagation()} style={{ borderRadius: "18px 18px 0 0", margin: 0, padding: "14px 14px calc(14px + env(safe-area-inset-bottom))", width: "100%", maxWidth: 520, maxHeight: "92vh", display: "flex", flexDirection: "column", gap: 10, boxSizing: "border-box" }}>
+            <div className="card-header" style={{ marginBottom: 0 }}>
+              <div><div className="card-title" style={{ display: "flex", alignItems: "center", gap: 8 }}><svg width="16" height="18" viewBox="0 0 24 28" fill="none" stroke="#94a3b8" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 3v15M7 8l5-5 5 5M5 13v10a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V13" /></svg>Share: {spec.title}</div><div className="card-subtitle">A PNG sized for Instagram. Choose what to leave out; the choice is remembered.</div></div>
+              <button type="button" className="pill-btn" style={{ padding: "2px 10px", flexShrink: 0 }} onClick={() => setSpec(null)}>✕</button>
+            </div>
+            <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>{tog("hideMeds", "Hide medication")}{tog("hidePlace", "Hide location")}{tog("hideEvents", "Hide symptom events")}</div>
+            <div style={{ flex: 1, minHeight: 0, overflow: "auto", background: "#020617", border: "1px solid #1e293b", borderRadius: 12, display: "flex", justifyContent: "center", alignItems: "flex-start", padding: 8 }}>{img ? <img src={img} alt="" style={{ width: "100%", maxWidth: 340, display: "block", borderRadius: 8, opacity: busy ? 0.5 : 1, transition: "opacity .2s" }} /> : <div className="card-subtitle" style={{ padding: 30 }}>Rendering…</div>}</div>
+            <button type="button" className="pill-btn primary" disabled={busy || !img} onClick={() => canvasRef.current && deliverShare(canvasRef.current, spec.name, spec.title)} style={{ padding: "11px 14px", fontSize: 14, fontWeight: 600 }}>{busy ? "Rendering…" : navigator.share ? "Share…" : "Download PNG"}</button>
           </div>
         </div>
       );
@@ -1753,7 +1756,25 @@
     }
     function shareKicker(g, P, text, color) { g.fillStyle = color; g.font = shareFont(700, 28); g.fillText(text.toUpperCase(), P, P + 10); }
     const svgHeight = (svgEl, w) => { const vb = ((svgEl && svgEl.getAttribute("viewBox")) || "0 0 600 300").split(/[ ,]+/).map(Number); return Math.round(w * vb[3] / vb[2]); };
-    function shareLegend(g, x0, y, items) { g.font = shareFont(400, 22); let x = x0; const maxX = 1080 - x0; items.forEach(([label, color, kind]) => { const w = 32 + g.measureText(label).width + 26; if (x + w > maxX && x > x0) { x = x0; y += 32; } if (kind === "line") { g.fillStyle = color; g.fillRect(x, y - 10, 26, 5); } else { g.fillStyle = color; g.beginPath(); g.roundRect(x, y - 18, 22, 22, 5); g.fill(); } g.fillStyle = "#94a3b8"; g.fillText(label, x + 32, y); x += w; }); return y + 30; }
+    // Legend as an aligned grid: columns sized to the widest label, consistent gutters, optional heading.
+    function shareLegend(g, x0, y, items, heading) {
+      if (!items.length) return y;
+      if (heading) { g.fillStyle = "#64748b"; g.font = shareFont(600, 20); g.fillText(heading.toUpperCase(), x0, y - 2); y += 30; }
+      g.font = shareFont(400, 23);
+      const sw = 26, gap = 10, avail = 1080 - 2 * x0;
+      const maxW = Math.max(...items.map(([label]) => g.measureText(label).width)) + sw + gap;
+      const cols = Math.max(1, Math.min(items.length, Math.floor((avail + 28) / (maxW + 28)))); const colW = avail / cols;
+      items.forEach(([label, color, kind], i) => {
+        const cx = x0 + (i % cols) * colW, cy = y + Math.floor(i / cols) * 34;
+        if (kind === "line") { g.fillStyle = color; g.fillRect(cx, cy - 10, sw, 5); }
+        else if (kind === "dash") { g.fillStyle = color; g.fillRect(cx, cy - 10, 8, 5); g.fillRect(cx + 12, cy - 10, 8, 5); g.fillRect(cx + 24, cy - 10, 2, 5); }
+        else if (kind === "dot") { g.fillStyle = color; g.beginPath(); g.arc(cx + 11, cy - 8, 9, 0, Math.PI * 2); g.fill(); }
+        else if (kind === "mark") { g.fillStyle = color; g.font = shareFont(700, 24); g.fillText("✱", cx + 2, cy); g.font = shareFont(400, 23); }
+        else { g.fillStyle = color; g.beginPath(); g.roundRect(cx, cy - 18, 22, 22, 5); g.fill(); }
+        g.fillStyle = "#94a3b8"; g.fillText(label, cx + sw + gap, cy);
+      });
+      return y + Math.ceil(items.length / cols) * 34 + 4;
+    }
     const shareFont = (w, px) => `${w} ${px}px -apple-system, "SF Pro Text", Inter, system-ui, sans-serif`;
     function shareWrap(g, text, x, y, maxW, lh, fnt, col) { g.font = fnt; g.fillStyle = col; const words = String(text).split(/\s+/); let line = ""; for (const w of words) { const t = line ? line + " " + w : w; if (g.measureText(t).width > maxW && line) { g.fillText(line, x, y); y += lh; line = w; } else line = t; } if (line) { g.fillText(line, x, y); y += lh; } return y; }
     // An insight, fully expanded: observation, citation, action, bar or dot strip, stage, why, the per-day evidence, the full reference.
@@ -1799,9 +1820,9 @@
         const rw = 760, rx = (W - rw) / 2, ry = subEnd + 6;
         if (!measuring) await drawSvg(g, svgEl, rx, ry, rw, remove);
         let y = ry + svgHeight(svgEl, rw) + 24;
-        y = shareLegend(g, P, y, [["5 best", ratingColor(5)], ["4", ratingColor(4)], ["3", ratingColor(3)], ["2", ratingColor(2)], ["1 worst", ratingColor(1)], ["Sleep", "#4b5563"], ["Unrated", "#1e293b"]]);
+        y = shareLegend(g, P, y, [["5, best", ratingColor(5)], ["4", ratingColor(4)], ["3", ratingColor(3)], ["2", ratingColor(2)], ["1, worst", ratingColor(1)], ["Sleep", "#4b5563"], ["Not rated", "#1e293b"]], "How I rated each two hours");
         const items = []; if (!opts.hidePlace) items.push(["At home", PLACE_COLORS.home], ["At work", PLACE_COLORS.work]); if (!opts.hideMeds) items.push(["Levodopa dose", "#38bdf8", "line"], ["Supplement", "#facc15", "line"]); if (!opts.hideEvents) items.push(["Symptom event", "#ef4444", "line"]); if ((workouts || []).length) items.push(["Workout", "#22c55e", "line"]);
-        if (items.length) y = shareLegend(g, P, y + 4, items);
+        if (items.length) y = shareLegend(g, P, y + 10, items, "Around the rim");
         const parts = [mean != null ? `mean QoL ${mean.toFixed(1)} over ${rated.length} blocks` : "no ratings yet"]; if (!opts.hideMeds && doses) parts.push(`${doses} dose${doses === 1 ? "" : "s"}`); const ev = (events || []).filter((e) => eventSpanOnDay(e, key)); if (!opts.hideEvents && ev.length) parts.push(`${ev.length} event${ev.length === 1 ? "" : "s"}`); const wo = (workouts || []).filter((w) => contextSpanOnDay(w, key)); if (wo.length) parts.push(wo.map((w) => `${Math.round(w.minutes)} min ${w.name.toLowerCase()}${w.vigorous_min ? ` (${w.vigorous_min} vigorous)` : ""}`).join(", "));
         y = shareWrap(g, parts.join(" · "), P, y + 10, W - 2 * P, 40, shareFont(500, 30), "#e2e8f0");
         return y;
@@ -1812,14 +1833,14 @@
         shareKicker(g, P, "A week with Parkinson's", "#38bdf8");
         g.fillStyle = "#e2e8f0"; g.font = shareFont(700, 44); g.fillText(rangeLabel, P, P + 60);
         const subEnd = shareWrap(g, "Quality of life in two-hour blocks, 1 (worst) to 5 (best); ✱ marks a symptom event", P, P + 100, W - 2 * P, 36, shareFont(400, 28), "#94a3b8");
-        const labelW = 110, gridW = W - 2 * P - labelW, cw = gridW / 12, rh = 84, top = subEnd + 40;
+        const labelW = 110, gridW = W - 2 * P - labelW, cw = gridW / 12, rh = cw, top = subEnd + 40;
         g.font = shareFont(400, 22); g.fillStyle = "#64748b"; for (let i = 0; i < 12; i += 2) g.fillText(`${String(i * 2).padStart(2, "0")}`, P + labelW + i * cw + 2, top - 12);
         const means = [];
         for (let r = 0; r < 7; r++) { g.fillStyle = "#94a3b8"; g.font = shareFont(500, 26); g.fillText(rowLabels[r], P, top + r * rh + 50); let s = 0, n = 0;
           for (let c = 0; c < 12; c++) { const cell = cells[r * 12 + c]; g.fillStyle = cell ? cell.color : "#000"; g.beginPath(); g.roundRect(P + labelW + c * cw + 3, top + r * rh + 6, cw - 6, rh - 12, 8); g.fill(); if (cell && cell.rating) { s += cell.rating; n++; } if (cell && !opts.hideEvents && cell.events && cell.events.length) { g.fillStyle = "#ef4444"; g.font = shareFont(700, 22); g.fillText("✱", P + labelW + c * cw + cw - 24, top + r * rh + 30); } }
           means.push(n ? s / n : null); }
         let y = top + 7 * rh + 20;
-        y = shareLegend(g, P, y + 10, [["5 best", ratingColor(5)], ["4", ratingColor(4)], ["3", ratingColor(3)], ["2", ratingColor(2)], ["1 worst", ratingColor(1)], ["Sleep", "#4b5563"], ["Unrated", "#000000"]]);
+        y = shareLegend(g, P, y + 10, [["5, best", ratingColor(5)], ["4", ratingColor(4)], ["3", ratingColor(3)], ["2", ratingColor(2)], ["1, worst", ratingColor(1)], ["Sleep", "#4b5563"], ["Not rated", "#000000"]].concat(opts.hideEvents ? [] : [["Symptom event", "#ef4444", "mark"]]), "How I rated each two hours");
         const line = avgQoL != null ? `Mean QoL ${avgQoL.toFixed(2)} over ${ratedSegments} rated blocks${prevAvg != null ? ` · previous week ${prevAvg.toFixed(2)}` : ""}` : "No ratings yet";
         y = shareWrap(g, line, P, y + 8, W - 2 * P, 40, shareFont(500, 30), "#e2e8f0");
         return y;
@@ -1834,9 +1855,14 @@
         const subEnd = shareWrap(g, "Heart rate and HRV by hour, over quality-of-life ratings, levodopa doses, symptom events and workouts", P, P + 100, W - 2 * P, 36, shareFont(400, 28), "#94a3b8");
         const remove = []; if (opts.hideMeds) remove.push('[data-share="dose"]'); if (opts.hideEvents) remove.push('[data-share="event"]');
         let y = subEnd + 10; if (!measuring) y += await drawSvg(g, svgEl, P, y, W - 2 * P, remove); else y += svgHeight(svgEl, W - 2 * P);
-        y += 20; y = shareLegend(g, P, y + 10, [["Heart rate (hourly range)", "#38bdf8", "line"], ["Night-style HRV", "#a3e635", "line"], ["QoL shading 5 best", ratingColor(5)], ["3", ratingColor(3)], ["1 worst", ratingColor(1)], ["Sleep", "#475569"]]);
-        const items = []; if (!opts.hideMeds) items.push(["Levodopa dose", "#f8fafc", "line"], ["Supplement", "#facc15", "line"]); if (!opts.hideEvents) items.push(["Symptom event", "#ef4444"]); if ((d.workouts || []).length) items.push(["Workout with its heart rate", "#22c55e"]);
-        if (items.length) y = shareLegend(g, P, y + 4, items);
+        y += 16;
+        const lines = [["Heart rate, hourly mean (left axis)", "#38bdf8", "line"], ["Hourly heart-rate range", "#1e3a5f"], ["HRV (right axis)", "#a3e635", "dash"]];
+        if (!opts.hideMeds) lines.push(["Levodopa dose", "#f8fafc", "dash"], ["Supplement", "#facc15", "line"], ["Other medication", "#64748b", "line"]);
+        if (!opts.hideEvents) { const types = [...new Set((d.events || []).map((e) => e.type))]; types.forEach((t) => lines.push([`${eventLabel(t)} event`, eventColor(t)])); }
+        if ((d.workouts || []).length) lines.push(["Workout, with its heart rate", "#22c55e"]);
+        if ((d.motor || []).length) lines.push(["Tremor test", "#f472b6", "dot"], ["Tapping test", "#38bdf8", "dot"], ["Gait test", "#34d399", "dot"], ["Balance test", "#f59e0b", "dot"]);
+        y = shareLegend(g, P, y + 10, lines, "On the chart");
+        y = shareLegend(g, P, y + 10, [["5, best", ratingColor(5)], ["4", ratingColor(4)], ["3", ratingColor(3)], ["2", ratingColor(2)], ["1, worst", ratingColor(1)], ["Sleep", "#475569"]], "Background: how I rated each two hours");
         // stats row
         const o = d.oura || {}, dl = d.daily || {}; const wo = d.workouts || [];
         const stats = [["Sleep", o.total_sleep_h != null ? `${Number(o.total_sleep_h).toFixed(1)} h` : "–"], ["Night HRV", o.avg_hrv != null ? `${Math.round(o.avg_hrv)} ms` : "–"], ["Resting HR", dl.resting_heart_rate != null ? `${Math.round(dl.resting_heart_rate)} bpm` : o.lowest_hr != null ? `${Math.round(o.lowest_hr)} low` : "–"], ["Steps", dl.step_count != null ? Math.round(dl.step_count).toLocaleString() : "–"]];
@@ -1854,8 +1880,8 @@
         g.fillStyle = "#e2e8f0"; g.font = shareFont(700, 44); g.fillText(label ? `Quality of life and ${label}` : `Daily quality of life, last ${span} days`, P, P + 60);
         const subEnd = shareWrap(g, `Daily mean of 2-hourly ratings, 1 (worst) to 5 (best), last ${span} days${lag === -1 ? " · metric from the day before" : lag === 1 ? " · metric from the day after" : ""}`, P, P + 100, W - 2 * P, 36, shareFont(400, 28), "#94a3b8");
         let y = subEnd + 10; if (!measuring) y += await drawSvg(g, svgEl, P, y, W - 2 * P, opts.hideMeds ? ['[data-share="dose"]'] : []); else y += svgHeight(svgEl, W - 2 * P);
-        const items = [["Daily quality of life, 1–5 (left axis)", "#38bdf8", "line"]]; if (!opts.hideMeds) items.push(["Levodopa doses that day (bars)", "#334155"]); if (label) items.push([`${label} (right axis)`, "#a3e635", "line"]);
-        y = shareLegend(g, P, y + 30, items);
+        const items = [["Daily quality of life, 1–5 (left axis)", "#38bdf8", "line"]]; if (!opts.hideMeds) items.push(["Levodopa doses that day (bars)", "#334155"]); if (label) items.push([`${label} (right axis)`, "#a3e635", "dash"]);
+        y = shareLegend(g, P, y + 30, items, "On the chart");
         y = shareWrap(g, `Mean QoL ${meanQol} over ${rated} rated days`, P, y + 8, W - 2 * P, 40, shareFont(500, 30), "#e2e8f0");
         if (label && corr) y = shareWrap(g, `${label}${lag === -1 ? " (day before)" : lag === 1 ? " (day after)" : ""} vs QoL: ${describeCorrelation(corr)}`, P, y + 6, W - 2 * P, 38, shareFont(400, 28), "#cbd5e1");
         y = shareWrap(g, "Spearman rank correlation over days with both values. Correlation isn't cause.", P, y + 6, W - 2 * P, 32, shareFont(400, 23), "#64748b");
