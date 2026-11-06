@@ -1028,7 +1028,7 @@
 
       return (
         <div className="ring-wrapper">
-          <svg viewBox={`0 0 ${width} ${height}`} style={{ width: "100%", display: "block" }}>
+          <svg id="pdm-ring-svg" viewBox={`0 0 ${width} ${height}`} style={{ width: "100%", display: "block" }}>
             {segments.map((seg, idx) => {
               const startFrac = idx / segmentCount;
               const endFrac = (idx + 1) / segmentCount;
@@ -1109,11 +1109,11 @@
                 <g>
                   <text x={cx} y={cy - 22} textAnchor="middle" fontSize="11" fill="#64748b">{top}</text>
                   <text x={cx} y={cy + 9} textAnchor="middle" fontSize="30" fontWeight="700" fill={mean == null ? "#475569" : ratingColor(Math.max(1, Math.min(5, Math.round(mean))))}>{mean == null ? "–" : mean.toFixed(1)}</text>
-                  {here && <g>
+                  {here && <g data-share="place">
                     <rect x={cx - 24} y={cy + 20} width={48} height={16} rx="8" fill={placeFill} />
                     <text x={cx} y={cy + 31.5} textAnchor="middle" fontSize="10" fontWeight="600" fill="#f8fafc">{PLACE_LABELS[here.place] || here.place}</text>
                   </g>}
-                  {!here && <text x={cx} y={cy + 31} textAnchor="middle" fontSize="9" fill="#475569">{isToday ? "tap a segment to rate" : `${rated.length} of 12 rated`}</text>}
+                  {!here && <text data-share="hint" x={cx} y={cy + 31} textAnchor="middle" fontSize="9" fill="#475569">{isToday ? "tap a segment to rate" : `${rated.length} of 12 rated`}</text>}
                 </g>
               );
             })()}
@@ -1190,20 +1190,20 @@
                     const d = `M ${ax0.toFixed(1)} ${ay0.toFixed(1)} A ${rArc} ${rArc} 0 ${e.a1 - e.a0 > Math.PI ? 1 : 0} 1 ${ax1.toFixed(1)} ${ay1.toFixed(1)}`;
                     const col = e.color || "#ef4444";
                     const ray = (a, k) => { const [x1, y1] = p(rArc, a), [x2, y2] = p(rOuter + 6, a); return <line key={k} x1={x1} y1={y1} x2={x2} y2={y2} stroke={col} strokeWidth="1.5" opacity="0.9" />; };
-                    return <g key={e.key}><path d={d} fill="none" stroke={col} strokeWidth="4" strokeLinecap="round" opacity="0.95" />{ray(e.a0, "s")}{!e.ongoing && ray(e.a1, "e")}<title>{e.title}</title></g>;
+                    return <g key={e.key} data-share={e.key.startsWith("wo-") ? "workout" : "event"}><path d={d} fill="none" stroke={col} strokeWidth="4" strokeLinecap="round" opacity="0.95" />{ray(e.a0, "s")}{!e.ongoing && ray(e.a1, "e")}<title>{e.title}</title></g>;
                   })}
                   {markers.map((m) => {
-                    if (m.kind === "othermed") { const [rx, ry] = p(rOuter + 6, m.angle); return <g key={m.key}><circle cx={rx} cy={ry} r="3" fill="#94a3b8" opacity="0.9"><title>{m.title}</title></circle></g>; }
+                    if (m.kind === "othermed") { const [rx, ry] = p(rOuter + 6, m.angle); return <g key={m.key} data-share="dose"><circle cx={rx} cy={ry} r="3" fill="#94a3b8" opacity="0.9"><title>{m.title}</title></circle></g>; }
                     if (m.kind === "event") return null; // rays drawn with the arc
                     const [x1, y1] = p(rInner - 6, m.angle), [x2, y2] = p(rOuter * 1.05, m.angle);
-                    return <line key={m.key} x1={x1} y1={y1} x2={x2} y2={y2} stroke={m.color} strokeWidth={m.kind === "supp" ? 1.5 : 2} strokeLinecap="round" opacity="0.9"><title>{m.title}</title></line>;
+                    return <line key={m.key} data-share={m.kind === "supp" ? "supp" : "dose"} x1={x1} y1={y1} x2={x2} y2={y2} stroke={m.color} strokeWidth={m.kind === "supp" ? 1.5 : 2} strokeLinecap="round" opacity="0.9"><title>{m.title}</title></line>;
                   })}
                   {markers.map((m) => {
                     if (m.ring == null || m.ring < 0) return null;
                     const [lx, ly] = p(rings[m.ring], m.angle);
                     const w = m.label.length * 5.4 + 8, h = 13;
                     return (
-                      <g key={m.key + "-l"}>
+                      <g key={m.key + "-l"} data-share={m.kind === "event" ? (m.key.startsWith("wo-") ? "workout" : "event") : m.kind === "supp" ? "supp" : "dose"}>
                         <rect x={lx - w / 2} y={ly - h / 2} width={w} height={h} rx="6" fill="#020617" stroke={m.color} strokeWidth="1" />
                         <text x={lx} y={ly + 3.5} fontSize="9" textAnchor="middle" fill={m.color}>{m.label}</text>
                         <title>{m.title}</title>
@@ -1688,29 +1688,70 @@
     // Common chrome for every shareable image: dark gradient, app icon + name, date, disclaimer. 1080×1350 (4:5) when
     // it fits, 1080×1920 (story) when the evidence needs the room.
     const SHARE_ICON = new Promise((res) => { const im = new Image(); im.onload = () => res(im); im.onerror = () => res(null); im.src = "/static/icon-192.png"; });
-    async function shareCanvas(draw, name, title) {
+    // Every shareable image goes through here: the same frame (gradient, icon + name, date, disclaimer), 1080×1350
+    // (Instagram 4:5) when it fits, 1080×1920 (story) when the content needs the room or asks for it. `draw(g, W, H, P,
+    // measuring, opts)` paints the body and returns the y it reached; opts carries the privacy toggles.
+    async function renderShare(draw, opts) {
       const W = 1080, P = 72;
       const measure = document.createElement("canvas"); measure.width = W; measure.height = 4000;
-      const needed = draw(measure.getContext("2d"), W, 4000, P, true);
-      const H = needed + 170 <= 1350 ? 1350 : 1920;
+      const needed = await draw(measure.getContext("2d"), W, 4000, P, true, opts);
+      const H = opts.story || needed + 170 > 1350 ? 1920 : 1350;
       const c = document.createElement("canvas"); c.width = W; c.height = H; const g = c.getContext("2d");
       const bg = g.createLinearGradient(0, 0, 0, H); bg.addColorStop(0, "#0f1a30"); bg.addColorStop(1, "#0b1220"); g.fillStyle = bg; g.fillRect(0, 0, W, H);
-      draw(g, W, H, P, false);
-      // footer
+      await draw(g, W, H, P, false, opts);
       g.fillStyle = "#1e293b"; g.fillRect(P, H - 124, W - 2 * P, 2);
       const icon = await SHARE_ICON; if (icon) { g.save(); g.beginPath(); g.roundRect(P, H - 96, 48, 48, 11); g.clip(); g.drawImage(icon, P, H - 96, 48, 48); g.restore(); }
-      g.fillStyle = "#e2e8f0"; g.font = `600 30px -apple-system, "SF Pro Text", Inter, system-ui, sans-serif`; g.textAlign = "left"; g.fillText("PDayMinder", P + (icon ? 62 : 0), H - 60);
-      g.fillStyle = "#64748b"; g.font = `400 22px -apple-system, "SF Pro Text", Inter, system-ui, sans-serif`; g.textAlign = "right"; g.fillText(`${new Date().toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })} · personal data, not medical advice`, W - P, H - 60); g.textAlign = "left";
+      g.fillStyle = "#e2e8f0"; g.font = shareFont(600, 30); g.textAlign = "left"; g.fillText("PDayMinder", P + (icon ? 62 : 0), H - 60);
+      g.fillStyle = "#64748b"; g.font = shareFont(400, 22); g.textAlign = "right"; g.fillText(`${new Date().toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })} · personal data, not medical advice`, W - P, H - 60); g.textAlign = "left";
+      return c;
+    }
+    async function deliverShare(c, name, title) {
       const blob = await new Promise((res) => c.toBlob(res, "image/png"));
       const file = new File([blob], `${name}.png`, { type: "image/png" });
       if (navigator.share && navigator.canShare && navigator.canShare({ files: [file] })) { try { await navigator.share({ files: [file], title }); return; } catch (e) { if (e && e.name === "AbortError") return; } }
       const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = file.name; document.body.appendChild(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
     }
+    // Open the share sheet (preview + privacy toggles). spec: { title, name, draw, story? }
+    function openShare(spec) { window.dispatchEvent(new CustomEvent("pdm-share", { detail: spec })); }
+    const ShareBtn = ({ onClick, title = "Share as an image", style }) => <button type="button" className="pill-btn" title={title} onClick={(e) => { e.stopPropagation(); onClick(); }} style={{ padding: "2px 7px", display: "inline-flex", alignItems: "center", color: "#94a3b8", ...style }}><svg width="14" height="16" viewBox="0 0 24 28" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 3v15M7 8l5-5 5 5M5 13v10a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V13" /></svg></button>;
+    function ShareSheet() {
+      const [spec, setSpec] = useState(null);
+      const [opts, setOpts] = useState(() => { try { return { hideMeds: false, hidePlace: false, hideEvents: false, ...JSON.parse(localStorage.getItem("pdm-share-opts") || "{}") }; } catch { return { hideMeds: false, hidePlace: false, hideEvents: false }; } });
+      const [img, setImg] = useState(null);
+      const [busy, setBusy] = useState(false);
+      const canvasRef = useRef(null);
+      useEffect(() => { const h = (e) => { setSpec(e.detail); setImg(null); }; window.addEventListener("pdm-share", h); return () => window.removeEventListener("pdm-share", h); }, []);
+      useEffect(() => { if (!spec) return; let live = true; setBusy(true); renderShare(spec.draw, { ...opts, story: spec.story }).then((c) => { if (!live) return; canvasRef.current = c; setImg(c.toDataURL("image/png")); }).catch((e) => console.error("share render", e)).finally(() => live && setBusy(false)); return () => { live = false; }; }, [spec, opts]);
+      useEffect(() => { try { localStorage.setItem("pdm-share-opts", JSON.stringify(opts)); } catch {} }, [opts]);
+      if (!spec) return null;
+      const tog = (k, label) => <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: "#cbd5e1" }}><input type="checkbox" checked={Boolean(opts[k])} onChange={(e) => setOpts((o) => ({ ...o, [k]: e.target.checked }))} />{label}</label>;
+      return (
+        <div onClick={() => setSpec(null)} style={{ position: "fixed", inset: 0, zIndex: 200, background: "rgba(2,6,23,0.8)", display: "flex", alignItems: "flex-end", justifyContent: "center" }}>
+          <div onClick={(e) => e.stopPropagation()} style={{ background: "#0f172a", border: "1px solid #334155", borderRadius: "16px 16px 0 0", padding: "12px 14px calc(14px + env(safe-area-inset-bottom))", width: "100%", maxWidth: 520, maxHeight: "92vh", display: "flex", flexDirection: "column", gap: 10 }}>
+            <div style={{ display: "flex", alignItems: "center" }}><div style={{ fontWeight: 600 }}>Share: {spec.title}</div><button type="button" className="pill-btn" style={{ marginLeft: "auto", padding: "2px 10px" }} onClick={() => setSpec(null)}>✕</button></div>
+            <div style={{ display: "flex", gap: 14, flexWrap: "wrap" }}>{tog("hideMeds", "Hide medication details")}{tog("hidePlace", "Hide location")}{tog("hideEvents", "Hide symptom events")}</div>
+            <div style={{ flex: 1, minHeight: 0, overflow: "auto", background: "#020617", borderRadius: 10, display: "flex", justifyContent: "center", alignItems: "flex-start" }}>{img ? <img src={img} alt="" style={{ width: "100%", maxWidth: 360, display: "block", opacity: busy ? 0.6 : 1 }} /> : <div className="card-subtitle" style={{ padding: 30 }}>Rendering…</div>}</div>
+            <button type="button" className="pill-btn primary" disabled={busy || !img} onClick={() => canvasRef.current && deliverShare(canvasRef.current, spec.name, spec.title)} style={{ padding: "10px 14px", fontSize: 14 }}>{navigator.share ? "Share…" : "Download PNG"}</button>
+          </div>
+        </div>
+      );
+    }
+    // Rasterise a live SVG element (cloned, with optional removals) onto the share canvas at width w.
+    async function drawSvg(g, svgEl, x, y, w, removeSelectors) {
+      const clone = svgEl.cloneNode(true); clone.setAttribute("xmlns", "http://www.w3.org/2000/svg");
+      (removeSelectors || []).forEach((sel) => clone.querySelectorAll(sel).forEach((n) => n.remove()));
+      const vb = (clone.getAttribute("viewBox") || "0 0 600 300").split(/[ ,]+/).map(Number); const ratio = vb[3] / vb[2]; const h = Math.round(w * ratio);
+      clone.setAttribute("width", w); clone.setAttribute("height", h); clone.style.width = ""; clone.style.height = ""; clone.setAttribute("font-family", '-apple-system, "SF Pro Text", Inter, system-ui, sans-serif');
+      const url = URL.createObjectURL(new Blob([new XMLSerializer().serializeToString(clone)], { type: "image/svg+xml;charset=utf-8" }));
+      try { const im = await new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = rej; i.src = url; }); g.drawImage(im, x, y, w, h); } catch (e) { console.error("svg raster", e); } finally { URL.revokeObjectURL(url); }
+      return h;
+    }
+    function shareLegend(g, x, y, items) { g.font = shareFont(400, 22); items.forEach(([label, color, kind]) => { if (kind === "line") { g.fillStyle = color; g.fillRect(x, y - 10, 26, 5); } else { g.fillStyle = color; g.beginPath(); g.roundRect(x, y - 18, 22, 22, 5); g.fill(); } g.fillStyle = "#94a3b8"; g.fillText(label, x + 32, y); x += 32 + g.measureText(label).width + 26; }); return y + 30; }
     const shareFont = (w, px) => `${w} ${px}px -apple-system, "SF Pro Text", Inter, system-ui, sans-serif`;
     function shareWrap(g, text, x, y, maxW, lh, fnt, col) { g.font = fnt; g.fillStyle = col; const words = String(text).split(/\s+/); let line = ""; for (const w of words) { const t = line ? line + " " + w : w; if (g.measureText(t).width > maxW && line) { g.fillText(line, x, y); y += lh; line = w; } else line = t; } if (line) { g.fillText(line, x, y); y += lh; } return y; }
     // An insight, fully expanded: observation, citation, action, bar or dot strip, stage, why, the per-day evidence, the full reference.
-    async function shareInsight(it, color) {
-      await shareCanvas((g, W, H, P, measuring) => {
+    function shareInsight(it, color) {
+      openShare({ title: it.title, name: `insight-${(it.title || "card").toLowerCase().replace(/[^a-z0-9]+/g, "-")}`, draw: (g, W, H, P, measuring) => {
         try { const path = new Path2D(INS_ICONS[it.icon] || INS_ICONS.chart); g.save(); g.translate(W - P - 300, 60); g.scale(12, 12); g.strokeStyle = color; g.globalAlpha = 0.1; g.lineWidth = 1.6; g.lineCap = "round"; g.lineJoin = "round"; g.stroke(path); g.restore(); } catch {}
         const cat = INS_CATS.find((x) => x[0] === it.category) || INS_CATS[3];
         g.fillStyle = color; g.font = shareFont(700, 30); g.fillText(cat[1].toUpperCase(), P, P + 30);
@@ -1735,7 +1776,89 @@
         }
         if (it.cite_full) { g.fillStyle = color; g.font = shareFont(700, 24); g.fillText("SOURCE", P, y); y += 32; y = shareWrap(g, it.cite_full, P, y, W - 2 * P, 32, shareFont(400, 23), "#64748b"); }
         return y;
-      }, `insight-${(it.title || "card").toLowerCase().replace(/[^a-z0-9]+/g, "-")}`, it.title);
+      } });
+    }
+    // --- the other shareables ---
+    function shareRing(svgEl, day, context, workouts, events) {
+      const key = day.dateKey; const rated = (day.segments || []).filter((sg) => sg.type === "rating").map((sg) => sg.rating);
+      const mean = rated.length ? rated.reduce((a, b) => a + b, 0) / rated.length : null;
+      const doses = normalizeMeds(day.meds).length;
+      openShare({ title: "QoL ring", name: `ring-${key}`, draw: async (g, W, H, P, measuring, opts) => {
+        const date = new Date(key + "T12:00:00").toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric" });
+        g.fillStyle = "#e2e8f0"; g.font = shareFont(700, 44); g.fillText(date, P, P + 40);
+        g.fillStyle = "#94a3b8"; g.font = shareFont(400, 28); g.fillText("Quality of life through the day, 1–5, rated every two hours", P, P + 84);
+        const remove = ['[data-share="hint"]']; if (opts.hidePlace) remove.push('[data-share="place"]'); if (opts.hideMeds) remove.push('[data-share="dose"]'); if (opts.hideEvents) remove.push('[data-share="event"]');
+        if (!measuring) await drawSvg(g, svgEl, P, P + 110, W - 2 * P, remove);
+        let y = P + 110 + (W - 2 * P) + 30;
+        const items = [["Home", PLACE_COLORS.home], ["Work", PLACE_COLORS.work], ["Sleep", "#4b5563"], ["No data", "#1e293b"]]; if (!opts.hideEvents) items.push(["Event", "#ef4444", "line"]); if ((workouts || []).length) items.push(["Workout", "#22c55e", "line"]);
+        y = shareLegend(g, P, y, opts.hidePlace ? items.slice(2) : items);
+        const parts = [mean != null ? `mean QoL ${mean.toFixed(1)} over ${rated.length} blocks` : "no ratings yet"]; if (!opts.hideMeds && doses) parts.push(`${doses} dose${doses === 1 ? "" : "s"}`); const ev = (events || []).filter((e) => eventSpanOnDay(e, key)); if (!opts.hideEvents && ev.length) parts.push(`${ev.length} event${ev.length === 1 ? "" : "s"}`); const wo = (workouts || []).filter((w) => contextSpanOnDay(w, key)); if (wo.length) parts.push(wo.map((w) => `${Math.round(w.minutes)} min ${w.name.toLowerCase()}${w.vigorous_min ? ` (${w.vigorous_min} vigorous)` : ""}`).join(", "));
+        y = shareWrap(g, parts.join(" · "), P, y + 10, W - 2 * P, 40, shareFont(500, 30), "#e2e8f0");
+        return y;
+      } });
+    }
+    function shareWeek(cells, rowLabels, rangeLabel, avgQoL, prevAvg, ratedSegments) {
+      openShare({ title: "This week", name: `week-${rangeLabel.replace(/[^a-z0-9]+/gi, "-").toLowerCase()}`, draw: (g, W, H, P, measuring, opts) => {
+        g.fillStyle = "#e2e8f0"; g.font = shareFont(700, 44); g.fillText(rangeLabel, P, P + 40);
+        g.fillStyle = "#94a3b8"; g.font = shareFont(400, 28); g.fillText("Seven days of two-hour quality-of-life blocks", P, P + 84);
+        const labelW = 110, gridW = W - 2 * P - labelW, cw = gridW / 12, rh = 84, top = P + 130;
+        g.font = shareFont(400, 22); g.fillStyle = "#64748b"; for (let i = 0; i < 12; i += 2) g.fillText(`${String(i * 2).padStart(2, "0")}`, P + labelW + i * cw + 2, top - 12);
+        const means = [];
+        for (let r = 0; r < 7; r++) { g.fillStyle = "#94a3b8"; g.font = shareFont(500, 26); g.fillText(rowLabels[r], P, top + r * rh + 50); let s = 0, n = 0;
+          for (let c = 0; c < 12; c++) { const cell = cells[r * 12 + c]; g.fillStyle = cell ? cell.color : "#000"; g.beginPath(); g.roundRect(P + labelW + c * cw + 3, top + r * rh + 6, cw - 6, rh - 12, 8); g.fill(); if (cell && cell.rating) { s += cell.rating; n++; } if (cell && !opts.hideEvents && cell.events && cell.events.length) { g.fillStyle = "#ef4444"; g.font = shareFont(700, 22); g.fillText("✱", P + labelW + c * cw + cw - 24, top + r * rh + 30); } }
+          means.push(n ? s / n : null); }
+        let y = top + 7 * rh + 20;
+        y = shareLegend(g, P, y + 10, [["5 best", ratingColor(5)], ["4", ratingColor(4)], ["3", ratingColor(3)], ["2", ratingColor(2)], ["1", ratingColor(1)], ["Sleep", "#4b5563"], ["Unrated", "#000000"]]);
+        const line = avgQoL != null ? `Mean QoL ${avgQoL.toFixed(2)} over ${ratedSegments} rated blocks${prevAvg != null ? ` · previous week ${prevAvg.toFixed(2)}` : ""}` : "No ratings yet";
+        y = shareWrap(g, line, P, y + 8, W - 2 * P, 40, shareFont(500, 30), "#e2e8f0");
+        return y;
+      } });
+    }
+    function shareDayVitals(svgEl, data) {
+      const d = data; const key = d.day;
+      openShare({ title: "Day vitals", name: `vitals-${key}`, story: true, draw: async (g, W, H, P, measuring, opts) => {
+        const date = new Date(key + "T12:00:00").toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric" });
+        g.fillStyle = "#e2e8f0"; g.font = shareFont(700, 44); g.fillText(date, P, P + 40);
+        g.fillStyle = "#94a3b8"; g.font = shareFont(400, 28); g.fillText("Heart rate and HRV by hour over the day's QoL, doses, events and workouts", P, P + 84);
+        const remove = []; if (opts.hideMeds) remove.push('[data-share="dose"]'); if (opts.hideEvents) remove.push('[data-share="event"]');
+        let y = P + 110; if (!measuring) y += await drawSvg(g, svgEl, P, y, W - 2 * P, remove); else y += (W - 2 * P) * 0.5;
+        y += 20; const items = [["Heart rate", "#f87171", "line"], ["HRV", "#38bdf8", "line"]]; if (!opts.hideMeds) items.push(["Dose", "#38bdf8"]); if (!opts.hideEvents) items.push(["Event", "#ef4444"]); if ((d.workouts || []).length) items.push(["Workout", "#22c55e"]);
+        y = shareLegend(g, P, y + 10, items);
+        // stats row
+        const o = d.oura || {}, dl = d.daily || {}; const wo = d.workouts || [];
+        const stats = [["Sleep", o.total_sleep_h != null ? `${Number(o.total_sleep_h).toFixed(1)} h` : "–"], ["Night HRV", o.avg_hrv != null ? `${Math.round(o.avg_hrv)} ms` : "–"], ["Resting HR", dl.resting_heart_rate != null ? `${Math.round(dl.resting_heart_rate)} bpm` : o.lowest_hr != null ? `${Math.round(o.lowest_hr)} low` : "–"], ["Steps", dl.step_count != null ? Math.round(dl.step_count).toLocaleString() : "–"]];
+        if (!opts.hideMeds) stats.push(["Doses", String((d.doses || []).filter((x) => x.kind !== "supplement").length)]); if (wo.length) stats.push(["Vigorous", `${wo.reduce((a, w) => a + (w.vigorous_min || 0), 0)} min`]);
+        const bw = (W - 2 * P - 20 * (stats.length - 1)) / stats.length; y += 20;
+        stats.forEach(([lab, val], i) => { const x = P + i * (bw + 20); g.fillStyle = "#0b1324"; g.beginPath(); g.roundRect(x, y, bw, 110, 14); g.fill(); g.fillStyle = "#64748b"; g.font = shareFont(400, 22); g.fillText(lab, x + 16, y + 36); g.fillStyle = "#e2e8f0"; g.font = shareFont(700, 34); g.fillText(val, x + 16, y + 84); });
+        y += 130;
+        const q = (d.qol || []).filter((r) => r.type === "rating"); if (q.length) { const m = q.reduce((a, r) => a + Number(r.rating), 0) / q.length; y = shareWrap(g, `Mean QoL ${m.toFixed(1)} over ${q.length} rated blocks`, P, y + 20, W - 2 * P, 40, shareFont(500, 30), "#e2e8f0"); }
+        return y;
+      } });
+    }
+    function shareCorrelation(svgEl, label, lag, corr, meanQol, rated, span) {
+      openShare({ title: "QoL correlation", name: `correlation-${label.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`, draw: async (g, W, H, P, measuring, opts) => {
+        g.fillStyle = "#e2e8f0"; g.font = shareFont(700, 44); g.fillText(label ? `QoL and ${label}` : "QoL over time", P, P + 40);
+        g.fillStyle = "#94a3b8"; g.font = shareFont(400, 28); g.fillText(`Last ${span} days${lag === -1 ? " · metric from the day before" : lag === 1 ? " · metric from the day after" : ""}`, P, P + 84);
+        let y = P + 110; if (!measuring) y += await drawSvg(g, svgEl, P, y, W - 2 * P, opts.hideMeds ? ['[data-share="dose"]'] : []); else y += (W - 2 * P) * 0.5;
+        const items = [["Mean QoL (1–5)", "#38bdf8", "line"]]; if (!opts.hideMeds) items.push(["Levodopa doses / day", "#334155"]); if (label) items.push([label, "#a3e635", "line"]);
+        y = shareLegend(g, P, y + 30, items);
+        y = shareWrap(g, `Mean QoL ${meanQol} over ${rated} rated days`, P, y + 8, W - 2 * P, 40, shareFont(500, 30), "#e2e8f0");
+        if (label && corr) y = shareWrap(g, `${label}${lag === -1 ? " (day before)" : lag === 1 ? " (day after)" : ""} vs QoL: ${describeCorrelation(corr)}`, P, y + 6, W - 2 * P, 38, shareFont(400, 28), "#cbd5e1");
+        y = shareWrap(g, "Spearman rank correlation over days with both values. Correlation isn't cause.", P, y + 6, W - 2 * P, 32, shareFont(400, 23), "#64748b");
+        return y;
+      } });
+    }
+    function shareWorkouts(svgEl, st, prof) {
+      const cur = st.current || {}; const target = prof.weeklyVigorousMin || 120;
+      openShare({ title: "Workouts by intensity", name: "workouts-week", draw: async (g, W, H, P, measuring, opts) => {
+        g.fillStyle = "#e2e8f0"; g.font = shareFont(700, 44); g.fillText("Workouts by intensity", P, P + 40);
+        g.fillStyle = "#94a3b8"; g.font = shareFont(400, 28); g.fillText(`Minutes per week · vigorous = ≥${prof.vigorousBpm} bpm (≈80 % of HRmax ${prof.hrMax})`, P, P + 84);
+        let y = P + 110; if (!measuring) y += await drawSvg(g, svgEl, P, y, W - 2 * P, []); else y += (W - 2 * P) * 0.28;
+        y = shareLegend(g, P, y + 30, [["Vigorous", "#22c55e"], ["Moderate", "#86efac"], ["Easier", "#475569"], [`${target} min target`, "#22c55e", "line"]]);
+        y = shareWrap(g, `This week: ${Math.round(cur.vigorous || 0)} vigorous minutes of ${target}, ${cur.sessions || 0} session${cur.sessions === 1 ? "" : "s"}${st.avg4 && st.avg4.vigorous != null ? ` · 4-week average ${Math.round(st.avg4.vigorous)}` : ""}`, P, y + 8, W - 2 * P, 40, shareFont(500, 30), "#e2e8f0");
+        y = shareWrap(g, "SPARX 2018: 4 × 30 min/week at 80–85 % HRmax held UPDRS-III steady over six months.", P, y + 6, W - 2 * P, 34, shareFont(400, 25), "#64748b");
+        return y;
+      } });
     }
     function InsightItem({ it, color, busy, open, onToggle, onVote, onPin, onDismiss, go }) {
       const voted = it.vote !== 0;
@@ -2035,7 +2158,7 @@
     }
 
     // Two series, shared x (days), independent y axes. Left = primary, right = overlay. Bars = optional counts.
-    function DualAxisChart({ rows, left, right, bars, height = 150 }) {
+    function DualAxisChart({ rows, left, right, bars, height = 150, id }) {
       const W = 600, H = height, padL = 32, padR = right ? 36 : 10, padT = 8, padB = 20;
       const n = rows.length;
       const x = (i) => padL + (n <= 1 ? 0 : (i * (W - padL - padR)) / (n - 1));
@@ -2056,7 +2179,7 @@
       const fmt = (v) => (Math.abs(v) >= 100 ? Math.round(v) : Number.isInteger(v) ? v : v.toFixed(1));
       const barMax = bars ? Math.max(1, ...rows.map((r) => Number(r[bars.key]) || 0)) : 1;
       return (
-        <svg viewBox={`0 0 ${W} ${H}`} style={{ width: "100%", height: H, display: "block" }}>
+        <svg id={id} viewBox={`0 0 ${W} ${H}`} style={{ width: "100%", height: H, display: "block" }}>
           {L && [L.lo, (L.lo + L.hi) / 2, L.hi].map((t, i) => (
             <g key={i}>
               <line x1={padL} x2={W - padR} y1={L.y(t)} y2={L.y(t)} stroke="#1f2937" />
@@ -2069,7 +2192,7 @@
           {bars && rows.map((r, i) => {
             const v = Number(r[bars.key]) || 0; if (!v) return null;
             const h = ((H - padT - padB) * v) / barMax;
-            return <rect key={i} x={x(i) - 3} y={H - padB - h} width="6" height={h} fill="#334155" rx="1" />;
+            return <rect key={i} data-share="dose" x={x(i) - 3} y={H - padB - h} width="6" height={h} fill="#334155" rx="1" />;
           })}
           {R && !R.empty && <path d={R.d} fill="none" stroke={right.color} strokeWidth="1.5" strokeDasharray="4 3" />}
           {R && !R.empty && R.vals.map((v, i) => v == null ? null : <circle key={i} cx={x(i)} cy={R.y(v)} r="2" fill={right.color} />)}
@@ -2127,7 +2250,7 @@
           " L" + bandHours.slice().reverse().map((h) => x(h + 0.5).toFixed(1) + " " + y(mnH[h]).toFixed(1)).join(" L") + " Z"
         : "";
       return (
-        <svg viewBox={`0 0 ${W} ${H}`} style={{ width: "100%", height: H, display: "block" }}>
+        <svg id="pdm-dayvitals-svg" viewBox={`0 0 ${W} ${H}`} style={{ width: "100%", height: H, display: "block" }}>
           {data.qol.map((q) => (
             <rect key={q.seg} x={x(q.seg * 2)} y={padT} width={x(2) - x(0)} height={H - padT - padB}
               fill={q.type === "rating" ? QOL_COLORS[q.rating] : q.type === "sleep" ? "#475569" : "#0f172a"} opacity={q.type === "rating" ? 0.22 : 0.25} />
@@ -2141,7 +2264,7 @@
           {(data.events || []).map((e, i) => {
             const dayStart = new Date(data.day + "T00:00:00"); const h0 = Math.max(0, (new Date(e.start) - dayStart) / 36e5); const h1 = Math.min(24, e.end ? (new Date(e.end) - dayStart) / 36e5 : h0 + 0.5);
             if (h1 <= 0 || h0 >= 24) return null;
-            return <g key={"e" + i}><rect x={x(h0)} y={padT} width={Math.max(2, x(h1) - x(h0))} height={H - padT - padB} fill={eventColor(e.type)} opacity="0.35" /><rect x={x(h0)} y={padT} width={Math.max(2, x(h1) - x(h0))} height={4} fill={eventColor(e.type)} /><title>{eventLabel(e.type)} {e.severity}/5 {fmtEventTime(e.start)}–{e.end ? fmtEventTime(e.end) : "ongoing"}{e.minutes_since_dose != null ? ` · ${e.minutes_since_dose} min after dose` : ""}</title></g>;
+            return <g key={"e" + i} data-share="event"><rect x={x(h0)} y={padT} width={Math.max(2, x(h1) - x(h0))} height={H - padT - padB} fill={eventColor(e.type)} opacity="0.35" /><rect x={x(h0)} y={padT} width={Math.max(2, x(h1) - x(h0))} height={4} fill={eventColor(e.type)} /><title>{eventLabel(e.type)} {e.severity}/5 {fmtEventTime(e.start)}–{e.end ? fmtEventTime(e.end) : "ongoing"}{e.minutes_since_dose != null ? ` · ${e.minutes_since_dose} min after dose` : ""}</title></g>;
           })}
           {(data.workouts || []).map((w, i) => {
             // Workout band: green span from start to end (like the dose lines, but a stretch), with the per-minute heart rate drawn inside it.
@@ -2170,7 +2293,7 @@
           {data.doses.map((d, i) => {
             const [hh, mm] = d.t.split(":").map(Number); const dopa = d.dopaminergic !== false && d.kind !== "supplement"; const supp = d.kind === "supplement";
             return (
-              <g key={i}>
+              <g key={i} data-share={supp ? "supp" : "dose"}>
                 <line x1={x(hh + mm / 60)} x2={x(hh + mm / 60)} y1={padT} y2={H - padB} stroke={dopa ? "#f8fafc" : supp ? "#facc15" : "#64748b"} strokeWidth={dopa ? 1.5 : 1} strokeDasharray={dopa ? "2 2" : "1 3"} />
                 {dopa && <text x={x(hh + mm / 60)} y={padT + 9} fontSize="9" fill="#f8fafc" textAnchor="middle">💊</text>}
                 <title>{d.drug} {d.t}</title>
@@ -2227,7 +2350,7 @@
         <div className={embedded ? "" : "card"} style={embedded ? { marginTop: 12, paddingTop: 10, borderTop: "1px solid #1e293b" } : undefined}>
           <div className="card-header">
             <div>
-              <div className="card-title" style={embedded ? { fontSize: 14 } : undefined}>Day vitals</div>
+              <div className="card-title" style={embedded ? { fontSize: 14 } : undefined}>Day vitals{hasHourly && <ShareBtn style={{ marginLeft: 8, verticalAlign: "middle" }} onClick={() => shareDayVitals(document.getElementById("pdm-dayvitals-svg"), data)} />}</div>
               <div className="card-subtitle">Hourly heart rate (band = min–max) and HRV (dashed), over your QoL ratings. Levodopa doses as white dashed lines, other medications as faint grey; tests as dots with their 1–5 score: tremor pink, tapping blue, gait green, balance amber. Workouts as green bands with their heart rate.</div>
             </div>
           </div>
@@ -2424,8 +2547,8 @@
       const maxD = Math.max(30, ...l14.map((d) => d.workout_minutes));
       return (
         <div className="card">
-          <div className="card-header"><div><div className="card-title">Workouts by intensity</div><div className="card-subtitle">Minutes per week: <span style={{ color: "#22c55e" }}>■</span> vigorous, <span style={{ color: "#86efac" }}>■</span> moderate, <span style={{ color: "#475569" }}>■</span> easier. Dashed lines: {target} vigorous min/week (the SPARX dose) and {mvpaT} min/week moderate-plus-vigorous (guideline). {zoneNote(prof)}</div></div></div>
-          <svg viewBox={`0 0 ${W} ${H}`} style={{ width: "100%", height: H, display: "block" }}>
+          <div className="card-header"><ShareBtn style={{ float: "right" }} onClick={() => shareWorkouts(document.getElementById("pdm-workouts-svg"), st, prof)} /><div><div className="card-title">Workouts by intensity</div><div className="card-subtitle">Minutes per week: <span style={{ color: "#22c55e" }}>■</span> vigorous, <span style={{ color: "#86efac" }}>■</span> moderate, <span style={{ color: "#475569" }}>■</span> easier. Dashed lines: {target} vigorous min/week (the SPARX dose) and {mvpaT} min/week moderate-plus-vigorous (guideline). {zoneNote(prof)}</div></div></div>
+          <svg id="pdm-workouts-svg" viewBox={`0 0 ${W} ${H}`} style={{ width: "100%", height: H, display: "block" }}>
             {[target, mvpaT].map((t, i) => <g key={i}><line x1={padL} x2={W - padR} y1={y(t)} y2={y(t)} stroke={i ? "#64748b" : "#22c55e"} strokeDasharray="4 3" opacity="0.7" /><text x={padL - 3} y={y(t) + 3} fontSize="9" fill={i ? "#94a3b8" : "#22c55e"} textAnchor="end">{t}</text></g>)}
             {weeks.map((w, i) => {
               const x0 = padL + i * bw + bw * 0.15, wd = bw * 0.7; const easy = Math.max(0, w.minutes - w.vigorous - w.moderate);
@@ -4123,6 +4246,7 @@
               <div className="card-title">QoL correlations</div>
               <div className="card-subtitle">Daily mean QoL (line) with levodopa doses per day (bars), plus any synced metric on a second axis.</div>
             </div>
+            {rows && <ShareBtn onClick={() => shareCorrelation(document.getElementById("pdm-corr-svg"), pick ? metricLabel(src + "/" + met) : "", lag, corr, meanQol, rated.length, span)} />}
           </div>
           <div className="controls-row" style={{ flexWrap: "wrap", gap: 8 }}>
             {[14, 30, 90].map((n) => (
@@ -4156,6 +4280,7 @@
                 pick && { label: `${metricLabel(src + "/" + met)}${lag === -1 ? " (day before)" : lag === 1 ? " (day after)" : ""} (right)`, color: "#a3e635", dashed: true },
               ]} />
               <DualAxisChart
+                id="pdm-corr-svg"
                 rows={rows}
                 left={{ key: "qol", color: "#38bdf8", min: 1, max: 5 }}
                 right={pick ? { key: "metric_value", color: "#a3e635" } : null}
@@ -4367,6 +4492,7 @@
 
           cells.push({
             key: `${rowIndex}-${segIndex}`,
+            rating: seg && seg.type === "rating" && !(isToday && segMidMinute > nowMinutes) ? seg.rating : null,
             color,
             dateKey: key,
             segIndex,
@@ -4381,6 +4507,7 @@
       const avgQoL = ratedSegments ? Object.entries(counts).reduce((sum, [r, c]) => sum + Number(r) * c, 0) / ratedSegments : null;
       const maxCount = Math.max(1, ...Object.values(counts));
       const rowLabels = last7Dates.map((d) => d.toLocaleDateString(undefined, { weekday: "short" }).slice(0, 2) + " " + d.getDate());
+      const prevAvg = (() => { let s = 0, n = 0; for (let i = 7; i < 14; i++) { const d = new Date(base); d.setDate(base.getDate() - (i - 6)); const dd = days[toDateKey(d)]; (dd && dd.segments || []).forEach((sg) => { if (sg.type === "rating") { s += sg.rating; n++; } }); } return n ? s / n : null; })();
 
       return (
         <div className={embedded ? "summary-card" : "card summary-card"} style={embedded ? { marginTop: 12, paddingTop: 10, borderTop: "1px solid #1e293b" } : undefined}>
@@ -4391,7 +4518,7 @@
             </div>
           </div>}
           <div style={{ fontSize: "11px", color: "var(--muted)", marginTop: 4 }}>
-            {embedded ? <><strong style={{ color: "var(--text)" }}>{rangeLabel}.</strong> Tap a day to open it, a cell to rate that 2-hour block. Gray = sleep, black = unrated, <span style={{ color: "#ef4444" }}>✱</span> = event.</> : <>Each cell is a 2-hour block: red → lower QoL, green/blue → better QoL, gray = sleep, black = no data / not yet logged. <span style={{ color: "#ef4444" }}>✱</span> = a symptom event touched that block.</>}
+            {embedded ? <><strong style={{ color: "var(--text)" }}>{rangeLabel}.</strong> Tap a day to open it, a cell to rate that 2-hour block. Gray = sleep, black = unrated, <span style={{ color: "#ef4444" }}>✱</span> = event. <ShareBtn style={{ marginLeft: 6, verticalAlign: "middle" }} onClick={() => shareWeek(cells, rowLabels, rangeLabel, avgQoL, prevAvg, ratedSegments)} /></> : <>Each cell is a 2-hour block: red → lower QoL, green/blue → better QoL, gray = sleep, black = no data / not yet logged. <span style={{ color: "#ef4444" }}>✱</span> = a symptom event touched that block.</>}
           </div>
           <div className="summary-chart" style={{ display: "grid", gridTemplateColumns: "34px 1fr 28px", gap: 4, alignItems: "stretch" }}>
             <div style={{ display: "grid", gridTemplateRows: "repeat(7, 1fr)", fontSize: 10, color: "var(--muted)", gap: 3 }}>
@@ -5044,6 +5171,7 @@
                 <span><i style={{ background: "#1f2933", boxShadow: "inset 0 0 0 1px #334155" }} />No data</span>
                 <span><i style={{ background: "#ef4444", height: 4, borderRadius: 2 }} />Event</span>
                 <span><i style={{ background: "#22c55e", height: 4, borderRadius: 2 }} />Workout</span>
+                <ShareBtn style={{ marginLeft: "auto" }} onClick={() => shareRing(document.getElementById("pdm-ring-svg"), day, dayContext, dayWorkouts, dayEventList)} />
               </div>
             </div>
             <div className="controls-row">
@@ -5179,7 +5307,7 @@
             </>
           )}
 
-          <UpdateBanner />
+          <UpdateBanner /><ShareSheet />
           <nav className="tabbar" aria-label="Sections">
             {TABS.map(([id, label, icon]) => (
               <button key={id} type="button" className={"tab" + (tab === id ? " active" : "")} onClick={() => setTab(id)} aria-current={tab === id ? "page" : undefined}>

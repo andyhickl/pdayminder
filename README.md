@@ -90,6 +90,14 @@ same and keeps the item in place; ✕ dismisses for 30 days. Env: `ANTHROPIC_API
 whether a key is present, and the last write/explore result or error. Without a key everything runs on templates.
 The Hypotheses engine still runs underneath (`/api/hypotheses`), but has no card of its own any more.
 
+## Sharing
+Five assets render to PNG in one frame (dark gradient, app icon + name, date, "personal data, not medical advice"):
+the QoL ring, the week grid, Day vitals (story size, with a stats row), the QoL correlation chart, and the weekly
+workouts chart, plus any Insights card fully expanded (why, per-day evidence, source). 1080×1350 (Instagram 4:5) when
+it fits, 1080×1920 when it needs the room. The share icon sits in each card's header; a sheet shows a live preview with
+three remembered toggles (hide medication details, hide location, hide symptom events) that strip the matching
+`data-share` elements from the SVG before rasterising. iOS gets the share sheet; elsewhere it downloads.
+
 ## Home tab: batteries and hypotheses
 The first tab is Home: date, ring + logging, **Run tests**, **Hypotheses**, recent days. A battery is the day's four
 tests in order (tremor and tapping daily; the third and fourth slots rotate by weekday: pa-ta-ka, gait, balance,
