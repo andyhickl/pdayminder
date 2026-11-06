@@ -489,6 +489,7 @@
       display: flex; justify-content: center; gap: 2px;
       background: rgba(15, 23, 42, 0.96); border-top: 1px solid var(--border);
       padding: 6px 6px calc(6px + env(safe-area-inset-bottom)); backdrop-filter: blur(8px);
+      transform: translateZ(0); will-change: transform; /* keeps iOS from dropping the fixed bar during nested horizontal scrolling */
     }
     .tab {
       flex: 1; max-width: 110px; background: none; border: 0; color: var(--muted); cursor: pointer;
@@ -1659,13 +1660,13 @@
             <button type="button" className="pill-btn" style={{ padding: "2px 8px", flexShrink: 0 }} disabled={loading} title="Regenerate (asks the explorer again)" onClick={() => load("?regen=1")}><span style={{ display: "inline-block", animation: loading ? "pdm-spin 1s linear infinite" : "none" }}>↻</span></button>
           </div>
           <div style={{ height: 2, margin: "6px 14px 0", borderRadius: 1, background: "#1e293b", overflow: "hidden", opacity: loading ? 1 : 0, transition: "opacity .2s" }}><div style={{ height: 2, width: "40%", background: "#38bdf8", animation: loading ? "pdm-slide 1.1s ease-in-out infinite" : "none" }} /></div>
-          <div style={{ display: "flex", gap: 6, padding: "8px 14px 10px", overflowX: "auto" }}>
+          <div style={{ display: "flex", gap: 6, padding: "8px 14px 10px", overflowX: "auto", overscrollBehaviorX: "contain", scrollbarWidth: "none" }}>
             {INS_CATS.map(([id, label, color, icon], i) => { const n = (data.pages[id] || []).length; const on = i === page; return (
               <button key={id} type="button" onClick={() => setPage(i)} style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 12, padding: "4px 10px", borderRadius: 999, border: `1px solid ${on ? color : "#1e293b"}`, background: on ? "rgba(255,255,255,0.03)" : "transparent", color: on ? color : "#64748b", fontWeight: on ? 600 : 400, whiteSpace: "nowrap" }}>
                 <InsIcon name={icon} color={on ? color : "#64748b"} size={14} />{label}<span style={{ fontSize: 10, color: on ? color : "#475569" }}>{n}</span>
               </button>); })}
           </div>
-          <div ref={trackRef} onScroll={onScroll} style={{ display: "flex", overflowX: "auto", scrollSnapType: "x mandatory", scrollbarWidth: "none", gap: 0 }}>
+          <div ref={trackRef} onScroll={onScroll} style={{ display: "flex", overflowX: "auto", overflowY: "hidden", scrollSnapType: "x mandatory", scrollbarWidth: "none", gap: 0, overscrollBehaviorX: "contain", WebkitOverflowScrolling: "touch" }}>
             {INS_CATS.map(([id, label, color, icon, sub]) => { const items = data.pages[id] || []; return (
               <div key={id} style={{ flex: "0 0 100%", scrollSnapAlign: "start", padding: "0 14px", boxSizing: "border-box" }}>
                 <div style={{ background: "linear-gradient(180deg,#121c33,#0f172a)", border: "1px solid #1e293b", borderRadius: 14, padding: 12, height: "100%", boxSizing: "border-box" }}>
@@ -1737,7 +1738,7 @@
               <button type="button" className="pill-btn" title={it.vote > 0 ? "You found this useful" : "Useful"} style={{ padding: "1px 7px", background: it.vote > 0 ? "#365314" : undefined, boxShadow: it.vote > 0 ? "0 0 0 1.5px #a3e635" : undefined, opacity: voted && it.vote <= 0 ? 0.4 : 1 }} disabled={busy || voted} onClick={() => onVote(1)}>👍</button>
               <button type="button" className="pill-btn" title={it.pinned ? "Unpin" : "Pin"} style={{ padding: "1px 7px", background: it.pinned ? "#713f12" : undefined, boxShadow: it.pinned ? "0 0 0 1.5px #fbbf24" : undefined }} disabled={busy} onClick={onPin}>📌</button>
               <button type="button" className="pill-btn" title="Retire this one" style={{ padding: "1px 7px", opacity: it.pinned ? 0.4 : 1 }} disabled={busy || it.pinned} onClick={onDismiss}>✕</button>
-              <button type="button" className="pill-btn" title="Share as an image" style={{ padding: "1px 7px" }} onClick={() => shareInsight(it, color)}>⇪</button>
+              <button type="button" className="pill-btn" title="Share as an image" style={{ padding: "1px 7px", display: "inline-flex", alignItems: "center" }} onClick={() => shareInsight(it, color)}><svg width="14" height="16" viewBox="0 0 24 28" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 3v15M7 8l5-5 5 5M5 13v10a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V13" /></svg></button>
             </span>
           </div>
           {open && <div style={{ marginTop: 6, fontSize: 11, color: "#94a3b8", lineHeight: 1.45 }}>
@@ -4580,7 +4581,7 @@
         <div style={{ minWidth: 0 }}>
           <div style={{ display: "flex", alignItems: "baseline", gap: 6 }}>
             <div style={{ fontSize: 22, fontWeight: 700, color: col(has ? r.last : null), lineHeight: 1 }}>{has ? fmt(r.last) : "–"}</div>
-            <div style={{ fontSize: 10, color: "#64748b", whiteSpace: "nowrap" }}>{has ? `7d ${fmt(r.m7)} · 30d ${fmt(r.m30)}` : k.endsWith("_base") ? "building baselines" : "no tests yet"}</div>
+            <div style={{ fontSize: 10, color: "#64748b", whiteSpace: "nowrap" }}>{has ? `latest · 7d ${fmt(r.m7)} · 30d ${fmt(r.m30)}` : k.endsWith("_base") ? "building baselines" : "no tests yet"}</div>
           </div>
           {has && <div style={{ marginTop: 4 }}><Spark series={r.series} color={col(r.last)} h={26} /></div>}
         </div>); };
@@ -4589,7 +4590,7 @@
           <div className="card-header">
             <div>
               <div className="card-title">Status vs benchmarks</div>
-              <div className="card-subtitle">Composite test scores (1–5, 5 best), daily means over 30 days. Left: vs healthy reference. Right: vs your personal baseline, which needs five saved tests of each kind before it scores anything. They answer different questions; both can be true at once.</div>
+              <div className="card-subtitle">The big coloured number is the most recent day with a test (not an average); the small grey figures are the 7- and 30-day means, and the sparkline is the last 30 days. Scores are 1–5, 5 best. Left: vs healthy reference. Right: vs your personal baseline, which needs five saved tests of each kind before it scores anything. They answer different questions; both can be true at once.</div>
             </div>
           </div>
           {err && <div className="card-subtitle">Couldn't load ({err}).</div>}
@@ -4797,6 +4798,7 @@
       const [session, setSession] = useState(null); // {phase, tests, index, id}
       const [sessionsTick, setSessionsTick] = useState(0);
       const [sessions] = useJson("/api/sessions?days=14", [sessionsTick]);
+      const [dataLoaded, setDataLoaded] = useState(false);
       sessionRef.current = session;
       sessionRef.onSaved = (kind) => {
         setSession((sess) => {
@@ -4882,7 +4884,7 @@
             if (Array.isArray(payload.context)) setRecentContext(payload.context);
             if (Array.isArray(payload.workouts)) setRecentWorkouts(payload.workouts);
             // Mark the post-load state as clean on the next render.
-            setTimeout(() => { loadedRef.current = true; dirtyDaysRef.current = new Set(); settingsDirtyRef.current = false; }, 0);
+            setTimeout(() => { loadedRef.current = true; dirtyDaysRef.current = new Set(); settingsDirtyRef.current = false; setDataLoaded(true); }, 0);
           } catch {
             // ignore if no backend
           }
@@ -4984,7 +4986,7 @@
 
           {tab === "qol" && (
             <>
-          <TestsDueBanner days={days} settings={settings} sessions={sessions} onStart={startBattery} />
+          {dataLoaded && sessions && <TestsDueBanner days={days} settings={settings} sessions={sessions} onStart={startBattery} />}
           <Section title="Today" subtitle="Ring, log, the day's vitals, and the week; one date for all of it." storageKey="qol-ring">
           <div className="card">
             <div className="day-nav" style={{ marginTop: 0 }}>
@@ -5121,7 +5123,7 @@
             </>
           )}
 
-          {tab === "stats" && <><StatusCard /><Section title="Exercise" subtitle="Vigorous minutes and sessions this week against the therapeutic dose." storageKey="st-exercise" defaultOpen={false}><WorkoutStatsCard /></Section><Section title="Location" subtitle="Home, work, driving, out: hours and QoL in each." storageKey="st-location" defaultOpen={false}><LocationStatsCard /></Section><StatsTab /></>}
+          {tab === "stats" && <><Section title="Status vs benchmarks" subtitle="Composite test scores: the latest day's value in colour, with 7- and 30-day means beside it." storageKey="st-status"><StatusCard /></Section><Section title="Exercise" subtitle="Vigorous minutes and sessions this week against the therapeutic dose." storageKey="st-exercise" defaultOpen={false}><WorkoutStatsCard /></Section><Section title="Location" subtitle="Home, work, driving, out: hours and QoL in each." storageKey="st-location" defaultOpen={false}><LocationStatsCard /></Section><StatsTab /></>}
 
           {tab === "settings" && (
             <>
