@@ -14,7 +14,7 @@
 const crypto = require("crypto");
 
 module.exports = function init({ pool, hyp, TZ, localDayOf, exerciseProfile, workoutDays, dopaDrugs, placeQol }) {
-  const DISMISS_DAYS = 30, PER_CATEGORY = 3;
+  const DISMISS_DAYS = 30, PER_CATEGORY = 2;
   const MODEL = process.env.INSIGHTS_MODEL || "claude-sonnet-5-5";
   const KEY = process.env.ANTHROPIC_API_KEY || "";
   const state = { lastError: null, lastWrite: null, lastExplore: null, model: MODEL, hasKey: Boolean(KEY) };
@@ -93,6 +93,28 @@ module.exports = function init({ pool, hyp, TZ, localDayOf, exerciseProfile, wor
     if (doses.length && doses.length < expected && nowH - doses[doses.length - 1] > 5 && nowH < 22) { const gap = r1(nowH - doses[doses.length - 1]); out.push({ key: `today:gap:${today}:${doses.length}`, category: "today", icon: "pill", title: "Long gap since the last dose", tag: `${hm(doses[doses.length - 1])} dose`, stage: "noticed", family: "doses", base: 0.95, cite: "wearing",
       facts: { hours_since: gap, last_dose: hm(doses[doses.length - 1]), taken: doses.length, expected },
       template: { text: `${gap} h since the ${hm(doses[doses.length - 1])} dose, with ${expected - doses.length} of today's ${expected} still to come.`, action: "If you are past the plan, log the next dose when you take it; the ring and the post-dose battery both key off it." }, links: [{ label: "Today", day: today }] }); }
+    // today so far against the same blocks on other days (fires whenever there are ratings today)
+    const tq = (await pool.query(`select to_char(day,'YYYY-MM-DD') as day, seg, rating from qol_ratings where user_id = $1 and type = 'rating' and day >= $2::date - 30`, [uid, today])).rows;
+    const todayRows = tq.filter((r) => r.day === today);
+    if (todayRows.length >= 2) {
+      const segs = todayRows.map((r) => r.seg); const same = tq.filter((r) => r.day !== today && segs.includes(r.seg));
+      const t = mean(todayRows.map((r) => Number(r.rating))), u = mean(same.map((r) => Number(r.rating)));
+      const last = todayRows.reduce((a, r) => (r.seg > a.seg ? r : a), todayRows[0]);
+      if (u != null && same.length >= 10) out.push({ key: `today:sofar:${today}:${todayRows.length}`, category: "today", icon: "star", title: "Today so far", tag: `${todayRows.length} blocks rated`, stage: "noticed", family: "qol", base: 0.7, cite: "own",
+        facts: { today_mean: r1(t), usual_same_blocks: r1(u), blocks_rated: todayRows.length, latest_block: `${String(last.seg * 2).padStart(2, "0")}:00–${String(last.seg * 2 + 2).padStart(2, "0")}:00`, latest_rating: Number(last.rating), comparison_days: Math.round(same.length / Math.max(1, segs.length)) },
+        template: { text: `Today's ${todayRows.length} rated blocks average ${r1(t)}, against ${r1(u)} for the same hours over the last 30 days.`, action: t >= u + 0.3 ? "A better-than-usual day; the best-day note will tell you later what was different." : t <= u - 0.3 ? "Below your usual for these hours; check the dose gap and last night's sleep before reading more into it." : "Running at your usual level for these hours." }, links: [{ label: "Today", day: today }] });
+    }
+    // last night
+    const ln = (await pool.query(`select metric, value from observations where user_id = $1 and source = 'oura' and metric in ('total_sleep_h','deep_h','avg_hrv','lowest_hr','readiness_score','bedtime_start_hour') and (ts at time zone $2)::date = $3::date`, [uid, TZ, today])).rows;
+    const night = Object.fromEntries(ln.map((r) => [r.metric, Number(r.value)]));
+    if (night.total_sleep_h != null) {
+      const hist = (await pool.query(`select metric, percentile_cont(0.5) within group (order by value) as v from observations where user_id = $1 and source = 'oura' and metric in ('total_sleep_h','avg_hrv','readiness_score') and ts > now() - interval '30 days' group by metric`, [uid])).rows;
+      const medn = Object.fromEntries(hist.map((r) => [r.metric, Number(r.v)]));
+      const better = night.total_sleep_h >= (medn.total_sleep_h || 7);
+      out.push({ key: `today:night:${today}`, category: "today", icon: "moon", title: "Last night", tag: night.bedtime_start_hour != null ? `bed ${hm(((night.bedtime_start_hour % 24) + 24) % 24)}` : "Oura", stage: "noticed", family: "sleep", base: 0.75, cite: "sleep",
+        facts: { sleep_h: r1(night.total_sleep_h), median_30d_h: r1(medn.total_sleep_h), deep_h: r1(night.deep_h), hrv_ms: r0(night.avg_hrv), hrv_median_ms: r0(medn.avg_hrv), readiness: r0(night.readiness_score), readiness_median: r0(medn.readiness_score), lowest_hr: r0(night.lowest_hr) },
+        template: { text: `${r1(night.total_sleep_h)} h of sleep last night (your 30-day median is ${r1(medn.total_sleep_h)})${night.avg_hrv != null ? `, HRV ${r0(night.avg_hrv)} ms` : ""}${night.readiness_score != null ? `, readiness ${r0(night.readiness_score)}` : ""}.`, action: better ? "A good base for the day; the afternoon is where short nights usually show, so it should hold." : "A short night tends to show in the afternoon ratings; keep the midday dose on time and the lunch protein light." }, links: [{ label: "Vitals", tab: "trends", section: "tr-vitals" }] });
+    }
     // events today vs last dose
     const ev = (await pool.query(`select ts, value, raw from observations where user_id = $1 and source = 'event' and metric = 'event' and (ts at time zone $2)::date = $3::date order by ts`, [uid, TZ, today])).rows;
     for (const e of ev) { const h = localHour(e.ts); const prev = doses.filter((t) => t <= h).pop(); if (prev == null) continue; const since = r1(h - prev); if (since >= 3) out.push({ key: `today:event:${today}:${Math.round(h * 4)}`, category: "today", icon: "flag", title: `${(e.raw && e.raw.type) || "Event"} ${since} h after the dose`, tag: hm(h), stage: "noticed", family: "events", base: 0.85, cite: (e.raw && e.raw.type) === "dystonia" ? "dystonia" : "wearing",
@@ -197,6 +219,14 @@ module.exports = function init({ pool, hyp, TZ, localDayOf, exerciseProfile, wor
         facts: { measure: f.label, unit: f.unit, last_2_weeks: r1(m1), previous_4_weeks: r1(m0), sd_change: r1(Math.abs(z)), direction: better === false ? "worse" : better ? "better" : "different" },
         template: { text: `${cap(f.label)} over the last two weeks averages ${r1(m1)}${f.unit ? " " + f.unit : ""}, ${better === false ? "worse" : better ? "better" : "different"} than the previous four weeks (${r1(m0)}) by ${r1(Math.abs(z))} SD.`, action: better === false ? "Slow drift is what a neurologist visit should hear about, with the number attached." : "A real shift in the right direction; keep whatever changed." }, links: [{ label: "Trends", tab: "trends", section: f.fam === "hrv" || key === "steps" || key === "resting_hr" ? "tr-vitals" : "tr-motor" }] });
     }
+    // time-of-day profile (30 d): best and worst 2-hour block
+    const prof = (await pool.query(`select seg, avg(rating)::float as v, count(*)::int as n from qol_ratings where user_id = $1 and type = 'rating' and day >= $2::date - 30 group by seg having count(*) >= 5 order by seg`, [uid, today])).rows;
+    if (prof.length >= 5) { const best = prof.reduce((a, r) => (r.v > a.v ? r : a), prof[0]), worst = prof.reduce((a, r) => (r.v < a.v ? r : a), prof[0]); const lab = (s) => `${String(s * 2).padStart(2, "0")}:00–${String(s * 2 + 2).padStart(2, "0")}:00`;
+      if (best.v - worst.v >= 0.4) out.push({ key: `note:tod:${today.slice(0, 7)}`, category: "notes", icon: "clock", title: "Shape of your day", tag: "last 30 days", stage: "noticed", family: "qol", base: 0.55, cite: "wearing", facts: { best_block: lab(best.seg), best_mean: r1(best.v), worst_block: lab(worst.seg), worst_mean: r1(worst.v), blocks_with_data: prof.length }, template: { text: `Your best hours are ${lab(best.seg)} (QoL ${r1(best.v)}) and your worst ${lab(worst.seg)} (${r1(worst.v)}), over the last 30 days.`, action: "Put the things that need you at your best into the good block, and look at which dose precedes the worst one." }, links: [{ label: "QoL correlations", tab: "trends", section: "tr-corr" }] }); }
+    // latest pre/post pair
+    const lastPair = days.slice().reverse().find((d) => table[d].tap_delta != null || table[d].tremor_delta != null);
+    if (lastPair) { const t = table[lastPair]; const hist = days.filter((d) => d !== lastPair && table[d].tap_delta != null).map((d) => table[d].tap_delta); const m = hist.length >= 3 ? mean(hist) : null;
+      out.push({ key: `note:pair:${lastPair}`, category: "notes", icon: "hand", title: "Levodopa response", tag: fmtDay(lastPair), stage: "noticed", family: "tapping", base: 0.5, cite: "battery", facts: { day: fmtDay(lastPair), tap_delta: r1(t.tap_delta), tremor_delta: r1(t.tremor_delta), usual_tap_delta: r1(m), pairs: hist.length + 1 }, template: { text: `${fmtDay(lastPair)}'s post-minus-pre tapping was ${t.tap_delta == null ? "not measured" : (t.tap_delta >= 0 ? "+" : "") + r1(t.tap_delta) + "/s"}${t.tremor_delta != null ? `, tremor score ${t.tremor_delta >= 0 ? "+" : ""}${r1(t.tremor_delta)}` : ""}${m != null ? ` (usual tapping change ${m >= 0 ? "+" : ""}${r1(m)}/s over ${hist.length} pairs)` : ""}.`, action: hist.length + 1 < 5 ? "A few more pairs and this becomes your personal dose-response curve." : "Compare with the dose gap that day; the size of the change is what wearing-off looks like in numbers." }, links: [{ label: fmtDay(lastPair), day: lastPair }] }); }
     const w1 = mean(days.slice(-7).map((d) => table[d].qol)), w0 = mean(days.slice(-14, -7).map((d) => table[d].qol));
     const n1 = days.slice(-7).filter((d) => table[d].qol != null).length, n0 = days.slice(-14, -7).filter((d) => table[d].qol != null).length;
     if (w1 != null && w0 != null && n1 >= 4 && n0 >= 4 && Math.abs(w1 - w0) >= 0.25) out.push({ key: `note:qol_week:${mondayOf(today).monday}`, category: "notes", icon: "star", title: "Week over week", tag: `${n1} and ${n0} rated days`, stage: "noticed", family: "qol", base: 0.5, cite: "own", facts: { this_week: r1(w1), last_week: r1(w0), rated_days: [n1, n0] }, template: { text: `This week's QoL averages ${r1(w1)} against ${r1(w0)} last week.`, action: w1 > w0 ? "Look at what this week had more of; the best-day note is where it shows up." : "A lower week is worth a glance at sleep, doses and events before assuming it is the disease." }, links: [{ label: "QoL correlations", tab: "trends", section: "tr-corr" }] });
