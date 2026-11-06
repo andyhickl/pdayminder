@@ -232,8 +232,8 @@ module.exports = function init({ pool, hyp, TZ, localDayOf, exerciseProfile, wor
 Prefer controllable exposures, mechanisms with literature behind them, and pairs the user can act on. Never propose anything about changing medication dose or timing. Return only a JSON array.`;
     const user = `Digest:\n${JSON.stringify(d)}\nRecently dismissed insight keys (avoid these subjects): ${JSON.stringify(dismissed)}`;
     try {
-      const txt = await claude(sys, user, 2000);
-      const arr = JSON.parse(txt.slice(txt.indexOf("["), txt.lastIndexOf("]") + 1));
+      const txt = await claude(sys, user, 3000);
+      const arr = parseArray(txt);
       const specs = arr.filter((p) => p && typeof p === "object" && ["pair", "streak", "compare"].includes(p.type) && hyp.FK[p.x]).slice(0, 10);
       await pool.query("insert into insight_proposals (user_id, day, specs, model) values ($1,$2,$3,$4) on conflict (user_id, day) do update set specs = excluded.specs, model = excluded.model, created_at = now()", [uid, today, JSON.stringify(specs), MODEL]);
       state.lastExplore = { at: new Date().toISOString(), proposals: specs.length };
@@ -295,8 +295,13 @@ Prefer controllable exposures, mechanisms with literature behind them, and pairs
     if (/no study|general (physiology )?note|citation/i.test(w.cite_text || "")) return "meta";
     return null;
   }
+  const parseArray = (txt) => { const t = String(txt).replace(/```(?:json)?/g, ""); const i = t.indexOf("["), j = t.lastIndexOf("]"); if (i < 0 || j <= i) throw new Error("no JSON array in reply (" + t.length + " chars)"); return JSON.parse(t.slice(i, j + 1)); };
   async function write(uid, packets) {
     if (!KEY || !packets.length) return;
+    // small batches keep each reply well inside the token budget
+    for (let i = 0; i < packets.length; i += 4) await writeBatch(uid, packets.slice(i, i + 4));
+  }
+  async function writeBatch(uid, packets) {
     const sys = `You write the Insights card in a personal Parkinson's tracking app for one user: a scientist with early-onset PD who wants plain, specific, grounded sentences and no hype. For each packet, write JSON {"key", "text", "cite_text", "action"}:
 - text: ONE sentence, at most 28 words, stating the observation. Use only numbers that appear in the packet (facts, template, bar, tag). Never invent or recompute a number. Vary the phrasing across packets; do not start every sentence the same way. For a pattern whose days_with + days_without is under 6, say it is too early to read and give the day count; do not quote the percentages.
 - cite_text: ONE telegraphic sentence, at most 22 words, paraphrasing ONLY the given citation, starting with the study or author-year when there is one ("SPARX 2018: …"). If the citation says it is the user's own history, say "Your own history; no trial speaks to this pair." Never comment on the citation itself (no "no study named", no "general note").
@@ -304,15 +309,15 @@ Prefer controllable exposures, mechanisms with literature behind them, and pairs
 Tone: a thoughtful colleague. No exclamation marks, no emoji, no "great job", no hedging padding. Return only a JSON array.`;
     const user = JSON.stringify(packets.map((p) => ({ key: p.key, category: p.category, title: p.title, stage: p.stage, facts: p.facts, template: p.template, bar: p.bar, tag: p.tag, citation: CITES[p.cite] ? CITES[p.cite].short : CITES.own.short, why: p.why || null })));
     try {
-      const txt = await claude(sys, user, 2500);
-      const arr = JSON.parse(txt.slice(txt.indexOf("["), txt.lastIndexOf("]") + 1));
+      const txt = await claude(sys, user, 3000);
+      const arr = parseArray(txt);
       let ok = 0, rejected = [];
       for (const p of packets) {
         const w = arr.find((x) => x && x.key === p.key); const err = validate(p, w);
         if (err) { rejected.push(`${p.key}: ${err}`); continue; }
         await pool.query("update insights set prose = $3, prose_hash = $4, updated_at = now() where user_id = $1 and key = $2", [uid, p.key, JSON.stringify({ text: w.text.trim(), cite_text: (w.cite_text || "").trim(), action: w.action.trim() }), p.hash]); ok++;
       }
-      state.lastWrite = { at: new Date().toISOString(), written: ok, rejected };
+      state.lastWrite = { at: new Date().toISOString(), written: ok + ((state.lastWrite && state.lastWrite.at && Date.now() - new Date(state.lastWrite.at) < 60000) ? state.lastWrite.written : 0), rejected };
     } catch (e) { state.lastError = `write: ${e.message}`; console.error("insights write", e.message); }
   }
 
