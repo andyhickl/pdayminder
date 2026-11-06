@@ -291,16 +291,17 @@ Prefer controllable exposures, mechanisms with literature behind them, and pairs
     const ok = allowedNumbers(p); const bad = [...numbersIn(w.text), ...numbersIn(w.action), ...numbersIn(w.cite_text || "")].filter((n) => !ok.has(n) && !ok.has(n.replace(/\.0$/, "")));
     if (bad.length) return `numbers ${bad.join(",")}`;
     if (MED_RE.test(w.text) || MED_RE.test(w.action)) return "medication";
-    if (w.text.length > 260 || w.action.length > 200 || (w.cite_text || "").length > 220) return "length";
+    if (w.text.length > 230 || w.action.length > 180 || (w.cite_text || "").length > 180) return "length";
+    if (/no study|general (physiology )?note|citation/i.test(w.cite_text || "")) return "meta";
     return null;
   }
   async function write(uid, packets) {
     if (!KEY || !packets.length) return;
     const sys = `You write the Insights card in a personal Parkinson's tracking app for one user: a scientist with early-onset PD who wants plain, specific, grounded sentences and no hype. For each packet, write JSON {"key", "text", "cite_text", "action"}:
-- text: ONE sentence stating the observation. Use only numbers that appear in the packet (facts, template, bar, tag). Never invent or recompute a number. Vary the phrasing across packets; do not start every sentence the same way.
-- cite_text: ONE short, telegraphic sentence paraphrasing ONLY the given citation ("SPARX 2018: 4 × 30 min/week at 80–85 % HRmax…"). Name the study or author-year. Do not add other studies.
-- action: ONE concrete thing to do or take away, in second person, matching the packet's action in substance. Never suggest changing a medication dose or its timing; anything about doses is phrased as something to raise with the neurologist.
-Tone: a thoughtful colleague. No exclamation marks, no emoji, no "great job". Return only a JSON array.`;
+- text: ONE sentence, at most 28 words, stating the observation. Use only numbers that appear in the packet (facts, template, bar, tag). Never invent or recompute a number. Vary the phrasing across packets; do not start every sentence the same way. For a pattern whose days_with + days_without is under 6, say it is too early to read and give the day count; do not quote the percentages.
+- cite_text: ONE telegraphic sentence, at most 22 words, paraphrasing ONLY the given citation, starting with the study or author-year when there is one ("SPARX 2018: …"). If the citation says it is the user's own history, say "Your own history; no trial speaks to this pair." Never comment on the citation itself (no "no study named", no "general note").
+- action: ONE concrete thing to do or take away, at most 24 words, in second person, matching the packet's action in substance. Never suggest changing a medication dose or its timing; anything about doses is phrased as something to raise with the neurologist.
+Tone: a thoughtful colleague. No exclamation marks, no emoji, no "great job", no hedging padding. Return only a JSON array.`;
     const user = JSON.stringify(packets.map((p) => ({ key: p.key, category: p.category, title: p.title, stage: p.stage, facts: p.facts, template: p.template, bar: p.bar, tag: p.tag, citation: CITES[p.cite] ? CITES[p.cite].short : CITES.own.short, why: p.why || null })));
     try {
       const txt = await claude(sys, user, 2500);
@@ -323,7 +324,7 @@ Tone: a thoughtful colleague. No exclamation marks, no emoji, no "great job". Re
     const packets = [];
     for (const g of [() => genToday(uid, today), () => genGoals(uid, table, days, today), () => genPatterns(snap), () => genNotes(uid, table, days, today)]) { try { packets.push(...(await g())); } catch (e) { console.error("insight generator", e.message); } }
     try { const specs = await explore(uid, snap, table, days, today, opts.regen); packets.push(...evaluateProposals(specs, snap, table, days)); } catch (e) { console.error("explorer", e.message); }
-    for (const p of packets) { p.hash = hash({ f: p.facts, t: p.template }); p.cite_short = CITES[p.cite] ? CITES[p.cite].short : CITES.own.short; p.cite_full = CITES[p.cite] ? CITES[p.cite].full : CITES.own.full; }
+    for (const p of packets) { p.hash = hash({ v: 2, f: p.facts, t: p.template }); p.cite_short = CITES[p.cite] ? CITES[p.cite].short : CITES.own.short; p.cite_full = CITES[p.cite] ? CITES[p.cite].full : CITES.own.full; }
     // persist rows (prose cache, vote, pin, dismissed live here)
     for (const p of packets) await pool.query(`insert into insights (user_id, key, kind, family, text, action, why, cite, strength, numbers, links, stage) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
       on conflict (user_id, key) do update set text = excluded.text, action = excluded.action, why = excluded.why, numbers = excluded.numbers, links = excluded.links, stage = excluded.stage, updated_at = now()`,
