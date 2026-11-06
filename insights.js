@@ -249,13 +249,15 @@ module.exports = function init({ pool, hyp, TZ, localDayOf, exerciseProfile, wor
     app.post("/api/insights/vote", requireAuth, async (req, res) => {
       const { id, vote } = req.body || {}; const uid = req.user.id;
       const r = (await pool.query("select * from insights where user_id = $1 and id = $2", [uid, id])).rows[0]; if (!r) return res.status(404).json({ error: "not found" });
+      if (r.vote !== 0) return res.json(await current(uid)); // one vote per insight
       await learn(uid, r, vote > 0 ? 1 : 0);
       if (vote > 0) await pool.query("update insights set vote = 1, updated_at = now() where id = $1", [id]);
       else await pool.query("update insights set vote = -1, status = 'dismissed', pinned = false, updated_at = now() where id = $1", [id]);
       res.json(await current(uid));
     });
     app.post("/api/insights/pin", requireAuth, async (req, res) => {
-      const { id, pinned } = req.body || {}; await pool.query("update insights set pinned = $3, status = 'shown', shown_at = coalesce(shown_at, now()), updated_at = now() where user_id = $1 and id = $2", [req.user.id, id, Boolean(pinned)]);
+      // Pinning keeps it in place; unpinning restarts its 7-day run rather than cooling it straight away.
+      const { id, pinned } = req.body || {}; await pool.query("update insights set pinned = $3, status = 'shown', shown_at = now(), updated_at = now() where user_id = $1 and id = $2", [req.user.id, id, Boolean(pinned)]);
       res.json(await current(req.user.id));
     });
     app.post("/api/insights/refresh", requireAuth, async (req, res) => {

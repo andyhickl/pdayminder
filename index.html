@@ -1642,10 +1642,10 @@
                 <span style={{ color: "#64748b" }}>{it.strength}</span>
                 {it.pinned && <span style={{ color: "#fbbf24" }}>pinned</span>}
                 <span style={{ marginLeft: "auto", display: "flex", gap: 2 }}>
-                  <button type="button" className="pill-btn" title="Useful" style={{ padding: "1px 7px", color: it.vote > 0 ? "#a3e635" : undefined }} disabled={busy} onClick={() => post("/api/insights/vote", { id: it.id, vote: 1 })}>👍</button>
-                  <button type="button" className="pill-btn" title={it.pinned ? "Unpin" : "Pin"} style={{ padding: "1px 7px", color: it.pinned ? "#fbbf24" : undefined }} disabled={busy} onClick={() => post("/api/insights/pin", { id: it.id, pinned: !it.pinned })}>📌</button>
-                  <button type="button" className="pill-btn" title="Swap for another" style={{ padding: "1px 7px" }} disabled={busy || it.pinned} onClick={() => post("/api/insights/refresh", { id: it.id })}>↻</button>
-                  <button type="button" className="pill-btn" title="Not useful; don't show this again" style={{ padding: "1px 7px", opacity: it.pinned ? 0.4 : 1 }} disabled={busy || it.pinned} onClick={() => post("/api/insights/vote", { id: it.id, vote: -1 })}>✕</button>
+                  <button type="button" className="pill-btn" title={it.vote > 0 ? "You found this useful" : "Useful"} style={{ padding: "1px 7px", background: it.vote > 0 ? "#365314" : undefined, boxShadow: it.vote > 0 ? "0 0 0 1.5px #a3e635" : undefined, opacity: it.vote !== 0 && it.vote <= 0 ? 0.4 : 1 }} disabled={busy || it.vote !== 0} onClick={() => post("/api/insights/vote", { id: it.id, vote: 1 })}>👍</button>
+                  <button type="button" className="pill-btn" title={it.pinned ? "Unpin (stays in the list)" : "Pin"} style={{ padding: "1px 7px", background: it.pinned ? "#713f12" : undefined, boxShadow: it.pinned ? "0 0 0 1.5px #fbbf24" : undefined }} disabled={busy} onClick={() => post("/api/insights/pin", { id: it.id, pinned: !it.pinned })}>📌</button>
+                  <button type="button" className="pill-btn" title="Swap for another" style={{ padding: "1px 7px", opacity: it.pinned ? 0.4 : 1 }} disabled={busy || it.pinned} onClick={() => post("/api/insights/refresh", { id: it.id })}>↻</button>
+                  <button type="button" className="pill-btn" title="Not useful; don't show this again" style={{ padding: "1px 7px", opacity: it.pinned || it.vote !== 0 ? 0.4 : 1 }} disabled={busy || it.pinned || it.vote !== 0} onClick={() => post("/api/insights/vote", { id: it.id, vote: -1 })}>✕</button>
                 </span>
               </div>
               <div style={{ marginTop: 4, fontSize: 14 }}>{it.text}</div>
@@ -5006,9 +5006,7 @@
               <Section title="Hypotheses" subtitle="Live hypotheses, scored day by day." storageKey="tr-hyp" defaultOpen={false}>
                 <HypothesesCard />
               </Section>
-              <Section title="Findings" subtitle="What has held up, and what the history suggests." storageKey="tr-findings" defaultOpen={false}>
-                <HypothesesCard view="findings" />
-              </Section>
+
               <Section title="Vitals trends" subtitle="Sleep, HRV, heart rate, steps and watch gait." storageKey="tr-vitals" defaultOpen={false}>
                 <VitalsTrendsCard metrics={VITALS_GROUPS.vitals} />
               </Section>
