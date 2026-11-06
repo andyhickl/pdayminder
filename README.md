@@ -65,20 +65,30 @@ The full Cronometer profile (80+ nutrients, supplements, creatine) needs the Cro
 ## Home tab layout
 Battery banner (yellow, when a battery is open; tap to start), Today (date nav + QoL ring + log buttons + Day vitals +
 the week grid, which doubles as the date picker: tap a day label to open it; the month picker sits behind the date),
-Run tests, Insights. Hypotheses and Findings live on Trends.
+Run tests, Insights (carousel). The hypotheses engine has no card of its own; its items surface as Patterns.
 
 ## Insights (insights.js, /api/insights)
-Home-tab card: observation + action + why (with the citation) + links into the data. Generators over the hypotheses
-feature table (`hyp.snapshot`) plus a few direct queries: goal gaps (SPARX vigorous minutes this week, protein near
-doses, sleep, dose gaps, battery adherence, fiber); today's conflicts (protein in the hour after a dose, caffeine
-after 14:00, a long gap with doses still expected); emerging patterns (active hypotheses with posterior ≥ 0.8 and
-≥ 4 days per arm, worded as early); findings and historical leads restated as advice; notes (best day in 30 and what
-differed by robust z-score, workout and battery streaks, personal bests, slow-measure drift over 2 vs 4 weeks,
-week-over-week QoL). Each candidate has a stable key. Table `insights` keeps status (`shown` → `cooled` after 7 days
-or on ↻, `dismissed` for 30 days on ✕, `expired` when no longer generated), vote, pin. Ranking = generator base
-score + a tiny online logistic model over kind/family/strength trained by 👍/✕ (`settings.insight_weights`) + a vote
-bonus; fill is diverse (one per family, two per kind). Count 1–8 in `settings.insight_count`. Routes: GET
-`/api/insights`, POST `/api/insights/{vote,pin,refresh,count}`.
+Home-tab carousel: Today · Goals · Patterns · Notes, three items per page, equal heights, pins and ✕ persisted. Three
+parts with a hard line between them:
+- **Packets** (deterministic): generators turn the hypotheses feature table (`hyp.snapshot`) and a few direct queries
+  into fact records: category, icon, title, stage (noticed → watching → supported → rule), the numbers, a citation id
+  from the vetted `CITES` table, links, and a template sentence as fallback wording. Today: protein in the hour after a
+  dose, caffeine after 14:00, a long gap with doses still due, events ≥ 3 h after a dose. Goals: SPARX vigorous
+  minutes, battery pairs, sleep, protein near doses, dose spacing, fiber, supplement adherence (with progress bars).
+  Patterns: active hypotheses (watching), findings (supported), historical leads and explorer proposals (noticed), each
+  with the per-day dot strip, posterior and "show the days". Notes: best day in 30 and what differed (robust z),
+  streaks, personal bests, slow-measure drift (2 vs 4 weeks), week-over-week QoL, home vs work QoL, event clustering.
+- **Explorer** (Claude, once a day or on ↻): gets a digest of the feature table and proposes up to 10 specs from a
+  fixed menu (pair / streak / compare); the engine evaluates each (pair via the hypotheses 2×2, posterior ≥ 0.8 and
+  ≥ 4 days per arm) and only real effects become packets. Stored in `insight_proposals`.
+- **Writer** (Claude, per packet, cached by a hash of the facts in `insights.prose`): observation, telegraphic
+  citation and action as JSON. A validator rejects prose whose numbers are not in the packet, that exceeds length, or
+  that suggests changing a medication dose or timing; rejected prose falls back to the template.
+👍 trains nothing yet but promotes a noticed pattern (lead or proposal) to an active, pinned hypothesis; pin does the
+same and keeps the item in place; ✕ dismisses for 30 days. Env: `ANTHROPIC_API_KEY`, `INSIGHTS_MODEL` (default
+`claude-sonnet-5-5`). `GET /api/insights?regen=1` re-runs the explorer; `GET /api/insights/status` shows the model,
+whether a key is present, and the last write/explore result or error. Without a key everything runs on templates.
+The Hypotheses engine still runs underneath (`/api/hypotheses`), but has no card of its own any more.
 
 ## Home tab: batteries and hypotheses
 The first tab is Home: date, ring + logging, **Run tests**, **Hypotheses**, recent days. A battery is the day's four

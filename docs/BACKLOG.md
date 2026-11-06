@@ -66,6 +66,8 @@ Ordered by value. Dates are when the item was added.
   Settings/Trends/QoL sections · daily-multi cap fix · nutrition via HAE (summed metrics, protein near dose, meal
   hours) · Cronometer cron (daily summary + servings, session reuse, 429 backoff) · symptom events (log/edit, dose
   context, bands, histogram, rollups) · ring arcs and grid stars.
+- 2026-11-05: Insights carousel (packets + Claude explorer + Claude writer with validation, stages, pins, ✕, 👍
+  promotes a pattern to a hypothesis); Hypotheses/Findings cards removed from Trends.
 - 2026-11-05: Insights card (B + C): five generators, persistence, vote/pin/refresh/count, learned ranking,
   cooldowns, links into tabs/sections/days; battery banner on Home.
 - 2026-11-05: Home tab layout A (Today card = date nav + ring + week grid as picker; Day vitals moved from Trends;

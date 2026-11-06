@@ -643,7 +643,7 @@ app.get("/api/sessions", requireAuth, async (req, res) => {
 
 // ---------- Hypotheses (engine in hypotheses.js) ----------
 const hyp = require("./hypotheses")({ pool, dailySeries, dopaDrugs, TZ, localDayOf });
-const insights = require("./insights")({ pool, hyp, TZ, localDayOf, exerciseProfile: (uid) => exerciseProfile(uid), workoutDays: (uid, d) => workoutDays(uid, d), dopaDrugs });
+const insights = require("./insights")({ pool, hyp, TZ, localDayOf, exerciseProfile: (uid) => exerciseProfile(uid), workoutDays: (uid, d) => workoutDays(uid, d), dopaDrugs, placeQol: (uid, d) => placeQol(uid, d) });
 hyp.routes(app, requireAuth);
 insights.routes(app, requireAuth);
 
@@ -829,12 +829,11 @@ app.get("/api/geocode", requireAuth, async (req, res) => {
   } catch (e) { res.status(502).json({ error: "geocoder unavailable" }); }
 });
 // QoL by context: mean rating of 2-hour blocks weighted by the minutes each place overlaps them.
-app.get("/api/context/qol", requireAuth, async (req, res) => {
-  const days = Math.min(365, Number(req.query.days) || 30);
+async function placeQol(uid, days) {
   const segs = (await pool.query(
-    `select ts, value as minutes, raw from observations where user_id = $1 and source = 'context' and metric = 'place' and ts >= (now() at time zone $2)::date - ($3::int - 1)`, [req.user.id, TZ, days])).rows;
+    `select ts, value as minutes, raw from observations where user_id = $1 and source = 'context' and metric = 'place' and ts >= (now() at time zone $2)::date - ($3::int - 1)`, [uid, TZ, days])).rows;
   const q = (await pool.query(
-    `select to_char(day,'YYYY-MM-DD') as day, seg, rating from qol_ratings where user_id = $1 and type = 'rating' and day >= (now() at time zone $2)::date - ($3::int - 1)`, [req.user.id, TZ, days])).rows;
+    `select to_char(day,'YYYY-MM-DD') as day, seg, rating from qol_ratings where user_id = $1 and type = 'rating' and day >= (now() at time zone $2)::date - ($3::int - 1)`, [uid, TZ, days])).rows;
   const acc = {};
   for (const s of segs) {
     const start = new Date(s.raw.start), end = new Date(s.raw.end); const day = localDayOf(start);
@@ -846,8 +845,9 @@ app.get("/api/context/qol", requireAuth, async (req, res) => {
     }
   }
   const totals = {}; segs.forEach((s) => (totals[s.raw.place] = (totals[s.raw.place] || 0) + (s.minutes || 0)));
-  res.json(Object.keys(PLACE_COLORS).map((place) => ({ place, minutes: totals[place] || 0, qol: acc[place] ? acc[place].weighted / acc[place].minutes : null, rated_minutes: acc[place] ? acc[place].minutes : 0 })));
-});
+  return Object.keys(PLACE_COLORS).map((place) => ({ place, minutes: totals[place] || 0, qol: acc[place] ? acc[place].weighted / acc[place].minutes : null, rated_minutes: acc[place] ? acc[place].minutes : 0 }));
+}
+app.get("/api/context/qol", requireAuth, async (req, res) => res.json(await placeQol(req.user.id, Math.min(365, Number(req.query.days) || 30))));
 
 app.post("/api/ingest/hae", requireAuth, async (req, res) => {
   const body = req.body || {};

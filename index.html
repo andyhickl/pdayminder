@@ -1610,53 +1610,97 @@
     }
     // ---------- Hypotheses ----------
     const FK_LABEL = (k) => ({ sleep_h: "sleep", deep_h: "deep sleep", rem_h: "REM sleep", sleep_score: "Oura sleep score", latency_min: "time to fall asleep", hrv: "night HRV", lowest_hr: "lowest night HR", readiness: "readiness", temp_dev: "temp deviation", steps: "steps", walk_speed: "walking speed", dbl_support: "double support", asymmetry: "asymmetry", resting_hr: "resting HR", energy: "calories", protein: "protein", protein_near_dose: "protein near dose", carbs: "carbs", fiber: "fiber", caffeine: "caffeine", water: "water", first_meal: "first meal", last_meal: "last meal", supps: "supplements", doses: "doses", first_dose_h: "first dose", dose_gap_max: "longest dose gap", min_home: "min at home", min_work: "min at work", min_driving: "min driving", events: "events", event_min: "event minutes", dystonia: "dystonia", qol: "QoL", qol_am: "morning QoL", qol_pm: "afternoon QoL", qol_eve: "evening QoL", tremor: "tremor score", tap: "tapping score", tap_rate: "tap rate", gait: "gait score", balance: "balance score", ddk: "pa-ta-ka rate", tap_delta: "tapping delta", tremor_delta: "tremor delta", batteries: "batteries" }[k] || k);
-    // Insights: observation + action + why, from /api/insights. Vote, pin, refresh; count via +/−.
-    const INSIGHT_KIND = { today: ["Today", "#f59e0b"], goal: ["Goal", "#38bdf8"], pattern: ["Early pattern", "#a78bfa"], finding: ["Finding", "#a3e635"], note: ["Note", "#94a3b8"] };
+    // Insights carousel: four equal-height pages (Today · Goals · Patterns · Notes), swipe or tap a tab.
+    const INS_ICONS = {
+      run: "M13 4a1.5 1.5 0 1 0 0-.01M4 19l4-6 3 2 3-5 2 3 4-1M9 13l-2 7", moon: "M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z",
+      pill: "M10.5 3.5l10 10a4.95 4.95 0 0 1-7 7l-10-10a4.95 4.95 0 0 1 7-7zM7 7l10 10", fork: "M7 3v7a3 3 0 0 0 6 0V3M10 13v8M17 3c-2 0-3 3-3 6v3h3v9",
+      flask: "M9 3h6M10 3v6l-5.5 9a2 2 0 0 0 1.7 3h11.6a2 2 0 0 0 1.7-3L14 9V3M7.5 15h9", flag: "M5 21V4M5 4h11l-2 4 2 4H5",
+      star: "M12 3l2.8 5.7 6.2.9-4.5 4.4 1 6.2L12 17.3 6.5 20.2l1-6.2L3 9.6l6.2-.9z", chart: "M4 20V4M4 20h16M8 16l3-5 3 3 5-8",
+      clock: "M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18zM12 7v5l3 2", heart: "M3 12h4l2-5 3 10 2-7 2 2h5", cup: "M4 8h12v6a5 5 0 0 1-5 5H9a5 5 0 0 1-5-5zM16 10h2a2 2 0 0 1 0 4h-2M7 3v2M10 3v2M13 3v2",
+      walk: "M13 4a1.5 1.5 0 1 0 0-.01M10 21l2-7-2-2-1 4-3 1M12 8l-3 1-1 4M12 8l3 3 3-1M12 12l3 3 1 6", leaf: "M5 20c0-8 4-14 14-15-1 10-7 14-14 15zM5 20l8-9",
+      map: "M3 6l6-2 6 2 6-2v14l-6 2-6-2-6 2zM9 4v14M15 6v14", wave: "M3 12c2-4 4-4 6 0s4 4 6 0 4-4 6 0", hand: "M8 12V6a1.5 1.5 0 0 1 3 0v5M11 11V4a1.5 1.5 0 0 1 3 0v7M14 11V6a1.5 1.5 0 0 1 3 0v8a6 6 0 0 1-12 0v-3a1.5 1.5 0 0 1 3 0",
+      scale: "M12 3v18M5 7l7-2 7 2M5 7l-3 7a4 4 0 0 0 6 0zM19 7l-3 7a4 4 0 0 0 6 0z", mic: "M12 15a3 3 0 0 0 3-3V6a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3zM7 11a5 5 0 0 0 10 0M12 16v4",
+    };
+    const InsIcon = ({ name, color, size = 18 }) => <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}><path d={INS_ICONS[name] || INS_ICONS.chart} /></svg>;
+    const INS_CATS = [["today", "Today", "#f59e0b", "clock", "Things from the last few hours that the literature says matter."], ["goals", "Goals", "#38bdf8", "flag", "Where you stand against the regimen targets this week."], ["patterns", "Patterns", "#a78bfa", "flask", "Claims about you, scored day by day until they are supported or dropped."], ["notes", "Notes", "#94a3b8", "chart", "Milestones, drifts and one-offs worth knowing."]];
     function InsightsCard() {
       const [data, setData] = useState(null);
       const [err, setErr] = useState(null);
       const [busy, setBusy] = useState(false);
-      const [why, setWhy] = useState({});
-      const load = () => apiFetch("/api/insights").then((r) => (r.ok ? r.json() : Promise.reject(r.status))).then((d) => { setData(d); setErr(null); }).catch((e) => setErr(String(e)));
+      const [open, setOpen] = useState({});
+      const [page, setPage] = useState(() => { try { return Number(localStorage.getItem("pdm-ins-page") || 0); } catch { return 0; } });
+      const trackRef = useRef(null);
+      const load = (q) => apiFetch("/api/insights" + (q || "")).then((r) => (r.ok ? r.json() : Promise.reject(r.status))).then((d) => { setData(d); setErr(null); }).catch((e) => setErr(String(e)));
       useEffect(() => { load(); }, []);
+      useEffect(() => { try { localStorage.setItem("pdm-ins-page", String(page)); } catch {} }, [page]);
+      // keep the scroll position in step with the active tab (and vice versa)
+      const animRef = useRef(0);
+      useEffect(() => { const el = trackRef.current; if (!el) return; const w = el.clientWidth; if (Math.abs(el.scrollLeft - page * w) > 4) { animRef.current = Date.now() + 700; el.scrollTo({ left: page * w, behavior: "smooth" }); } }, [page, data]);
+      const onScroll = () => { const el = trackRef.current; if (!el || Date.now() < animRef.current) return; const p = Math.round(el.scrollLeft / el.clientWidth); if (p !== page) setPage(p); };
       const post = async (path, body) => { setBusy(true); try { const r = await apiFetch(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }); if (r.ok) setData(await r.json()); } finally { setBusy(false); } };
-      const go = (l) => { if (l.day) window.dispatchEvent(new CustomEvent("pdm-goto-day", { detail: l.day })); else window.dispatchEvent(new CustomEvent("pdm-goto", { detail: { tab: l.tab, section: l.section } })); };
+      const go = (l) => { if (l.day) window.dispatchEvent(new CustomEvent("pdm-goto-day", { detail: l.day })); else if (l.tab) window.dispatchEvent(new CustomEvent("pdm-goto", { detail: { tab: l.tab, section: l.section } })); };
       if (err) return <div className="card"><div className="card-subtitle">Couldn't load insights ({err}).</div></div>;
       if (!data) return <div className="card"><div className="card-subtitle">Reading your data…</div></div>;
+      const st = data.status || {};
       return (
-        <div className="card">
-          <div className="card-header" style={{ alignItems: "flex-start" }}>
-            <div><div className="card-title">Insights</div><div className="card-subtitle">What your data suggests you could do next, and what is worth knowing. 👍 keeps the kind coming, ✕ drops it, pin keeps it in place, ↻ swaps it out.</div></div>
-            <div style={{ display: "flex", gap: 4, alignItems: "center", flexShrink: 0 }}>
-              <button type="button" className="pill-btn" style={{ padding: "2px 8px" }} disabled={busy || data.count <= 1} onClick={() => post("/api/insights/count", { count: data.count - 1 })}>−</button>
-              <span style={{ fontSize: 12, color: "#94a3b8" }}>{data.count}</span>
-              <button type="button" className="pill-btn" style={{ padding: "2px 8px" }} disabled={busy || data.count >= 8} onClick={() => post("/api/insights/count", { count: data.count + 1 })}>+</button>
-              <button type="button" className="pill-btn" style={{ padding: "2px 8px" }} disabled={busy} title="Swap all unpinned" onClick={() => post("/api/insights/refresh", {})}>↻</button>
-            </div>
+        <div className="card" style={{ padding: "12px 0 10px" }}>
+          <div className="card-header" style={{ padding: "0 14px" }}>
+            <div><div className="card-title">Insights</div><div className="card-subtitle">Swipe between the four kinds. 👍 trains it and starts watching a pattern; pin keeps one in place; ✕ retires it.</div></div>
+            <button type="button" className="pill-btn" style={{ padding: "2px 8px", flexShrink: 0 }} disabled={busy} title="Regenerate (asks the explorer again)" onClick={() => { setBusy(true); load("?regen=1").finally(() => setBusy(false)); }}>↻</button>
           </div>
-          {!data.items.length && <div className="card-subtitle">Nothing to say yet ({data.candidates} candidates considered). Insights appear as the goals, today's logs and the hypotheses fill in.</div>}
-          {data.items.map((it) => { const [label, color] = INSIGHT_KIND[it.kind] || ["", "#94a3b8"]; return (
-            <div key={it.id} style={{ background: "#0f172a", borderRadius: 10, padding: "10px 12px", marginTop: 8, borderLeft: `4px solid ${color}`, opacity: busy ? 0.7 : 1 }}>
-              <div style={{ display: "flex", gap: 8, alignItems: "center", fontSize: 11 }}>
-                <span style={{ color, fontWeight: 600 }}>{label}</span>
-                <span style={{ color: "#64748b" }}>{it.strength}</span>
-                {it.pinned && <span style={{ color: "#fbbf24" }}>pinned</span>}
-                <span style={{ marginLeft: "auto", display: "flex", gap: 2 }}>
-                  <button type="button" className="pill-btn" title={it.vote > 0 ? "You found this useful" : "Useful"} style={{ padding: "1px 7px", background: it.vote > 0 ? "#365314" : undefined, boxShadow: it.vote > 0 ? "0 0 0 1.5px #a3e635" : undefined, opacity: it.vote !== 0 && it.vote <= 0 ? 0.4 : 1 }} disabled={busy || it.vote !== 0} onClick={() => post("/api/insights/vote", { id: it.id, vote: 1 })}>👍</button>
-                  <button type="button" className="pill-btn" title={it.pinned ? "Unpin (stays in the list)" : "Pin"} style={{ padding: "1px 7px", background: it.pinned ? "#713f12" : undefined, boxShadow: it.pinned ? "0 0 0 1.5px #fbbf24" : undefined }} disabled={busy} onClick={() => post("/api/insights/pin", { id: it.id, pinned: !it.pinned })}>📌</button>
-                  <button type="button" className="pill-btn" title="Swap for another" style={{ padding: "1px 7px", opacity: it.pinned ? 0.4 : 1 }} disabled={busy || it.pinned} onClick={() => post("/api/insights/refresh", { id: it.id })}>↻</button>
-                  <button type="button" className="pill-btn" title="Not useful; don't show this again" style={{ padding: "1px 7px", opacity: it.pinned || it.vote !== 0 ? 0.4 : 1 }} disabled={busy || it.pinned || it.vote !== 0} onClick={() => post("/api/insights/vote", { id: it.id, vote: -1 })}>✕</button>
-                </span>
-              </div>
-              <div style={{ marginTop: 4, fontSize: 14 }}>{it.text}</div>
-              {it.action && <div style={{ marginTop: 4, fontSize: 13, color: "#e2e8f0" }}><span style={{ color }}>→</span> {it.action}</div>}
-              <div style={{ marginTop: 6, display: "flex", gap: 10, flexWrap: "wrap", fontSize: 11 }}>
-                {it.why && <a href="#" onClick={(e) => { e.preventDefault(); setWhy((w) => ({ ...w, [it.id]: !w[it.id] })); }} style={{ color: "#94a3b8" }}>{why[it.id] ? "hide why" : "why"}</a>}
-                {(it.links || []).map((l, i) => <a key={i} href="#" onClick={(e) => { e.preventDefault(); go(l); }} style={{ color: "#38bdf8", textDecoration: "none" }}>{l.label} ›</a>)}
-              </div>
-              {why[it.id] && <div style={{ marginTop: 4, fontSize: 11, color: "#94a3b8", lineHeight: 1.4 }}>{it.why}</div>}
-            </div>
-          ); })}
+          <div style={{ display: "flex", gap: 6, padding: "8px 14px 10px", overflowX: "auto" }}>
+            {INS_CATS.map(([id, label, color, icon], i) => { const n = (data.pages[id] || []).length; const on = i === page; return (
+              <button key={id} type="button" onClick={() => setPage(i)} style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 12, padding: "4px 10px", borderRadius: 999, border: `1px solid ${on ? color : "#1e293b"}`, background: on ? "rgba(255,255,255,0.03)" : "transparent", color: on ? color : "#64748b", fontWeight: on ? 600 : 400, whiteSpace: "nowrap" }}>
+                <InsIcon name={icon} color={on ? color : "#64748b"} size={14} />{label}<span style={{ fontSize: 10, color: on ? color : "#475569" }}>{n}</span>
+              </button>); })}
+          </div>
+          <div ref={trackRef} onScroll={onScroll} style={{ display: "flex", overflowX: "auto", scrollSnapType: "x mandatory", scrollbarWidth: "none", gap: 0 }}>
+            {INS_CATS.map(([id, label, color, icon, sub]) => { const items = data.pages[id] || []; return (
+              <div key={id} style={{ flex: "0 0 100%", scrollSnapAlign: "start", padding: "0 14px", boxSizing: "border-box" }}>
+                <div style={{ background: "linear-gradient(180deg,#121c33,#0f172a)", border: "1px solid #1e293b", borderRadius: 14, padding: 12, height: "100%", boxSizing: "border-box" }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}><InsIcon name={icon} color={color} /><span style={{ color, fontWeight: 700, fontSize: 15 }}>{label}</span><span style={{ marginLeft: "auto", fontSize: 11, color: "#94a3b8" }}>{items.length} item{items.length === 1 ? "" : "s"}</span></div>
+                  <div style={{ fontSize: 11, color: "#94a3b8", marginTop: 2 }}>{sub}</div>
+                  {!items.length && <div style={{ color: "#64748b", fontSize: 12, padding: "16px 4px" }}>{id === "today" ? "Nothing from today yet; this fills in as doses, meals and events are logged." : id === "patterns" ? "No patterns to watch yet; they appear as hypotheses reach four days on each side, or when the explorer finds one." : "Nothing here yet."}</div>}
+                  {items.map((it) => <InsightItem key={it.key} it={it} color={color} busy={busy} open={open[it.key]} onToggle={() => setOpen((o) => ({ ...o, [it.key]: !o[it.key] }))} onVote={(v) => post("/api/insights/vote", { id: it.id, vote: v })} onPin={() => post("/api/insights/pin", { id: it.id, pinned: !it.pinned })} onDismiss={() => post("/api/insights/dismiss", { id: it.id })} go={go} />)}
+                </div>
+              </div>); })}
+          </div>
+          <div style={{ display: "flex", justifyContent: "center", gap: 6, marginTop: 10 }}>{INS_CATS.map(([id, , color], i) => <i key={id} style={{ width: i === page ? 16 : 6, height: 6, borderRadius: 3, background: i === page ? color : "#334155", display: "inline-block", transition: "width .2s" }} />)}</div>
+          {st.hasKey === false && <div style={{ fontSize: 10, color: "#64748b", padding: "6px 14px 0" }}>Template wording (no model key configured).</div>}
+        </div>
+      );
+    }
+    function InsightItem({ it, color, busy, open, onToggle, onVote, onPin, onDismiss, go }) {
+      const voted = it.vote !== 0;
+      return (
+        <div style={{ background: "#0b1324", border: "1px solid #1e293b", borderRadius: 12, padding: "10px 11px", marginTop: 10, opacity: busy ? 0.7 : 1 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <InsIcon name={it.icon} color={color} /><span style={{ color, fontWeight: 600, fontSize: 12, letterSpacing: ".02em", textTransform: "uppercase" }}>{it.title}</span>
+            {it.pinned && <span style={{ fontSize: 10, color: "#fbbf24" }}>pinned</span>}
+            <span style={{ marginLeft: "auto", fontSize: 11, color: "#64748b", whiteSpace: "nowrap" }}>{it.tag}</span>
+          </div>
+          <div style={{ marginTop: 5, fontSize: 14, lineHeight: 1.4 }}>{it.text} {it.cite_text && <span style={{ color: "#94a3b8" }}>{it.cite_text}</span>}</div>
+          {it.action && <div style={{ marginTop: 5, fontSize: 13 }}><span style={{ color, fontWeight: 600 }}>→</span> {it.action}</div>}
+          {it.bar && <><div style={{ height: 6, background: "#1e293b", borderRadius: 3, overflow: "hidden", marginTop: 8 }}><div style={{ width: `${Math.min(100, (it.bar.value / it.bar.max) * 100)}%`, height: 6, background: color, borderRadius: 3 }} /></div><div style={{ display: "flex", justifyContent: "space-between", fontSize: 10, color: "#64748b", marginTop: 3 }}><span>{it.bar.left}</span><span>{it.bar.right}</span></div></>}
+          {it.dots && it.dots.length > 0 && <div style={{ display: "flex", gap: 3, marginTop: 8, alignItems: "center", flexWrap: "wrap" }}>{it.dots.slice(-21).map((d, i) => <i key={i} style={{ width: 12, height: 12, borderRadius: 3, display: "inline-block", background: d === "support" ? "#a3e635" : d === "against" ? "#f87171" : d === "comparison" ? "#334155" : "#1e293b", boxShadow: "inset 0 0 0 1px #334155" }} />)}{it.posterior != null && <span style={{ fontSize: 10, color: "#64748b", marginLeft: 4 }}>{it.posterior} %</span>}</div>}
+          <div style={{ display: "flex", marginTop: 8, fontSize: 10, color: "#64748b" }}>{it.stages.map((s, i) => { const on = s === it.stage; return <span key={s} style={{ padding: "2px 8px", border: `1px solid ${on ? color : "#1e293b"}`, borderLeft: i ? "none" : undefined, borderRadius: i === 0 ? "999px 0 0 999px" : i === it.stages.length - 1 ? "0 999px 999px 0" : 0, background: on ? color : "transparent", color: on ? "#0b1220" : "#64748b", fontWeight: on ? 600 : 400 }}>{s}</span>; })}</div>
+          <div style={{ marginTop: 8, display: "flex", gap: 12, fontSize: 11, alignItems: "center", flexWrap: "wrap" }}>
+            <a href="#" onClick={(e) => { e.preventDefault(); onToggle(); }} style={{ color: "#38bdf8", textDecoration: "none" }}>{open ? "less" : "why"}</a>
+            {(it.links || []).map((l, i) => l.days ? <a key={i} href="#" onClick={(e) => { e.preventDefault(); onToggle(); }} style={{ color: "#38bdf8", textDecoration: "none" }}>show the days ›</a> : <a key={i} href="#" onClick={(e) => { e.preventDefault(); go(l); }} style={{ color: "#38bdf8", textDecoration: "none" }}>{l.label} ›</a>)}
+            <span style={{ marginLeft: "auto", display: "flex", gap: 4 }}>
+              <button type="button" className="pill-btn" title={it.vote > 0 ? "You found this useful" : "Useful"} style={{ padding: "1px 7px", background: it.vote > 0 ? "#365314" : undefined, boxShadow: it.vote > 0 ? "0 0 0 1.5px #a3e635" : undefined, opacity: voted && it.vote <= 0 ? 0.4 : 1 }} disabled={busy || voted} onClick={() => onVote(1)}>👍</button>
+              <button type="button" className="pill-btn" title={it.pinned ? "Unpin" : "Pin"} style={{ padding: "1px 7px", background: it.pinned ? "#713f12" : undefined, boxShadow: it.pinned ? "0 0 0 1.5px #fbbf24" : undefined }} disabled={busy} onClick={onPin}>📌</button>
+              <button type="button" className="pill-btn" title="Retire this one" style={{ padding: "1px 7px", opacity: it.pinned ? 0.4 : 1 }} disabled={busy || it.pinned} onClick={onDismiss}>✕</button>
+            </span>
+          </div>
+          {open && <div style={{ marginTop: 6, fontSize: 11, color: "#94a3b8", lineHeight: 1.45 }}>
+            {it.why && <div>{it.why}</div>}
+            <div style={{ marginTop: 4, color: "#64748b" }}>{it.cite_full}</div>
+            {it.days && it.days.length > 0 && <div style={{ marginTop: 6, display: "grid", gridTemplateColumns: "auto auto auto 1fr", gap: "2px 10px", color: "#94a3b8" }}>
+              <span style={{ color: "#64748b" }}>day</span><span style={{ color: "#64748b" }}>if</span><span style={{ color: "#64748b" }}>then</span><span style={{ color: "#64748b" }}>verdict</span>
+              {it.days.slice(-21).map((d) => <React.Fragment key={d.day}><a href="#" onClick={(e) => { e.preventDefault(); go({ day: d.day }); }} style={{ color: "#38bdf8", textDecoration: "none" }}>{d.day.slice(5)}</a><span>{d.x == null ? "–" : Math.round(d.x * 10) / 10}</span><span>{d.y == null ? "–" : Math.round(d.y * 10) / 10}</span><span style={{ color: d.verdict === "support" ? "#a3e635" : d.verdict === "against" ? "#f87171" : "#64748b" }}>{d.verdict === "support" ? "as predicted" : d.verdict === "against" ? "not as predicted" : "comparison"}</span></React.Fragment>)}
+            </div>}
+          </div>}
         </div>
       );
     }
@@ -5002,9 +5046,6 @@
             <>
               <Section title="QoL correlations" subtitle="Daily QoL against doses and any synced metric, with lag." storageKey="tr-corr">
                 <TrendsCard settings={settings} />
-              </Section>
-              <Section title="Hypotheses" subtitle="Live hypotheses, scored day by day." storageKey="tr-hyp" defaultOpen={false}>
-                <HypothesesCard />
               </Section>
 
               <Section title="Vitals trends" subtitle="Sleep, HRV, heart rate, steps and watch gait." storageKey="tr-vitals" defaultOpen={false}>

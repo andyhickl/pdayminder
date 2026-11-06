@@ -439,5 +439,5 @@ module.exports = function init({ pool, dailySeries, dopaDrugs, TZ, localDayOf })
     });
   }
 
-  return { routes, buildFeatures, invalidate, ensureTables, F, FK, snapshot, describe, rationale, med };
+  return { routes, buildFeatures, invalidate, ensureTables, F, FK, snapshot, describe, rationale, med, score, grade, nextDay };
 };
