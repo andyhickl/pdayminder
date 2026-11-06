@@ -521,7 +521,9 @@ async function logIngest(userId, route, status, rows, body) {
 }
 
 // Nutrition and other intake metrics arrive from HAE as hourly sums; their daily value is the sum, not the mean.
-const SUMMED_RE = /^(dietary_|protein|carbohydrates|total_fat|saturated_fat|monounsaturated_fat|polyunsaturated_fat|fiber|sugar|caffeine|water|cholesterol|sodium|potassium|calcium|iron|magnesium|zinc|phosphorus|selenium|copper|manganese|chromium|molybdenum|iodine|chloride|vitamin_|thiamin|riboflavin|niacin|folate|biotin|pantothenic)/;
+// Activity metrics from HAE arrive either as one cumulative "Today" value or as hourly buckets (when the automation
+// aggregates hourly); both are totals to add up, never averages.
+const SUMMED_RE = /^(step_count|walking_running_distance|flights_climbed|active_energy|basal_energy_burned|apple_exercise_time|apple_stand_time|cycling_distance|swimming_distance|time_in_daylight|dietary_|protein|carbohydrates|total_fat|saturated_fat|monounsaturated_fat|polyunsaturated_fat|fiber|sugar|caffeine|water|cholesterol|sodium|potassium|calcium|iron|magnesium|zinc|phosphorus|selenium|copper|manganese|chromium|molybdenum|iodine|chloride|vitamin_|thiamin|riboflavin|niacin|folate|biotin|pantothenic)/;
 function isSummed(metric, source) { return source === "cronometer" || SUMMED_RE.test(metric); }
 
 // Daily series for one metric key: [[day, value], ...] over the last `days` days (local dates).
@@ -861,11 +863,19 @@ app.post("/api/ingest/hae", requireAuth, async (req, res) => {
     for (const m of metrics) {
       const base = String(m.name || "").toLowerCase().replace(/[^a-z0-9]+/g, "_");
       if (!base) continue;
+      // A cumulative metric with several points on one local day is an hourly-aggregated automation: store the
+      // buckets at their own hour (the day total is their sum) and drop any midnight "today so far" row for that day.
+      const perDay = {};
+      for (const pt of m.data || []) { const t = parseHaeDate(pt.date); if (t) perDay[localDayOf(t)] = (perDay[localDayOf(t)] || 0) + 1; }
+      const hourlyDays = new Set(Object.keys(perDay).filter((d) => perDay[d] >= 2));
+      if (!base.startsWith("sleep_analysis") && isCumulative(base) && hourlyDays.size) {
+        for (const d of hourlyDays) await client.query(`delete from observations where user_id = $1 and source = 'hae' and metric like $2 and ts = $3`, [req.user.id, base + "%", localMidnightIso(d + "T12:00:00Z")]);
+      }
       for (const pt of m.data || []) {
         let ts = parseHaeDate(pt.date);
         if (!ts) { skipped++; continue; }
         const isSleep = base.startsWith("sleep_analysis");
-        const cumulative = !isSleep && isCumulative(base);
+        const cumulative = !isSleep && isCumulative(base) && !hourlyDays.has(localDayOf(ts));
         if (isSleep) {
           // one row per night, keyed on the local date the sleep ended; drop merged multi-night windows
           const start = parseHaeDate(pt.sleepStart), end = parseHaeDate(pt.sleepEnd);
@@ -1468,6 +1478,11 @@ app.use((err, req, res, next) => {
     and date_trunc('hour', o.ts) <> o.ts
     and exists (select 1 from observations h where h.user_id = o.user_id and h.source = o.source and h.metric = o.metric
                 and h.ts = date_trunc('hour', h.ts) and (h.ts at time zone $2)::date = (o.ts at time zone $2)::date)`, [SUMMED_RE.source, TZ]).catch((e) => console.error("intake dedupe", e.message));
+  // Activity metrics: a midnight "today so far" row must not sit beside hourly buckets for the same day.
+  await pool.query(`delete from observations o where o.source = 'hae' and o.metric = any($1)
+    and o.ts = ((o.ts at time zone $2)::date::timestamp at time zone $2)
+    and (select count(*) from observations h where h.user_id = o.user_id and h.source = o.source and h.metric = o.metric
+         and h.ts <> o.ts and (h.ts at time zone $2)::date = (o.ts at time zone $2)::date) >= 2`, [[...CUMULATIVE], TZ]).catch((e) => console.error("activity dedupe", e.message));
   await pool.query(`delete from qol_ratings q where type <> 'rating'
     and not exists (select 1 from qol_ratings r where r.user_id = q.user_id and r.day = q.day and r.type = 'rating')
     and not exists (select 1 from med_doses d where d.user_id = q.user_id and d.day = q.day)`).catch((e) => console.error("placeholder cleanup", e.message));

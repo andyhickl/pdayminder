@@ -137,6 +137,13 @@ source}`); `POST /api/context/manual {segments:[{start,end,place}]}` writes manu
 `/api/context?days=`, `/api/context/qol?days=` (minutes and overlap-weighted QoL per place), derived
 `minutes_<place>` daily metrics, a Location section in Stats, and the outer band on the ring.
 
+## Activity totals (steps, distance, energy, exercise minutes)
+HAE sends these either as one cumulative "Today" value (stored at local midnight, greatest-wins across posts) or, when
+the automation aggregates hourly, as hourly buckets. The ingest decides per metric and day: two or more points on a
+local day means buckets, stored at their own hour, and any midnight row for that day is deleted. Daily values sum the
+rows (`SUMMED_RE`), never average them. Before this, hourly step buckets were collapsed to the largest hour, which is
+why the steps median read ~1,100.
+
 ## Workouts (hae/workout, derived/workout_*)
 HAE's workout records (name, start/end, per-minute heart rate, energy, distance) are summarised on read with
 `summarizeWorkout`: minutes in the vigorous and moderate zones from the per-minute samples. Zones use heart-rate
