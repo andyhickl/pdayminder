@@ -1623,21 +1623,27 @@
     };
     const InsIcon = ({ name, color, size = 18 }) => <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}><path d={INS_ICONS[name] || INS_ICONS.chart} /></svg>;
     const INS_CATS = [["today", "Today", "#f59e0b", "clock", "Things from the last few hours that the literature says matter."], ["goals", "Goals", "#38bdf8", "flag", "Where you stand against the regimen targets this week."], ["patterns", "Patterns", "#a78bfa", "flask", "Claims about you, scored day by day until they are supported or dropped."], ["notes", "Notes", "#94a3b8", "chart", "Milestones, drifts and one-offs worth knowing."]];
+    // The last loaded set is kept in memory and localStorage so tabbing away and back shows it at once; a fresh load
+    // runs in the background. Votes, pins and dismissals update the local copy immediately.
+    let INSIGHTS_CACHE = (() => { try { const d = JSON.parse(localStorage.getItem("pdm-insights") || "null"); return d && d.pages ? d : null; } catch { return null; } })();
     function InsightsCard() {
-      const [data, setData] = useState(null);
+      const [data, setDataRaw] = useState(INSIGHTS_CACHE);
+      const setData = (d) => { INSIGHTS_CACHE = d; try { localStorage.setItem("pdm-insights", JSON.stringify(d)); } catch {} setDataRaw(d); };
       const [err, setErr] = useState(null);
       const [busy, setBusy] = useState(false);
       const [open, setOpen] = useState({});
       const [page, setPage] = useState(() => { try { return Number(localStorage.getItem("pdm-ins-page") || 0); } catch { return 0; } });
       const trackRef = useRef(null);
-      const load = (q) => apiFetch("/api/insights" + (q || "")).then((r) => (r.ok ? r.json() : Promise.reject(r.status))).then((d) => { setData(d); setErr(null); }).catch((e) => setErr(String(e)));
+      const load = (q) => apiFetch("/api/insights" + (q || "")).then((r) => (r.ok ? r.json() : Promise.reject(r.status))).then((d) => { setData(d); setErr(null); }).catch((e) => { if (!INSIGHTS_CACHE) setErr(String(e)); });
       useEffect(() => { load(); }, []);
       useEffect(() => { try { localStorage.setItem("pdm-ins-page", String(page)); } catch {} }, [page]);
       // keep the scroll position in step with the active tab (and vice versa)
       const animRef = useRef(0);
       useEffect(() => { const el = trackRef.current; if (!el) return; const w = el.clientWidth; if (Math.abs(el.scrollLeft - page * w) > 4) { animRef.current = Date.now() + 700; el.scrollTo({ left: page * w, behavior: "smooth" }); } }, [page, data]);
       const onScroll = () => { const el = trackRef.current; if (!el || Date.now() < animRef.current) return; const p = Math.round(el.scrollLeft / el.clientWidth); if (p !== page) setPage(p); };
-      const post = async (path, body) => { setBusy(true); try { const r = await apiFetch(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }); if (r.ok) setData(await r.json()); } finally { setBusy(false); } };
+      // optimistic: patch the local copy, send the request, reload quietly afterwards
+      const patch = (id, fn) => { if (!data) return; const pages = Object.fromEntries(Object.entries(data.pages).map(([k, v]) => [k, v.map((it) => (it.id === id ? fn(it) : it)).filter(Boolean)])); setData({ ...data, pages }); };
+      const post = async (path, body, fn) => { patch(body.id, fn); try { await apiFetch(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }); } catch {} load(); };
       const go = (l) => { if (l.day) window.dispatchEvent(new CustomEvent("pdm-goto-day", { detail: l.day })); else if (l.tab) window.dispatchEvent(new CustomEvent("pdm-goto", { detail: { tab: l.tab, section: l.section } })); };
       if (err) return <div className="card"><div className="card-subtitle">Couldn't load insights ({err}).</div></div>;
       if (!data) return <div className="card"><div className="card-subtitle">Reading your data…</div></div>;
@@ -1661,7 +1667,7 @@
                   <div style={{ display: "flex", alignItems: "center", gap: 8 }}><InsIcon name={icon} color={color} /><span style={{ color, fontWeight: 700, fontSize: 15 }}>{label}</span><span style={{ marginLeft: "auto", fontSize: 11, color: "#94a3b8" }}>{items.length} item{items.length === 1 ? "" : "s"}</span></div>
                   <div style={{ fontSize: 11, color: "#94a3b8", marginTop: 2 }}>{sub}</div>
                   {!items.length && <div style={{ color: "#64748b", fontSize: 12, padding: "16px 4px" }}>{id === "today" ? "Nothing from today yet; this fills in as doses, meals and events are logged." : id === "patterns" ? "No patterns to watch yet; they appear as hypotheses reach four days on each side, or when the explorer finds one." : "Nothing here yet."}</div>}
-                  {items.map((it) => <InsightItem key={it.key} it={it} color={color} busy={busy} open={open[it.key]} onToggle={() => setOpen((o) => ({ ...o, [it.key]: !o[it.key] }))} onVote={(v) => post("/api/insights/vote", { id: it.id, vote: v })} onPin={() => post("/api/insights/pin", { id: it.id, pinned: !it.pinned })} onDismiss={() => post("/api/insights/dismiss", { id: it.id })} go={go} />)}
+                  {items.map((it) => <InsightItem key={it.key} it={it} color={color} busy={busy} open={open[it.key]} onToggle={() => setOpen((o) => ({ ...o, [it.key]: !o[it.key] }))} onVote={(v) => post("/api/insights/vote", { id: it.id, vote: v }, (x) => (v > 0 ? { ...x, vote: 1, stage: x.stage === "noticed" && x.category === "patterns" ? "watching" : x.stage } : null))} onPin={() => post("/api/insights/pin", { id: it.id, pinned: !it.pinned }, (x) => ({ ...x, pinned: !x.pinned, stage: !x.pinned && x.stage === "noticed" && x.category === "patterns" ? "watching" : x.stage }))} onDismiss={() => post("/api/insights/dismiss", { id: it.id }, () => null)} go={go} />)}
                 </div>
               </div>); })}
           </div>

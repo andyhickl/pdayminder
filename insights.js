@@ -359,21 +359,21 @@ Tone: a thoughtful colleague. No exclamation marks, no emoji, no "great job", no
       const { id, vote } = req.body || {}; const uid = req.user.id;
       const r = (await pool.query("select * from insights where user_id = $1 and id = $2", [uid, id])).rows[0]; if (!r) return res.status(404).json({ error: "not found" });
       if (r.vote === 0) {
-        if (vote > 0) { await pool.query("update insights set vote = 1, updated_at = now() where id = $1", [id]); await promote(uid, r); }
+        if (vote > 0) { await pool.query("update insights set vote = 1, updated_at = now() where id = $1", [id]); promote(uid, r).catch((e) => console.error("promote", e.message)); }
         else await pool.query("update insights set vote = -1, status = 'dismissed', pinned = false, updated_at = now() where id = $1", [id]);
       }
-      res.json(await current(uid));
+      res.json({ ok: true }); // the client updates optimistically and reloads in the background
     });
     app.post("/api/insights/pin", requireAuth, async (req, res) => {
       const { id, pinned } = req.body || {}; const uid = req.user.id;
       const r = (await pool.query("select * from insights where user_id = $1 and id = $2", [uid, id])).rows[0]; if (!r) return res.status(404).json({ error: "not found" });
       await pool.query("update insights set pinned = $3, status = case when $3 then 'shown' else status end, updated_at = now() where user_id = $1 and id = $2", [uid, id, Boolean(pinned)]);
-      if (pinned) await promote(uid, r);
-      res.json(await current(uid));
+      if (pinned) promote(uid, r).catch((e) => console.error("promote", e.message));
+      res.json({ ok: true });
     });
     app.post("/api/insights/dismiss", requireAuth, async (req, res) => {
       const { id } = req.body || {}; await pool.query("update insights set status = 'dismissed', pinned = false, updated_at = now() where user_id = $1 and id = $2", [req.user.id, id]);
-      res.json(await current(req.user.id));
+      res.json({ ok: true });
     });
   }
   // A 👍 or a pin on a "noticed" pattern (lead or proposal) starts watching it: it becomes an active hypothesis.
