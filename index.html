@@ -1685,37 +1685,57 @@
     }
     // Share: draw the insight, fully expanded, onto a 1080×1350 canvas (Instagram 4:5) and hand it to the share sheet
     // (or download it where there is no share sheet).
-    async function shareInsight(it, color) {
-      const W = 1080, H = 1350, P = 72; const c = document.createElement("canvas"); c.width = W; c.height = H; const g = c.getContext("2d");
-      const font = (w, px) => `${w} ${px}px -apple-system, "SF Pro Text", Inter, system-ui, sans-serif`;
-      const wrap = (text, x, y, maxW, lh, fnt, col) => { g.font = fnt; g.fillStyle = col; const words = String(text).split(/\s+/); let line = ""; for (const w of words) { const t = line ? line + " " + w : w; if (g.measureText(t).width > maxW && line) { g.fillText(line, x, y); y += lh; line = w; } else line = t; } if (line) { g.fillText(line, x, y); y += lh; } return y; };
+    // Common chrome for every shareable image: dark gradient, app icon + name, date, disclaimer. 1080×1350 (4:5) when
+    // it fits, 1080×1920 (story) when the evidence needs the room.
+    const SHARE_ICON = new Promise((res) => { const im = new Image(); im.onload = () => res(im); im.onerror = () => res(null); im.src = "/static/icon-192.png"; });
+    async function shareCanvas(draw, name, title) {
+      const W = 1080, P = 72;
+      const measure = document.createElement("canvas"); measure.width = W; measure.height = 4000;
+      const needed = draw(measure.getContext("2d"), W, 4000, P, true);
+      const H = needed + 170 <= 1350 ? 1350 : 1920;
+      const c = document.createElement("canvas"); c.width = W; c.height = H; const g = c.getContext("2d");
       const bg = g.createLinearGradient(0, 0, 0, H); bg.addColorStop(0, "#0f1a30"); bg.addColorStop(1, "#0b1220"); g.fillStyle = bg; g.fillRect(0, 0, W, H);
-      // big faint icon, bottom right
-      try { const path = new Path2D(INS_ICONS[it.icon] || INS_ICONS.chart); g.save(); g.translate(W - P - 300, H - 160 - 320); g.scale(13, 13); g.strokeStyle = color; g.globalAlpha = 0.14; g.lineWidth = 1.6; g.lineCap = "round"; g.lineJoin = "round"; g.stroke(path); g.restore(); } catch {}
-      // category + title
-      const cat = INS_CATS.find((x) => x[0] === it.category) || INS_CATS[3];
-      g.fillStyle = color; g.font = font(700, 30); g.fillText(cat[1].toUpperCase(), P, P + 30);
-      g.fillStyle = "#64748b"; g.font = font(400, 26); g.textAlign = "right"; g.fillText(it.tag || "", W - P, P + 30); g.textAlign = "left";
-      let y = wrap(it.title, P, P + 100, W - 2 * P, 56, font(700, 48), "#e2e8f0") + 20;
-      y = wrap(it.text, P, y, W - 2 * P, 50, font(400, 38), "#e2e8f0") + 8;
-      if (it.cite_text) y = wrap(it.cite_text, P, y, W - 2 * P, 44, font(400, 32), "#94a3b8") + 20;
-      if (it.action) { g.fillStyle = color; g.font = font(700, 36); g.fillText("→", P, y); y = wrap(it.action, P + 52, y, W - 2 * P - 52, 46, font(500, 36), "#e2e8f0") + 10; }
-      if (it.bar) { y += 10; g.fillStyle = "#1e293b"; g.fillRect(P, y, W - 2 * P, 14); g.fillStyle = color; g.fillRect(P, y, (W - 2 * P) * Math.min(1, it.bar.value / it.bar.max), 14); y += 36; g.font = font(400, 24); g.fillStyle = "#64748b"; g.fillText(it.bar.left, P, y); g.textAlign = "right"; g.fillText(it.bar.right, W - P, y); g.textAlign = "left"; y += 20; }
-      if (it.dots && it.dots.length) { y += 12; const d = it.dots.slice(-21); const sz = 30, gap = 8; d.forEach((v, i) => { g.fillStyle = v === "support" ? "#a3e635" : v === "against" ? "#f87171" : v === "comparison" ? "#334155" : "#1e293b"; g.fillRect(P + i * (sz + gap), y, sz, sz); }); if (it.posterior != null) { g.fillStyle = "#64748b"; g.font = font(400, 26); g.fillText(`${it.posterior} %`, P + d.length * (sz + gap) + 10, y + 24); } y += sz + 16; g.font = font(400, 22); g.fillStyle = "#64748b"; g.fillText("green = as predicted · red = not · grey = comparison day", P, y + 10); y += 36; }
-      // stage strip
-      y += 20; let x = P; g.font = font(600, 26);
-      it.stages.forEach((st) => { const on = st === it.stage; const w = g.measureText(st).width + 44; g.fillStyle = on ? color : "transparent"; g.strokeStyle = on ? color : "#334155"; g.lineWidth = 2; g.beginPath(); g.roundRect(x, y, w, 50, 25); g.fill(); g.stroke(); g.fillStyle = on ? "#0b1220" : "#64748b"; g.fillText(st, x + 22, y + 34); x += w + 10; });
-      y += 90;
-      if (it.why && y < H - 300) y = wrap(it.why, P, y, W - 2 * P, 38, font(400, 28), "#94a3b8") + 12;
-      if (it.cite_full && y < H - 220) y = wrap(it.cite_full, P, y, W - 2 * P, 34, font(400, 24), "#64748b");
+      draw(g, W, H, P, false);
       // footer
-      g.fillStyle = "#1e293b"; g.fillRect(P, H - 120, W - 2 * P, 2);
-      g.fillStyle = "#94a3b8"; g.font = font(600, 28); g.fillText("PDayMinder", P, H - 66);
-      g.fillStyle = "#64748b"; g.font = font(400, 24); g.textAlign = "right"; g.fillText(`${new Date().toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })} · personal data, not medical advice`, W - P, H - 66); g.textAlign = "left";
+      g.fillStyle = "#1e293b"; g.fillRect(P, H - 124, W - 2 * P, 2);
+      const icon = await SHARE_ICON; if (icon) { g.save(); g.beginPath(); g.roundRect(P, H - 96, 48, 48, 11); g.clip(); g.drawImage(icon, P, H - 96, 48, 48); g.restore(); }
+      g.fillStyle = "#e2e8f0"; g.font = `600 30px -apple-system, "SF Pro Text", Inter, system-ui, sans-serif`; g.textAlign = "left"; g.fillText("PDayMinder", P + (icon ? 62 : 0), H - 60);
+      g.fillStyle = "#64748b"; g.font = `400 22px -apple-system, "SF Pro Text", Inter, system-ui, sans-serif`; g.textAlign = "right"; g.fillText(`${new Date().toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })} · personal data, not medical advice`, W - P, H - 60); g.textAlign = "left";
       const blob = await new Promise((res) => c.toBlob(res, "image/png"));
-      const file = new File([blob], `insight-${(it.title || "card").toLowerCase().replace(/[^a-z0-9]+/g, "-")}.png`, { type: "image/png" });
-      if (navigator.share && navigator.canShare && navigator.canShare({ files: [file] })) { try { await navigator.share({ files: [file], title: it.title }); return; } catch (e) { if (e && e.name === "AbortError") return; } }
+      const file = new File([blob], `${name}.png`, { type: "image/png" });
+      if (navigator.share && navigator.canShare && navigator.canShare({ files: [file] })) { try { await navigator.share({ files: [file], title }); return; } catch (e) { if (e && e.name === "AbortError") return; } }
       const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = file.name; document.body.appendChild(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+    }
+    const shareFont = (w, px) => `${w} ${px}px -apple-system, "SF Pro Text", Inter, system-ui, sans-serif`;
+    function shareWrap(g, text, x, y, maxW, lh, fnt, col) { g.font = fnt; g.fillStyle = col; const words = String(text).split(/\s+/); let line = ""; for (const w of words) { const t = line ? line + " " + w : w; if (g.measureText(t).width > maxW && line) { g.fillText(line, x, y); y += lh; line = w; } else line = t; } if (line) { g.fillText(line, x, y); y += lh; } return y; }
+    // An insight, fully expanded: observation, citation, action, bar or dot strip, stage, why, the per-day evidence, the full reference.
+    async function shareInsight(it, color) {
+      await shareCanvas((g, W, H, P, measuring) => {
+        try { const path = new Path2D(INS_ICONS[it.icon] || INS_ICONS.chart); g.save(); g.translate(W - P - 300, 60); g.scale(12, 12); g.strokeStyle = color; g.globalAlpha = 0.1; g.lineWidth = 1.6; g.lineCap = "round"; g.lineJoin = "round"; g.stroke(path); g.restore(); } catch {}
+        const cat = INS_CATS.find((x) => x[0] === it.category) || INS_CATS[3];
+        g.fillStyle = color; g.font = shareFont(700, 30); g.fillText(cat[1].toUpperCase(), P, P + 30);
+        g.fillStyle = "#64748b"; g.font = shareFont(400, 26); g.textAlign = "right"; g.fillText(it.tag || "", W - P, P + 30); g.textAlign = "left";
+        let y = shareWrap(g, it.title, P, P + 100, W - 2 * P, 56, shareFont(700, 48), "#e2e8f0") + 16;
+        y = shareWrap(g, it.text, P, y, W - 2 * P, 48, shareFont(400, 36), "#e2e8f0") + 6;
+        if (it.cite_text) y = shareWrap(g, it.cite_text, P, y, W - 2 * P, 42, shareFont(400, 30), "#94a3b8") + 16;
+        if (it.action) { g.fillStyle = color; g.font = shareFont(700, 34); g.fillText("→", P, y); y = shareWrap(g, it.action, P + 50, y, W - 2 * P - 50, 44, shareFont(500, 34), "#e2e8f0") + 8; }
+        if (it.bar) { y += 10; g.fillStyle = "#1e293b"; g.fillRect(P, y, W - 2 * P, 14); g.fillStyle = color; g.fillRect(P, y, (W - 2 * P) * Math.min(1, it.bar.value / it.bar.max), 14); y += 36; g.font = shareFont(400, 24); g.fillStyle = "#64748b"; g.fillText(it.bar.left, P, y); g.textAlign = "right"; g.fillText(it.bar.right, W - P, y); g.textAlign = "left"; y += 16; }
+        if (it.dots && it.dots.length) { y += 12; const d = it.dots.slice(-21); const sz = 30, gap = 8; d.forEach((v, i) => { g.fillStyle = v === "support" ? "#a3e635" : v === "against" ? "#f87171" : v === "comparison" ? "#334155" : "#1e293b"; g.fillRect(P + i * (sz + gap), y, sz, sz); }); if (it.posterior != null) { g.fillStyle = "#64748b"; g.font = shareFont(400, 26); g.fillText(`${it.posterior} %`, P + d.length * (sz + gap) + 10, y + 24); } y += sz + 14; g.font = shareFont(400, 22); g.fillStyle = "#64748b"; g.fillText("green = as predicted · red = not as predicted · grey = comparison day", P, y + 10); y += 34; }
+        y += 18; let x = P; g.font = shareFont(600, 26);
+        it.stages.forEach((st) => { const on = st === it.stage; const w = g.measureText(st).width + 44; g.fillStyle = on ? color : "transparent"; g.strokeStyle = on ? color : "#334155"; g.lineWidth = 2; g.beginPath(); g.roundRect(x, y, w, 50, 25); g.fill(); g.stroke(); g.fillStyle = on ? "#0b1220" : "#64748b"; g.fillText(st, x + 22, y + 34); x += w + 10; });
+        y += 80;
+        if (it.why) { g.fillStyle = color; g.font = shareFont(700, 24); g.fillText("WHY", P, y); y += 34; y = shareWrap(g, it.why, P, y, W - 2 * P, 36, shareFont(400, 27), "#94a3b8") + 14; }
+        if (it.days && it.days.length) {
+          g.fillStyle = color; g.font = shareFont(700, 24); g.fillText("THE DAYS", P, y); y += 34;
+          const rows = it.days.slice(-14); const colW = (W - 2 * P) / 2; const rowH = 34;
+          g.font = shareFont(400, 24);
+          rows.forEach((d, i) => { const cx = P + (i % 2) * colW, cy = y + Math.floor(i / 2) * rowH; const vc = d.verdict === "support" ? "#a3e635" : d.verdict === "against" ? "#f87171" : "#64748b";
+            g.fillStyle = vc; g.fillRect(cx, cy - 17, 8, 22); g.fillStyle = "#94a3b8"; g.font = shareFont(400, 23); g.fillText(`${new Date(d.day + "T12:00:00Z").toLocaleDateString("en-US", { timeZone: "UTC", month: "short", day: "numeric" })} · if ${d.x == null ? "–" : Math.round(d.x * 10) / 10} → ${d.y == null ? "–" : Math.round(d.y * 10) / 10}`, cx + 18, cy); const tw = g.measureText(`${new Date(d.day + "T12:00:00Z").toLocaleDateString("en-US", { timeZone: "UTC", month: "short", day: "numeric" })} · if ${d.x == null ? "–" : Math.round(d.x * 10) / 10} → ${d.y == null ? "–" : Math.round(d.y * 10) / 10}`).width; g.fillStyle = vc; g.font = shareFont(400, 20); g.fillText(d.verdict === "support" ? "✓" : d.verdict === "against" ? "✗" : "·", cx + 26 + tw, cy); });
+          y += Math.ceil(rows.length / 2) * rowH + 16;
+        }
+        if (it.cite_full) { g.fillStyle = color; g.font = shareFont(700, 24); g.fillText("SOURCE", P, y); y += 32; y = shareWrap(g, it.cite_full, P, y, W - 2 * P, 32, shareFont(400, 23), "#64748b"); }
+        return y;
+      }, `insight-${(it.title || "card").toLowerCase().replace(/[^a-z0-9]+/g, "-")}`, it.title);
     }
     function InsightItem({ it, color, busy, open, onToggle, onVote, onPin, onDismiss, go }) {
       const voted = it.vote !== 0;
